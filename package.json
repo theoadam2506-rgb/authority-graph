@@ -1,0 +1,27 @@
+{
+  "name": "authority-graph",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "authority": "tsx src/cli/authority.ts",
+    "demo": "tsx demo/run.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/pg": "^8.23.1",
+    "@vitest/coverage-v8": "^2.1.9",
+    "tsx": "^4.23.13",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
+  }
+}
