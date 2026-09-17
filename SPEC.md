@@ -381,15 +381,50 @@ et ne doivent être ni affaiblis ni reformulés au fil de l'implémentation.
     montant ou le destinataire) entre l'`ACTION_REQUESTED` approuvée et
     l'`ACTION_EXECUTED` doit produire `DENIED`, jamais `AUTHORIZED` par simple
     correspondance d'`action_id`.
-16. **I16 — Consommation à usage unique.** Un `approval_id` donné ne peut être
-    consommé que par une seule `ACTION_EXECUTED`, quel que soit le nombre
-    d'événements distincts (par `event_id`) qui tentent de le consommer. En cas de
-    plusieurs `ACTION_EXECUTED` référençant le même `approval_id`, seule celle de
-    plus petit `sequence` est valide ; toute autre est `DENIED`. I8 déduplique des
+16. **I16 — Consommation à usage unique (précisée — PROMPT 6d, finding #3).**
+    Un `approval_id` donné ne peut être consommé que par une seule
+    `ACTION_EXECUTED`, quel que soit le nombre d'événements distincts (par
+    `event_id`) qui tentent de le consommer. En cas de plusieurs
+    `ACTION_EXECUTED` référençant le même `approval_id`, seule celle de plus
+    petit `sequence` est valide ; toute autre est `DENIED`. I8 déduplique des
     événements identiques ; I16 déduplique un effet métier, y compris entre
-    événements distincts et non conflictuels au sens I8. Test : deux
-    `ACTION_EXECUTED` d'`event_id` différents, référençant le même `approval_id`
-    valide, ne doivent jamais produire deux `AUTHORIZED`.
+    événements distincts et non conflictuels au sens I8.
+
+    **La précision manquante, révélée par l'audit.** « Référencer le même
+    `approval_id` » ne suffit pas à qualifier une `ACTION_EXECUTED` comme
+    consommatrice — I6 le dit déjà (« couvre exactement l'action qui l'a
+    demandée, identifiée par son `action_id` **et** son `action_fingerprint`
+    exact, I15 ») mais ce n'était vérifié nulle part dans le code : une
+    `ACTION_EXECUTED` d'une action B **non liée** pouvait citer l'`approval_id`
+    d'une action A dans son `authority_chain_ref` et faire compter l'approbation
+    de A comme consommée — alors que l'action A elle-même n'avait jamais été
+    exécutée. N'importe quel tiers pouvait ainsi « brûler » l'approbation
+    d'autrui sans jamais rien exécuter lui-même pour son propre compte : un
+    déni de service contre une approbation légitime, le pendant exact d'I20
+    (qui ferme la même faille pour le débit de `total_budget`) appliqué à la
+    consommation. Pas de brique nouvelle nécessaire : I6/I15 énoncent déjà la
+    condition manquante, qui n'attendait qu'à être appliquée à la
+    vérification de consommation elle-même. Formellement, une `ACTION_EXECUTED`
+    E ne consomme l'`approval_id` qu'elle cite dans `authority_chain_ref` que
+    si `E.action_id` est exactement l'`action_id` porté par l'`APPROVAL_GRANTED`
+    correspondant à cet `approval_id` — la même liaison `action_id` qu'I6
+    exige déjà pour qu'une approbation s'applique à une action. Cette
+    vérification ne compare que deux champs déjà immuables et déjà présents
+    sur des événements déjà ingérés (le `action_id` du grant, le `action_id`
+    de l'exécution candidate) : structurelle, non récursive, aucun appel au
+    resolver — les `action_id` sont uniques dans le store canonique (I8,
+    unicité des ID métier), la comparaison est donc sans ambiguïté.
+
+    Test : deux `ACTION_EXECUTED` d'`event_id` différents, référençant le même
+    `approval_id` valide et portant le **même** `action_id` que celui-ci
+    couvre, ne doivent jamais produire deux `AUTHORIZED` (le test déjà
+    existant, inchangé). Une `ACTION_EXECUTED` dont l'`action_id` **diffère**
+    de celui couvert par l'`approval_id` qu'elle cite ne consomme jamais cette
+    approbation, même si son `action_fingerprint` — ou celui de l'action
+    réellement approuvée — coïncide par ailleurs (deux actions distinctes
+    peuvent légitimement partager une même empreinte) : une question fraîche
+    portant sur l'empreinte réellement approuvée doit rester `AUTHORIZED` tant
+    qu'aucune exécution de **cette** action précise n'a consommé le grant.
 17. **I17 — Honnêteté du niveau d'assurance.** V0 ne vérifie ni signature ni
     identité cryptographique : chaque événement porte un `assurance_level` figé à
     `ASSERTED_UNVERIFIED`. `explain()` ne doit jamais affirmer qu'un fait a été
@@ -524,7 +559,10 @@ et ne doivent être ni affaiblis ni reformulés au fil de l'implémentation.
     `sequence` supérieure à celle de l'enfant qui le référence doit rester
     résolue normalement dès que les deux sont visibles (A5 — non concerné par
     la moitié « ordre » d'I19).
-20. **I20 — Qui peut débiter un `total_budget` (PROMPT 6b, finding #2).**
+20. **I20 — Qui peut débiter un `total_budget` (PROMPT 6b, finding #2 ;
+    complétée PROMPT 6e, maillons intermédiaires — protection incomplète
+    tant que ce complément n'était pas écrit, pas une limitation assumée
+    comme A24).**
     `remainingBudget` (`src/engine/evaluateConstraints.ts`) somme, pour une
     délégation D bornée par `total_budget`, tous les `ACTION_EXECUTED`
     visibles dont `authority_chain_ref` passe par D — mais jusqu'ici sans
@@ -557,7 +595,7 @@ et ne doivent être ni affaiblis ni reformulés au fil de l'implémentation.
     **La règle, non récursive.** Une `ACTION_EXECUTED` ne compte contre le
     `total_budget` d'aucune délégation de son `authority_chain_ref` — ni la
     délégation directement invoquée, ni un ancêtre borné plus haut dans la
-    même chaîne — sauf si les deux conditions suivantes, purement
+    même chaîne — sauf si les trois conditions suivantes, purement
     structurelles et déjà immuables dans le store, sont satisfaites :
     - `executed_by_principal_id` de l'`ACTION_EXECUTED` est exactement
       `requesting_principal_id` de l'`ACTION_REQUESTED` de même `action_id`
@@ -568,24 +606,72 @@ et ne doivent être ni affaiblis ni reformulés au fil de l'implémentation.
       `grantee_principal_id` exactement `executed_by_principal_id` (la
       chaîne citée se termine réellement chez l'exécutant, pas chez un
       tiers dont l'exécutant se contente de recopier l'identifiant de
-      délégation).
+      délégation) ;
+    - **(PROMPT 6e)** chaque maillon délégation cité dans
+      `authority_chain_ref` — pas seulement le maillon terminal — est soit
+      le maillon terminal lui-même, soit l'un de ses ancêtres **réels**,
+      atteignable en remontant `parent_delegation_id` depuis le terminal. Un
+      `delegation_id` cité qui n'est pas sur ce chemin — même s'il est réel
+      et causalement antérieur (I19 ne le rejette pas : I19 valide
+      l'existence et l'ordre causal d'une référence, jamais qu'elle
+      appartienne à la bonne chaîne) — n'est pas un maillon légitime de
+      **cette** chaîne : il est exclu du débit pour la délégation qu'il
+      désigne, exactement comme s'il n'apparaissait pas dans le tableau. Les
+      deux premières conditions vérifient *qui* a exécuté et *où* la chaîne
+      se termine ; celle-ci vérifie que le reste du tableau raconte une
+      seule chaîne cohérente jusqu'à ce terminal, pas une liste
+      d'identifiants réels mais sans rapport entre eux.
 
-    Ces deux vérifications ne consultent que des champs déjà présents et
-    immuables sur des événements déjà ingérés (I3) — aucun appel à
-    `resolveAuthority`/`validateChain`, aucune récursion, même coût
-    asymptotique que les lectures déjà existantes de `remainingBudget`.
+    Les deux premières vérifications ne consultent que des champs déjà
+    présents et immuables sur des événements déjà ingérés (I3) — aucun appel
+    à `resolveAuthority`/`validateChain`, aucune récursion. La troisième
+    demande de remonter `parent_delegation_id` depuis le maillon terminal :
+    une remontée structurelle existe déjà (`walkUpChain`,
+    `src/engine/validateChain.ts`), mais elle vit sur le chemin de décision
+    de `resolveAuthority` lui-même (et `validateChain.ts` importe déjà
+    `remainingBudget` depuis `evaluateConstraints.ts` pour le bornage I5 du
+    `total_budget` — importer `walkUpChain` en sens inverse créerait une
+    dépendance circulaire entre les deux modules) ; elle fait par ailleurs
+    plus que nécessaire ici (vérifications de `schema_version`, de
+    `can_delegate`, sémantique I10 pensée pour une décision d'autorisation,
+    pas pour une simple question d'appartenance structurelle). La remontée
+    utilisée ici est donc une fonction locale, minimale, distincte : elle ne
+    fait que suivre les pointeurs `parent_delegation_id` jusqu'à une racine
+    ou un maillon manquant, sans revalider quoi que ce soit d'autre, avec la
+    même protection anti-cycle que I10 (borne de profondeur, ensemble des
+    identifiants déjà visités) pour ne jamais boucler indéfiniment sur un
+    graphe construit de façon malveillante. Comme les deux premières
+    conditions, elle ne rappelle jamais `resolveAuthority` ni
+    `evaluateConstraints` : même classe de coût asymptotique que les
+    lectures déjà existantes de `remainingBudget`, aucune récursion.
 
-    **Ce que I20 ne garantit pas.** Ces deux conditions sont nécessaires,
+    **Cohérence avec A5 (livraison hors-ordre) — ne pas réintroduire un ordre
+    de `sequence`.** Cette remontée locale ne compare **aucune** `sequence`
+    entre un maillon et son parent : elle ne fait que suivre
+    `parent_delegation_id` par correspondance d'identifiant, exactement comme
+    `walkUpChain` le fait déjà pour la résolution normale (voir I19,
+    « Distinction avec la livraison hors-ordre » — un parent peut porter une
+    `sequence` supérieure à celle de son enfant, et cela reste parfaitement
+    valide). Ajouter ici une contrainte d'ordre que le reste du moteur
+    n'impose nulle part ailleurs romprait cette cohérence sans raison : la
+    question posée est uniquement « ce `delegation_id` est-il structurellement
+    sur le chemin vers le terminal ? », jamais « dans quel ordre ces
+    événements sont-ils arrivés ? ».
+
+    **Ce que I20 ne garantit pas.** Ces trois conditions sont nécessaires,
     pas suffisantes : elles ne revalident ni l'expiration, ni la révocation,
     ni la couverture de capacité, ni les seuils de montant de la chaîne
     citée — seule une résolution complète le ferait, et c'est précisément
     ce qu'I20 refuse de redemander pour éviter la récursion ci-dessus. I20
-    ferme uniquement le vecteur « un tiers sans aucun rapport avec la
-    chaîne cite le `delegation_id` d'autrui » ; une exécution qui échoue
-    l'une de ces deux vérifications est exclue du débit, exactement comme
-    si elle n'apparaissait pas dans `authority_chain_ref` — ce n'est pas
-    une nouvelle valeur de sortie, c'est un décompte corrigé qui alimente
-    C1–C9 normalement.
+    ferme le vecteur « un tiers sans aucun rapport avec la chaîne cite le
+    `delegation_id` d'autrui » — que ce tiers soit le maillon terminal
+    revendiqué (PROMPT 6b) ou un maillon intermédiaire glissé dans un
+    tableau par ailleurs légitime (PROMPT 6e) ; une exécution qui échoue
+    l'une de ces trois vérifications est exclue du débit **pour la
+    délégation concernée**, exactement comme si le maillon en cause
+    n'apparaissait pas dans `authority_chain_ref` — ce n'est pas une
+    nouvelle valeur de sortie, c'est un décompte corrigé qui alimente C1–C9
+    normalement.
 
     **Cohérence avec A24 (TOCTOU budgétaire) — I20 ne change rien à A24.**
     A24 documente que deux décisions individuellement `AUTHORIZED`, prises
@@ -606,7 +692,13 @@ et ne doivent être ni affaiblis ni reformulés au fil de l'implémentation.
     `grantee_principal_id` différent de son propre `executed_by_principal_id`,
     ne doit jamais réduire le `total_budget` restant d'aucune délégation de
     cette chaîne — une requête par ailleurs légitime et dans la bande
-    automatique de son titulaire réel reste `AUTHORIZED`.
+    automatique de son titulaire réel reste `AUTHORIZED`. Une `ACTION_EXECUTED`
+    par ailleurs entièrement légitime (exécutant = demandeur, chaîne se
+    terminant correctement chez lui), mais dont `authority_chain_ref` cite en
+    plus le `delegation_id` d'un tiers réel, causalement antérieur, mais
+    **sans lien d'ascendance réel** avec le maillon terminal, ne doit jamais
+    réduire le `total_budget` de ce tiers : une requête légitime de ce tiers,
+    dans sa propre bande, reste `AUTHORIZED`.
 
 ## Règles d'application complémentaires
 
@@ -759,4 +851,5 @@ qu'`authorityAt` pourrait produire à partir de la seule empreinte (un
 | C24 | Aucune des chaînes menant au principal n'est intégralement valide et connue | `UNKNOWN` (ou `DENIED` si au moins une chaîne est intégralement connue et prouve positivement l'absence d'autorité, selon C11/C12) |
 | C25 *(explainAction, I18)* | `ACTION_EXECUTED` de `sequence` S portant `decision_sequence >= S` (citation causalement impossible d'un point de décision futur ou simultané) | `UNKNOWN` (pour `execution.authorityAtDecision` ; `C25_FUTURE_DECISION_SEQUENCE`), quelle que soit par ailleurs l'autorité disponible au `decision_sequence` prétendu |
 | C26 *(I19)* | `APPROVAL_GRANTED`/`APPROVAL_DENIED` dont l'`action_id` ou l'`approval_id` référencé n'existe pas dans le store canonique, ou y existe avec une `sequence` strictement supérieure à celle de la décision d'approbation elle-même (égalité tolérée — ne peut de toute façon jamais survenir via une ingestion réelle ; voir I19, « Note sur l'égalité de séquence ») | Traité comme si l'événement cité n'existait pas : la décision d'approbation est ignorée (comme C16) — `REQUIRES_APPROVAL` (C4) reste la sortie en l'absence de toute autre décision d'approbation valide. **Ne s'applique pas** à `SUBDELEGATION_CREATED.parent_delegation_id` : ce champ reste gouverné par C10 seul (A5 — voir I19 pour la distinction) |
-| C27 *(I20)* | `ACTION_EXECUTED` dont l'`executed_by_principal_id` diffère du `requesting_principal_id` de l'`ACTION_REQUESTED` de même `action_id`, ou dont le maillon délégation terminal d'`authority_chain_ref` a un `grantee_principal_id` différent de son propre `executed_by_principal_id` | Exclue du calcul de `reste(D, S)` pour toute délégation D bornée par `total_budget` figurant dans sa chaîne — comptée comme si elle n'apparaissait pas dans `authority_chain_ref`. N'affecte aucune autre sortie que le montant du budget restant, qui alimente ensuite C9 normalement |
+| C27 *(I20)* | `ACTION_EXECUTED` dont l'`executed_by_principal_id` diffère du `requesting_principal_id` de l'`ACTION_REQUESTED` de même `action_id` ; ou dont le maillon délégation terminal d'`authority_chain_ref` a un `grantee_principal_id` différent de son propre `executed_by_principal_id` ; ou dont un maillon délégation D cité dans `authority_chain_ref` n'est ni le maillon terminal ni l'un de ses ancêtres réels atteignables en remontant `parent_delegation_id` depuis le terminal (PROMPT 6e) | Pour la première et la deuxième condition : l'exécution entière est exclue du calcul de `reste(D', S)` pour toute délégation D' de sa chaîne. Pour la troisième : seul le maillon D en cause est exclu du calcul de `reste(D, S)` — comptée comme si ce maillon précis n'apparaissait pas dans `authority_chain_ref`, sans affecter le débit des autres maillons de la même chaîne qui sont, eux, de véritables ancêtres du terminal. N'affecte aucune autre sortie que le montant du budget restant, qui alimente ensuite C9 normalement |
+| C28 *(I16, précisée)* | `ACTION_EXECUTED` référençant un `approval_id` valide dans `authority_chain_ref`, mais dont l'`action_id` propre diffère de celui porté par l'`APPROVAL_GRANTED` correspondant | Ne consomme jamais cet `approval_id` — traitée comme si elle ne le référençait pas dans sa chaîne. Une question fraîche sur l'empreinte réellement approuvée reste `AUTHORIZED` (C3) tant qu'aucune exécution de l'action effectivement couverte n'a consommé le grant |

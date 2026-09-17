@@ -9,7 +9,7 @@
  */
 import { computeActionFingerprint } from "../domain/events.js";
 import type { AuthorityEvent, CanonicalStore, ChainLink } from "../domain/events.js";
-import type { ActionParameters, ApprovalId, AuthorityDecision, Capability, DelegationId, Money, PrincipalId } from "../domain/types.js";
+import { MAX_CHAIN_DEPTH, type ActionParameters, type ApprovalId, type AuthorityDecision, type Capability, type DelegationId, type Money, type PrincipalId } from "../domain/types.js";
 import { isNotCausallyAfter } from "./causality.js";
 import type { DelegationEvent } from "./validateChain.js";
 
@@ -55,13 +55,56 @@ function terminalDelegationOf(chain: readonly ChainLink[]): DelegationId | undef
 }
 
 /**
+ * I20 (extended, PROMPT 6e): the set of delegation_ids reachable from
+ * `terminalId` by walking parent_delegation_id upward — the terminal
+ * itself, plus every real ancestor. A delegation_id cited in
+ * authority_chain_ref that is NOT in this set is not a legitimate part of
+ * the chain the executor actually held, even if it is a perfectly real,
+ * causally-prior delegation (I19 has nothing to say about it — I19 checks
+ * existence and causal order, never whether a reference belongs to the
+ * right chain).
+ *
+ * Deliberately NOT validateChain.ts's walkUpChain: that function lives on
+ * resolveAuthority's own decision path, and validateChain.ts already
+ * imports remainingBudget from this module (for I5's total_budget
+ * bounding) — importing walkUpChain back here would create a circular
+ * module dependency. It also does more than this needs (schema_version and
+ * can_delegate checks, I10's cycle/depth semantics tuned for an
+ * authorization decision). This is a separate, minimal, purely structural
+ * walk: no schema checks, no authorization semantics, nothing but the
+ * parent_delegation_id graph shape — and, per A5/I19, no sequence
+ * comparison between a node and its parent (a parent may legitimately
+ * carry a HIGHER sequence than its child; see SPEC.md I19, "Distinction
+ * avec la livraison hors-ordre"). Cycle/depth-bounded exactly like I10, so
+ * a maliciously cyclic graph can never make this loop unboundedly.
+ */
+function ancestorDelegationIds(terminalId: DelegationId, visibleStore: CanonicalStore): ReadonlySet<DelegationId> {
+  const reachable = new Set<DelegationId>();
+  let currentId: DelegationId | undefined = terminalId;
+  let steps = 0;
+  while (currentId !== undefined && !reachable.has(currentId)) {
+    reachable.add(currentId);
+    const node = findDelegation(currentId, visibleStore);
+    if (node === undefined || node.event_type === "DELEGATION_CREATED") {
+      break;
+    }
+    currentId = node.payload.parent_delegation_id;
+    steps += 1;
+    if (steps > MAX_CHAIN_DEPTH) {
+      break;
+    }
+  }
+  return reachable;
+}
+
+/**
  * I20: an ACTION_EXECUTED counts against a total_budget only if it is
  * demonstrably tied to whoever actually held the chain it cites. This is
  * NOT a full re-resolution of that execution's own authority — remainingBudget
  * is itself called from evaluateConstraints/validateChain, which are on
  * resolveAuthority's own decision path; re-invoking resolveAuthority here for
  * every historical execution would recurse (SPEC.md I20 explains why). These
- * two checks are cheap and non-recursive: they only compare fields already
+ * checks are cheap and non-recursive: they only compare fields already
  * immutable on already-ingested events, never re-derive a decision.
  */
 function isDemonstrablyTiedToItsExecutor(execution: Extract<AuthorityEvent, { readonly event_type: "ACTION_EXECUTED" }>, request: ActionRequestedEvent, visibleStore: CanonicalStore): boolean {
@@ -91,10 +134,22 @@ export function remainingBudget(delegationId: DelegationId, totalBudget: Money, 
     if (event.event_type !== "ACTION_EXECUTED") {
       continue;
     }
-    const passesThroughDelegation = event.payload.authority_chain_ref.some(
+    const citesDelegation = event.payload.authority_chain_ref.some(
       (link) => link.kind === "delegation" && link.delegation_id === delegationId,
     );
-    if (!passesThroughDelegation) {
+    if (!citesDelegation) {
+      continue;
+    }
+    // I20 (extended, PROMPT 6e): citing D somewhere in the array is not
+    // enough — D must also be the chain's own terminal delegation, or a
+    // real ancestor of it, reached by walking parent_delegation_id. An
+    // otherwise entirely honest execution (its own executor/terminal both
+    // check out below) could otherwise pad its authority_chain_ref with a
+    // real, causally-prior, but structurally unrelated stranger's
+    // delegation_id, debiting a budget it has no genuine connection to.
+    const terminalDelegationId = terminalDelegationOf(event.payload.authority_chain_ref);
+    const ancestry = terminalDelegationId === undefined ? undefined : ancestorDelegationIds(terminalDelegationId, visibleStore);
+    if (ancestry === undefined || !ancestry.has(delegationId)) {
       continue;
     }
     const request = findActionRequested(event.payload.action_id, visibleStore);
@@ -121,10 +176,24 @@ function budgetExceeded(chain: readonly DelegationEvent[], amount: number, visib
   });
 }
 
-function isApprovalConsumed(approvalId: ApprovalId, visibleStore: CanonicalStore): boolean {
+/**
+ * I16 (précisée, PROMPT 6d finding #3): referencing `approvalId` in
+ * authority_chain_ref is not enough to count as consuming it — I6 already
+ * requires an approval to cover "exactement l'action qui l'a demandée,
+ * identifiée par son action_id" (I15's fingerprint binds parameters, but
+ * two distinct action_id can legitimately share a fingerprint, so
+ * action_id is the identity that must match). `boundActionId` is the
+ * action_id already carried by the APPROVAL_GRANTED itself — a field
+ * already immutable and already-ingested, so this comparison is
+ * structural and non-recursive, exactly like I20's executor/grantee
+ * checks for total_budget (the same root cause, applied to consumption
+ * instead of budget debiting).
+ */
+function isApprovalConsumed(approvalId: ApprovalId, boundActionId: ActionRequestedEvent["payload"]["action_id"], visibleStore: CanonicalStore): boolean {
   return visibleStore.some(
     (event) =>
       event.event_type === "ACTION_EXECUTED" &&
+      event.payload.action_id === boundActionId &&
       event.payload.authority_chain_ref.some((link) => link.kind === "approval" && link.approval_id === approvalId),
   );
 }
@@ -174,7 +243,7 @@ function findGrantOutcome(
       continue;
     }
     anyValidGrant = true;
-    if (!isApprovalConsumed(event.payload.approval_id, visibleStore)) {
+    if (!isApprovalConsumed(event.payload.approval_id, event.payload.action_id, visibleStore)) {
       return { anyValidGrant: true, unconsumedApprovalId: event.payload.approval_id };
     }
   }
