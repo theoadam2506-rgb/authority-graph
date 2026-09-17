@@ -10,13 +10,24 @@
 import { computeActionFingerprint } from "../domain/events.js";
 import type { AuthorityEvent, CanonicalStore } from "../domain/events.js";
 import type { ActionParameters, ApprovalId, AuthorityDecision, Capability, DelegationId, Money, PrincipalId } from "../domain/types.js";
+import { isNotCausallyAfter } from "./causality.js";
 import type { DelegationEvent } from "./validateChain.js";
 
 type ActionRequestedEvent = Extract<AuthorityEvent, { readonly event_type: "ACTION_REQUESTED" }>;
+type ApprovalRequestedEvent = Extract<AuthorityEvent, { readonly event_type: "APPROVAL_REQUESTED" }>;
 
 function findActionRequested(actionId: ActionRequestedEvent["payload"]["action_id"], visibleStore: CanonicalStore): ActionRequestedEvent | undefined {
   for (const event of visibleStore) {
     if (event.event_type === "ACTION_REQUESTED" && event.payload.action_id === actionId) {
+      return event;
+    }
+  }
+  return undefined;
+}
+
+function findApprovalRequested(approvalId: ApprovalId, visibleStore: CanonicalStore): ApprovalRequestedEvent | undefined {
+  for (const event of visibleStore) {
+    if (event.event_type === "APPROVAL_REQUESTED" && event.payload.approval_id === approvalId) {
       return event;
     }
   }
@@ -99,9 +110,16 @@ function findGrantOutcome(
     if (event.principal_id !== habilitatedGrantor || event.payload.approving_principal_id !== habilitatedGrantor) {
       continue; // I14: not the delegation's own grantor — ignored for decision
     }
-    const request = findActionRequested(event.payload.action_id, visibleStore);
-    if (request === undefined) {
+    // I19: an approval_id with no causally-prior APPROVAL_REQUESTED behind it
+    // is not a legitimate grant — ignored for decision, exactly as if this
+    // APPROVAL_GRANTED had never been emitted (PROMPT 6b, finding #1).
+    const approvalRequest = findApprovalRequested(event.payload.approval_id, visibleStore);
+    if (approvalRequest === undefined || !isNotCausallyAfter(approvalRequest, event.sequence)) {
       continue;
+    }
+    const request = findActionRequested(event.payload.action_id, visibleStore);
+    if (request === undefined || !isNotCausallyAfter(request, event.sequence)) {
+      continue; // I19: action_id must also exist causally before this grant
     }
     if (request.payload.requesting_principal_id !== agentId || request.payload.delegation_id !== terminalDelegationId) {
       continue;

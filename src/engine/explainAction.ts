@@ -39,13 +39,24 @@ import type {
 } from "../domain/types.js";
 import { CLOCK_DRIFT_THRESHOLD_MS } from "../domain/types.js";
 import { resolveAuthority } from "./authorityAt.js";
+import { isNotCausallyAfter } from "./causality.js";
 
 type ActionRequestedEvent = Extract<AuthorityEvent, { readonly event_type: "ACTION_REQUESTED" }>;
 type ActionExecutedEvent = Extract<AuthorityEvent, { readonly event_type: "ACTION_EXECUTED" }>;
+type ApprovalRequestedEvent = Extract<AuthorityEvent, { readonly event_type: "APPROVAL_REQUESTED" }>;
 
 function findActionRequested(actionId: ActionExplanationQuery["actionId"], events: CanonicalStore): ActionRequestedEvent | undefined {
   for (const event of events) {
     if (event.event_type === "ACTION_REQUESTED" && event.payload.action_id === actionId) {
+      return event;
+    }
+  }
+  return undefined;
+}
+
+function findApprovalRequested(approvalId: ApprovalId, events: CanonicalStore): ApprovalRequestedEvent | undefined {
+  for (const event of events) {
+    if (event.event_type === "APPROVAL_REQUESTED" && event.payload.approval_id === approvalId) {
       return event;
     }
   }
@@ -93,13 +104,31 @@ function hasOwnValidDenial(request: ActionRequestedEvent, events: CanonicalStore
   if (grantor === undefined) {
     return false;
   }
-  return events.some(
-    (event) =>
-      event.event_type === "APPROVAL_DENIED" &&
-      event.payload.action_id === request.payload.action_id &&
-      event.principal_id === grantor &&
-      event.payload.denying_principal_id === grantor,
-  );
+  for (const event of events) {
+    if (event.event_type !== "APPROVAL_DENIED") {
+      continue;
+    }
+    if (event.payload.action_id !== request.payload.action_id) {
+      continue;
+    }
+    if (event.principal_id !== grantor || event.payload.denying_principal_id !== grantor) {
+      continue;
+    }
+    // I19: action_id must reference this request causally before the denial;
+    // approval_id must reference a causally-prior APPROVAL_REQUESTED. A
+    // forged direct APPROVAL_DENIED that skips one of these is ignored,
+    // exactly as if it had never been emitted (mirrors the APPROVAL_GRANTED
+    // fix in evaluateConstraints.ts's findGrantOutcome, PROMPT 6b finding #1).
+    if (!isNotCausallyAfter(request, event.sequence)) {
+      continue;
+    }
+    const approvalRequest = findApprovalRequested(event.payload.approval_id, events);
+    if (approvalRequest === undefined || !isNotCausallyAfter(approvalRequest, event.sequence)) {
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
 
 /**

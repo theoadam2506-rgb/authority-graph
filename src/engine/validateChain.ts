@@ -100,7 +100,18 @@ type WalkResult =
   | { readonly ok: true; readonly chain: readonly DelegationEvent[] }
   | { readonly ok: false; readonly reason: "missing" | "cycle" | "depth" };
 
-/** Walks from a terminal delegation up to its root, root-to-terminal ordered on success. */
+/**
+ * Walks from a terminal delegation up to its root, root-to-terminal ordered
+ * on success.
+ *
+ * Deliberately NOT subject to I19's causal-ordering half (PROMPT 6b):
+ * `parent_delegation_id` is a structural graph pointer, resolved as a
+ * snapshot at `atSequence`, not a point-in-time claim — A5 (out-of-order
+ * delivery) explicitly allows a parent to carry a *higher* `sequence` than
+ * the child that references it, as long as both are visible by the time of
+ * evaluation. Only "not found at all" disqualifies a parent here (see
+ * SPEC.md I19, "Distinction avec la livraison hors-ordre").
+ */
 function walkUpChain(
   startId: DelegationId,
   index: ReadonlyMap<DelegationId, DelegationEvent>,

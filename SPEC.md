@@ -425,6 +425,105 @@ et ne doivent être ni affaiblis ni reformulés au fil de l'implémentation.
     l'attaque, menée un peu différemment, aurait pu réussir) — le rejet porte
     sur la forme causale de la citation, pas sur le contenu de l'autorité
     citée.
+19. **I19 — Légitimité causale des références « revendication » par ID
+    (PROMPT 6b, racine commune — portée révisée après vérification empirique,
+    voir note ci-dessous).** I18 n'était qu'une instance d'un motif général :
+    plusieurs champs d'événement citent un autre événement par un
+    identifiant métier, et le resolver ne vérifiait jusqu'ici cette citation
+    que par correspondance d'ID, jamais par ordre causal. La règle, formulée
+    une fois : **une référence par ID n'est légitime que si l'événement cité
+    existe dans le store canonique et que sa `sequence` n'est jamais
+    strictement postérieure à celle de l'événement citant** (égalité
+    tolérée — voir « Note sur l'égalité de séquence » ci-dessous ; c'est
+    volontairement plus permissif que I18, qui interdit l'égalité pour la
+    raison inverse : I18 compare un champ d'un événement à la `sequence` de
+    ce **même** événement, ce qui rend l'égalité intrinsèquement absurde,
+    alors qu'I19 compare deux événements **distincts**).
+
+    Champs concernés, et **portée réelle** de la règle pour chacun (toutes ne
+    reçoivent pas le même traitement — voir la distinction avec A5
+    ci-dessous, qui explique pourquoi) :
+    - `APPROVAL_GRANTED.action_id` et `APPROVAL_GRANTED.approval_id` ;
+    - `APPROVAL_DENIED.action_id` et `APPROVAL_DENIED.approval_id` ;
+      — pour ces deux événements, I19 s'applique pleinement : existence **et**
+      ordre causal.
+    - `APPROVAL_REQUESTED.action_id` — couvert par la même règle en
+      principe ; V0 n'a aujourd'hui aucun chemin de décision qui en dépend
+      (champ purement informatif — routage), donc rien à appliquer
+      concrètement pour l'instant.
+    - `ACTION_EXECUTED.authority_chain_ref` (chaque `delegation_id`/
+      `approval_id` qui y figure) — couvert en principe (un maillon cité ne
+      peut pas exister causalement après l'exécution qui prétend s'appuyer
+      dessus) ; non appliqué en code dans ce passage faute de nécessité
+      démontrée (voir « Portée restreinte » ci-dessous).
+    - `SUBDELEGATION_CREATED.parent_delegation_id` — **exclu de la moitié
+      « ordre causal » d'I19.** Voir « Distinction avec la livraison
+      hors-ordre » ci-dessous : ce champ reste gouverné uniquement par la
+      moitié « existence » (déjà en place avant I19, via C10), jamais par
+      l'ordre des `sequence` entre parent et enfant.
+
+    **Distinction avec la livraison hors-ordre (A5, déjà traitée) — et
+    pourquoi `parent_delegation_id` n'est pas ordonné par I19.** I19 ne porte
+    que sur la relation causale une fois les **deux** événements présents
+    dans le store — jamais sur l'absence temporaire de l'un des deux. Un
+    événement dont le prédécesseur référencé n'est pas encore arrivé au
+    moment de l'ingestion (A5) est une situation légitime, déjà couverte (le
+    store canonique l'accepte sans jugement d'autorité définitif, et la
+    résolution reste `UNKNOWN` tant que le prédécesseur manque) — ce n'est
+    **pas** une violation d'I19. Mais A5, pour les délégations
+    spécifiquement, va plus loin que « l'absence est temporaire » : une fois
+    le parent *arrivé*, peu importe l'ordre relatif de `sequence` dans
+    lequel parent et enfant ont été **ingérés** — seule compte la question
+    « les deux existent-ils à la `sequence` d'évaluation ? ». C'est un choix
+    de conception déjà spécifié et déjà testé (le parent peut porter une
+    `sequence` supérieure à celle de l'enfant qui le référence, et la chaîne
+    devient pleinement valide dès que les deux sont visibles), parce
+    qu'une chaîne de délégation est évaluée comme un **instantané** de
+    graphe à `atSequence`, jamais comme la preuve qu'une revendication
+    ponctuelle s'appuyait sur une preuve déjà là au moment précis de son
+    émission. C'est cette seconde catégorie de champ — une revendication sur
+    un instant précis (« je réponds, maintenant, à cette requête
+    d'approbation déjà déposée » ; « j'ai exécuté en m'appuyant sur cette
+    approbation déjà accordée ») — qu'I19 contraint par l'ordre causal.
+    `parent_delegation_id` n'en fait pas partie : c'est un pointeur
+    structurel dans un graphe résolu par instantané, pas une revendication
+    temporelle. Le confondre avec les deux premiers casserait A5, qui reste
+    un comportement voulu, pas une faille.
+
+    **Note sur l'égalité de séquence.** Le système d'ingestion réel
+    (`src/engine/ingest.ts`) attribue une `sequence` strictement croissante
+    et unique à chaque événement accepté, un par un : deux événements
+    distincts ne peuvent jamais, en pratique, partager la même `sequence`.
+    Deux événements de test construits directement comme `AuthorityEvent`
+    déjà « ingérés » (en dehors de toute ingestion réelle) peuvent en
+    revanche partager une valeur de `sequence` par convention d'écriture du
+    test (par exemple pour représenter « la même étape logique »). I19
+    tolère cette égalité (elle ne peut de toute façon jamais survenir via une
+    ingestion réelle, donc la tolérer n'ouvre aucune brèche observable) ;
+    seule une `sequence` **strictement supérieure** — un événement qui
+    n'existait, de façon démontrable, pas encore — constitue une violation.
+
+    **Sortie, tranchée.** Une référence violant I19 est traitée exactement
+    **comme si l'événement cité n'existait pas** — jamais comme s'il existait
+    avec un sens plus permissif. Ce n'est pas une nouvelle valeur de sortie
+    ad hoc par champ : c'est l'application directe de la sémantique déjà
+    spécifiée pour « cet événement n'existe pas », propre à chaque champ
+    concerné, et donc déjà déterministe : pour `APPROVAL_GRANTED`/
+    `APPROVAL_DENIED`, la décision d'approbation est ignorée, exactement
+    comme si elle n'avait jamais été émise (voir C16 pour I14, même
+    traitement) — une décision monétaire dans la bande d'approbation sans
+    aucune décision d'approbation valide et non consommée reste
+    `REQUIRES_APPROVAL` (C4) ; elle ne devient jamais `AUTHORIZED` sur la
+    foi d'une citation causalement impossible.
+
+    Test : une `APPROVAL_GRANTED` (ou `APPROVAL_DENIED`) dont l'`approval_id`
+    ne correspond à aucune `APPROVAL_REQUESTED` présente et causalement non
+    postérieure ne doit jamais faire basculer une question en `AUTHORIZED`
+    (ou en `DENIED` pour un refus) sur la seule foi de cette citation ; une
+    `SUBDELEGATION_CREATED` dont le parent arrive, dans le store, à une
+    `sequence` supérieure à celle de l'enfant qui le référence doit rester
+    résolue normalement dès que les deux sont visibles (A5 — non concerné par
+    la moitié « ordre » d'I19).
 
 ## Règles d'application complémentaires
 
@@ -576,3 +675,4 @@ qu'`authorityAt` pourrait produire à partir de la seule empreinte (un
 | C23 | Plusieurs chaînes distinctes vers le même principal, dont au moins une intégralement valide selon C1–C9 | La sortie de la chaîne valide s'applique (les autres chaînes, même corrompues ou cycliques, n'abaissent jamais ce résultat) |
 | C24 | Aucune des chaînes menant au principal n'est intégralement valide et connue | `UNKNOWN` (ou `DENIED` si au moins une chaîne est intégralement connue et prouve positivement l'absence d'autorité, selon C11/C12) |
 | C25 *(explainAction, I18)* | `ACTION_EXECUTED` de `sequence` S portant `decision_sequence >= S` (citation causalement impossible d'un point de décision futur ou simultané) | `UNKNOWN` (pour `execution.authorityAtDecision` ; `C25_FUTURE_DECISION_SEQUENCE`), quelle que soit par ailleurs l'autorité disponible au `decision_sequence` prétendu |
+| C26 *(I19)* | `APPROVAL_GRANTED`/`APPROVAL_DENIED` dont l'`action_id` ou l'`approval_id` référencé n'existe pas dans le store canonique, ou y existe avec une `sequence` strictement supérieure à celle de la décision d'approbation elle-même (égalité tolérée — ne peut de toute façon jamais survenir via une ingestion réelle ; voir I19, « Note sur l'égalité de séquence ») | Traité comme si l'événement cité n'existait pas : la décision d'approbation est ignorée (comme C16) — `REQUIRES_APPROVAL` (C4) reste la sortie en l'absence de toute autre décision d'approbation valide. **Ne s'applique pas** à `SUBDELEGATION_CREATED.parent_delegation_id` : ce champ reste gouverné par C10 seul (A5 — voir I19 pour la distinction) |
