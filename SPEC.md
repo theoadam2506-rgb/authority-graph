@@ -524,6 +524,89 @@ et ne doivent être ni affaiblis ni reformulés au fil de l'implémentation.
     `sequence` supérieure à celle de l'enfant qui le référence doit rester
     résolue normalement dès que les deux sont visibles (A5 — non concerné par
     la moitié « ordre » d'I19).
+20. **I20 — Qui peut débiter un `total_budget` (PROMPT 6b, finding #2).**
+    `remainingBudget` (`src/engine/evaluateConstraints.ts`) somme, pour une
+    délégation D bornée par `total_budget`, tous les `ACTION_EXECUTED`
+    visibles dont `authority_chain_ref` passe par D — mais jusqu'ici sans
+    jamais vérifier que l'exécution comptabilisée avait un rapport
+    démontrable avec l'identité qui détenait effectivement cette chaîne.
+    N'importe qui peut soumettre une `ACTION_EXECUTED` citant la délégation
+    d'un tiers dans son `authority_chain_ref` — I3 l'accepte sans jugement
+    d'autorité (l'ingestion ne valide pas l'autorité d'une exécution, voir
+    I18) — et jusqu'ici cette écriture, une fois dans le store, débitait le
+    budget de ce tiers, sans qu'aucune décision `AUTHORIZED` n'ait jamais été
+    démontrée pour elle : un déni de service par épuisement de budget contre
+    une chaîne par ailleurs parfaitement légitime.
+
+    **Pourquoi pas une re-résolution complète (risque de récursion).**
+    `remainingBudget` est appelé depuis `evaluateConstraints`
+    (`budgetExceeded`) et depuis `validateChain` (`totalBudgetBoundOk`),
+    tous deux **sur le chemin de décision** de `resolveAuthority` lui-même.
+    Exiger, pour chaque `ACTION_EXECUTED` sommée, une preuve complète
+    qu'elle *aurait été* `AUTHORIZED` à son `decision_sequence` obligerait
+    `remainingBudget` à rappeler `resolveAuthority` pour chacune — et si la
+    chaîne de CETTE exécution passe elle-même par une délégation bornée par
+    `total_budget`, cet appel rappellerait `remainingBudget`, qui
+    rappellerait potentiellement `resolveAuthority`, etc. : une dépendance
+    circulaire, sans garantie de terminaison comparable à I10 (I10 borne la
+    profondeur d'**une** chaîne de délégation ; rien ne borne ici le nombre
+    d'exécutions historiques imbriquées les unes dans les autres). I20 exclut
+    délibérément cette voie : il ne redemande **jamais** au resolver si une
+    exécution passée aurait été autorisée.
+
+    **La règle, non récursive.** Une `ACTION_EXECUTED` ne compte contre le
+    `total_budget` d'aucune délégation de son `authority_chain_ref` — ni la
+    délégation directement invoquée, ni un ancêtre borné plus haut dans la
+    même chaîne — sauf si les deux conditions suivantes, purement
+    structurelles et déjà immuables dans le store, sont satisfaites :
+    - `executed_by_principal_id` de l'`ACTION_EXECUTED` est exactement
+      `requesting_principal_id` de l'`ACTION_REQUESTED` de même `action_id`
+      (celui qui a exécuté est celui qui avait demandé — pas un tiers qui
+      s'attribue l'exécution d'une demande d'autrui) ;
+    - le dernier maillon de type délégation dans `authority_chain_ref` (le
+      maillon terminal, celui que l'exécutant prétend avoir exercé) a pour
+      `grantee_principal_id` exactement `executed_by_principal_id` (la
+      chaîne citée se termine réellement chez l'exécutant, pas chez un
+      tiers dont l'exécutant se contente de recopier l'identifiant de
+      délégation).
+
+    Ces deux vérifications ne consultent que des champs déjà présents et
+    immuables sur des événements déjà ingérés (I3) — aucun appel à
+    `resolveAuthority`/`validateChain`, aucune récursion, même coût
+    asymptotique que les lectures déjà existantes de `remainingBudget`.
+
+    **Ce que I20 ne garantit pas.** Ces deux conditions sont nécessaires,
+    pas suffisantes : elles ne revalident ni l'expiration, ni la révocation,
+    ni la couverture de capacité, ni les seuils de montant de la chaîne
+    citée — seule une résolution complète le ferait, et c'est précisément
+    ce qu'I20 refuse de redemander pour éviter la récursion ci-dessus. I20
+    ferme uniquement le vecteur « un tiers sans aucun rapport avec la
+    chaîne cite le `delegation_id` d'autrui » ; une exécution qui échoue
+    l'une de ces deux vérifications est exclue du débit, exactement comme
+    si elle n'apparaissait pas dans `authority_chain_ref` — ce n'est pas
+    une nouvelle valeur de sortie, c'est un décompte corrigé qui alimente
+    C1–C9 normalement.
+
+    **Cohérence avec A24 (TOCTOU budgétaire) — I20 ne change rien à A24.**
+    A24 documente que deux décisions individuellement `AUTHORIZED`, prises
+    par le même titulaire légitime, peuvent ensemble dépasser `total_budget`
+    faute de réservation : c'est une question de **moment** (deux décisions
+    honnêtes, jamais réconciliées avant exécution). I20 est une question
+    d'**identité** (une exécution malhonnête, jamais légitimement rattachée
+    à la chaîne qu'elle cite). Les deux conditions d'I20 sont trivialement
+    satisfaites dans le scénario A24 (le même principal légitime demande et
+    exécute, via sa propre délégation) : I20 ne bloque, ne détecte, ni ne
+    corrige le dépassement A24, qui reste un dépassement honnête entre deux
+    exécutions par ailleurs chacune conformes à I20. Les deux invariants
+    portent sur des axes indépendants et ne se contredisent pas.
+
+    Test : une `ACTION_EXECUTED` dont l'`executed_by_principal_id` diffère
+    du `requesting_principal_id` de l'`ACTION_REQUESTED` qu'elle cite, ou
+    dont le maillon terminal de `authority_chain_ref` a un
+    `grantee_principal_id` différent de son propre `executed_by_principal_id`,
+    ne doit jamais réduire le `total_budget` restant d'aucune délégation de
+    cette chaîne — une requête par ailleurs légitime et dans la bande
+    automatique de son titulaire réel reste `AUTHORIZED`.
 
 ## Règles d'application complémentaires
 
@@ -676,3 +759,4 @@ qu'`authorityAt` pourrait produire à partir de la seule empreinte (un
 | C24 | Aucune des chaînes menant au principal n'est intégralement valide et connue | `UNKNOWN` (ou `DENIED` si au moins une chaîne est intégralement connue et prouve positivement l'absence d'autorité, selon C11/C12) |
 | C25 *(explainAction, I18)* | `ACTION_EXECUTED` de `sequence` S portant `decision_sequence >= S` (citation causalement impossible d'un point de décision futur ou simultané) | `UNKNOWN` (pour `execution.authorityAtDecision` ; `C25_FUTURE_DECISION_SEQUENCE`), quelle que soit par ailleurs l'autorité disponible au `decision_sequence` prétendu |
 | C26 *(I19)* | `APPROVAL_GRANTED`/`APPROVAL_DENIED` dont l'`action_id` ou l'`approval_id` référencé n'existe pas dans le store canonique, ou y existe avec une `sequence` strictement supérieure à celle de la décision d'approbation elle-même (égalité tolérée — ne peut de toute façon jamais survenir via une ingestion réelle ; voir I19, « Note sur l'égalité de séquence ») | Traité comme si l'événement cité n'existait pas : la décision d'approbation est ignorée (comme C16) — `REQUIRES_APPROVAL` (C4) reste la sortie en l'absence de toute autre décision d'approbation valide. **Ne s'applique pas** à `SUBDELEGATION_CREATED.parent_delegation_id` : ce champ reste gouverné par C10 seul (A5 — voir I19 pour la distinction) |
+| C27 *(I20)* | `ACTION_EXECUTED` dont l'`executed_by_principal_id` diffère du `requesting_principal_id` de l'`ACTION_REQUESTED` de même `action_id`, ou dont le maillon délégation terminal d'`authority_chain_ref` a un `grantee_principal_id` différent de son propre `executed_by_principal_id` | Exclue du calcul de `reste(D, S)` pour toute délégation D bornée par `total_budget` figurant dans sa chaîne — comptée comme si elle n'apparaissait pas dans `authority_chain_ref`. N'affecte aucune autre sortie que le montant du budget restant, qui alimente ensuite C9 normalement |

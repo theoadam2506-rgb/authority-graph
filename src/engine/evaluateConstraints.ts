@@ -8,7 +8,7 @@
  * Pure: no I/O, no Date.now(), no mutation of its inputs.
  */
 import { computeActionFingerprint } from "../domain/events.js";
-import type { AuthorityEvent, CanonicalStore } from "../domain/events.js";
+import type { AuthorityEvent, CanonicalStore, ChainLink } from "../domain/events.js";
 import type { ActionParameters, ApprovalId, AuthorityDecision, Capability, DelegationId, Money, PrincipalId } from "../domain/types.js";
 import { isNotCausallyAfter } from "./causality.js";
 import type { DelegationEvent } from "./validateChain.js";
@@ -32,6 +32,48 @@ function findApprovalRequested(approvalId: ApprovalId, visibleStore: CanonicalSt
     }
   }
   return undefined;
+}
+
+function findDelegation(delegationId: DelegationId, visibleStore: CanonicalStore): DelegationEvent | undefined {
+  for (const event of visibleStore) {
+    if ((event.event_type === "DELEGATION_CREATED" || event.event_type === "SUBDELEGATION_CREATED") && event.payload.delegation_id === delegationId) {
+      return event;
+    }
+  }
+  return undefined;
+}
+
+/** The last delegation-kind link in a chain — the one the executor claims to have actually exercised. */
+function terminalDelegationOf(chain: readonly ChainLink[]): DelegationId | undefined {
+  let terminal: DelegationId | undefined;
+  for (const link of chain) {
+    if (link.kind === "delegation") {
+      terminal = link.delegation_id;
+    }
+  }
+  return terminal;
+}
+
+/**
+ * I20: an ACTION_EXECUTED counts against a total_budget only if it is
+ * demonstrably tied to whoever actually held the chain it cites. This is
+ * NOT a full re-resolution of that execution's own authority — remainingBudget
+ * is itself called from evaluateConstraints/validateChain, which are on
+ * resolveAuthority's own decision path; re-invoking resolveAuthority here for
+ * every historical execution would recurse (SPEC.md I20 explains why). These
+ * two checks are cheap and non-recursive: they only compare fields already
+ * immutable on already-ingested events, never re-derive a decision.
+ */
+function isDemonstrablyTiedToItsExecutor(execution: Extract<AuthorityEvent, { readonly event_type: "ACTION_EXECUTED" }>, request: ActionRequestedEvent, visibleStore: CanonicalStore): boolean {
+  if (request.payload.requesting_principal_id !== execution.payload.executed_by_principal_id) {
+    return false; // someone other than the requester claims to have executed it
+  }
+  const terminalDelegationId = terminalDelegationOf(execution.payload.authority_chain_ref);
+  const terminalDelegation = terminalDelegationId === undefined ? undefined : findDelegation(terminalDelegationId, visibleStore);
+  if (terminalDelegation === undefined || terminalDelegation.payload.grantee_principal_id !== execution.payload.executed_by_principal_id) {
+    return false; // the cited chain does not even terminate at the executor
+  }
+  return true;
 }
 
 /**
@@ -58,6 +100,9 @@ export function remainingBudget(delegationId: DelegationId, totalBudget: Money, 
     const request = findActionRequested(event.payload.action_id, visibleStore);
     if (request === undefined) {
       continue;
+    }
+    if (!isDemonstrablyTiedToItsExecutor(event, request, visibleStore)) {
+      continue; // I20: not a legitimate debit against this chain — PROMPT 6b finding #2
     }
     if (request.payload.parameters.kind === "monetary") {
       spent += request.payload.parameters.amount.value;
