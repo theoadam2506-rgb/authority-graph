@@ -230,3 +230,7 @@ npm run typecheck   # tsc --noEmit
 npm test            # vitest run
 npm run demo        # the scenario above
 ```
+
+## License
+
+Apache License 2.0 — see [LICENSE](./LICENSE).
