@@ -150,7 +150,7 @@ const store = new InMemoryEventStore(clock, undefined, readInfrastructureClock);
 // Cast: principals, capability, recipient
 // ---------------------------------------------------------------------------
 
-const THEO = principalId("theo"); // HUMAN_ROOT
+const USER = principalId("user"); // HUMAN_ROOT
 const AGENT_A = principalId("agent-a");
 const AGENT_B = principalId("agent-b");
 const MALLORY = principalId("mallory"); // never granted anything
@@ -160,12 +160,12 @@ const PO_CREATE = capability("purchase_order", "create");
 
 async function main(): Promise<void> {
   // -------------------------------------------------------------------------
-  section("Délégation racine — Theo → Agent A");
+  section("Délégation racine — User → Agent A");
   // -------------------------------------------------------------------------
   currentHour = 0;
   const rootDraft = rootDelegationDraft({
-    id: "d-theo-a",
-    grantor: THEO,
+    id: "d-user-a",
+    grantor: USER,
     grantorType: "HUMAN_ROOT",
     grantee: AGENT_A,
     capabilities: [PO_CREATE],
@@ -173,13 +173,13 @@ async function main(): Promise<void> {
     constraints: { expires_at: expiresAt(iso8601(hour(10))), thresholds: thresholds(2500, 5000) },
     occurredAt: hour(0),
   });
-  expectAccepted((await store.append([rootDraft])).outcomes[0], "Root delegation Theo -> A");
+  expectAccepted((await store.append([rootDraft])).outcomes[0], "Root delegation user -> A");
 
   {
     const events = await store.getEvents();
     const at: AuthorityInstant = { atSequence: sequenceNumber(events.length), authorityTime: iso8601(hour(0)) };
-    const decision = authorityAt(events, { agentId: AGENT_A, principalId: THEO, capability: PO_CREATE, parameters: nonMonetaryParameters() }, at);
-    expectOutcome(decision, "AUTHORIZED", "A holds purchase_order.create directly from Theo");
+    const decision = authorityAt(events, { agentId: AGENT_A, principalId: USER, capability: PO_CREATE, parameters: nonMonetaryParameters() }, at);
+    expectOutcome(decision, "AUTHORIZED", "A holds purchase_order.create directly from the user");
   }
 
   // -------------------------------------------------------------------------
@@ -188,7 +188,7 @@ async function main(): Promise<void> {
   currentHour = 1;
   const subDraft = subDelegationDraft({
     id: "d-a-b",
-    parentId: "d-theo-a",
+    parentId: "d-user-a",
     grantor: AGENT_A,
     grantee: AGENT_B,
     capabilities: [PO_CREATE],
@@ -196,7 +196,7 @@ async function main(): Promise<void> {
     constraints: { expires_at: expiresAt(iso8601(hour(8))), thresholds: thresholds(2000, 2000) },
     occurredAt: hour(1),
   });
-  expectAccepted((await store.append([subDraft])).outcomes[0], "Sub-delegation A -> B (<=2000, bounded within Theo -> A per I5)");
+  expectAccepted((await store.append([subDraft])).outcomes[0], "Sub-delegation A -> B (<=2000, bounded within user -> A per I5)");
 
   // -------------------------------------------------------------------------
   section("Laundering refusé — Mallory (jamais habilitée) tente une chaîne invalide");
@@ -204,7 +204,7 @@ async function main(): Promise<void> {
   const beforeMallory = await store.getEvents();
   const malloryDraft = subDelegationDraft({
     id: "d-mallory-fake",
-    parentId: "d-theo-a", // references a REAL delegation
+    parentId: "d-user-a", // references a REAL delegation
     grantor: MALLORY,
     grantee: MALLORY,
     capabilities: [PO_CREATE],
@@ -213,7 +213,7 @@ async function main(): Promise<void> {
     occurredAt: hour(1),
   });
   const malloryAppend = await store.append([malloryDraft]);
-  expectRejected(malloryAppend.outcomes[0], "UNAUTHORIZED_SUBDELEGATION", "Mallory's forged sub-delegation off Theo -> A");
+  expectRejected(malloryAppend.outcomes[0], "UNAUTHORIZED_SUBDELEGATION", "Mallory's forged sub-delegation off user -> A");
 
   const securityLog = await store.getSecurityLog();
   const loggedEntry = securityLog.find((e) => e.eventId === malloryDraft.event_id);
@@ -228,7 +228,7 @@ async function main(): Promise<void> {
 
   {
     const at: AuthorityInstant = { atSequence: sequenceNumber(afterMallory.length), authorityTime: iso8601(hour(1)) };
-    const decision = authorityAt(afterMallory, { agentId: MALLORY, principalId: THEO, capability: PO_CREATE, parameters: nonMonetaryParameters() }, at);
+    const decision = authorityAt(afterMallory, { agentId: MALLORY, principalId: USER, capability: PO_CREATE, parameters: nonMonetaryParameters() }, at);
     expectOutcome(decision, "UNKNOWN", "Mallory holds no authority whatsoever (her fabricated delegation never existed canonically)");
   }
 
@@ -270,33 +270,33 @@ async function main(): Promise<void> {
   {
     const events = await store.getEvents();
     const at: AuthorityInstant = { atSequence: sequenceNumber(events.length), authorityTime: iso8601(hour(3)) };
-    const forB = authorityAt(events, { agentId: AGENT_B, principalId: THEO, capability: PO_CREATE, parameters: paramsEsc }, at);
+    const forB = authorityAt(events, { agentId: AGENT_B, principalId: USER, capability: PO_CREATE, parameters: paramsEsc }, at);
     expectDenied(forB, "C8_AMOUNT_EXCEEDS_APPROVAL_CEILING", "B cannot reach 4800 EUR — its own delegation caps it at 2000");
 
-    const forA = authorityAt(events, { agentId: AGENT_A, principalId: THEO, capability: PO_CREATE, parameters: paramsEsc }, at);
+    const forA = authorityAt(events, { agentId: AGENT_A, principalId: USER, capability: PO_CREATE, parameters: paramsEsc }, at);
     expectOutcome(forA, "REQUIRES_APPROVAL", "A can reach 4800 EUR via the root delegation, but it falls in the approval band (2500 < 4800 <= 5000)");
   }
 
-  const reqADraft = actionRequestDraft({ id: "a-a-4800", requester: AGENT_A, delegationId: "d-theo-a", capability: PO_CREATE, parameters: paramsEsc, occurredAt: hour(3) });
+  const reqADraft = actionRequestDraft({ id: "a-a-4800", requester: AGENT_A, delegationId: "d-user-a", capability: PO_CREATE, parameters: paramsEsc, occurredAt: hour(3) });
   expectAccepted((await store.append([reqADraft])).outcomes[0], "A requests purchase_order.create for 4800 EUR");
 
   // -------------------------------------------------------------------------
-  section("Binding d'approbation — Theo approuve exactement l'action à 4800");
+  section("Binding d'approbation — User approuve exactement l'action à 4800");
   // -------------------------------------------------------------------------
   currentHour = 4;
-  const apprReqDraft = approvalRequestDraft({ id: "appr-4800", actionId: "a-a-4800", requestedFrom: THEO, requester: AGENT_A, occurredAt: hour(4) });
-  expectAccepted((await store.append([apprReqDraft])).outcomes[0], "A requests Theo's approval for the 4800 EUR action");
+  const apprReqDraft = approvalRequestDraft({ id: "appr-4800", actionId: "a-a-4800", requestedFrom: USER, requester: AGENT_A, occurredAt: hour(4) });
+  expectAccepted((await store.append([apprReqDraft])).outcomes[0], "A requests the user's approval for the 4800 EUR action");
 
   currentHour = 5;
-  const apprGrantDraft = approvalGrantDraft({ id: "appr-4800", actionId: "a-a-4800", approver: THEO, occurredAt: hour(5) });
-  const grantSeq = expectAccepted((await store.append([apprGrantDraft])).outcomes[0], "Theo grants approval appr-4800");
+  const apprGrantDraft = approvalGrantDraft({ id: "appr-4800", actionId: "a-a-4800", approver: USER, occurredAt: hour(5) });
+  const grantSeq = expectAccepted((await store.append([apprGrantDraft])).outcomes[0], "The user grants approval appr-4800");
 
   {
     const events = await store.getEvents();
     const at: AuthorityInstant = { atSequence: sequenceNumber(events.length), authorityTime: iso8601(hour(5)) };
 
     const authorized = expectOutcome(
-      authorityAt(events, { agentId: AGENT_A, principalId: THEO, capability: PO_CREATE, parameters: paramsEsc }, at),
+      authorityAt(events, { agentId: AGENT_A, principalId: USER, capability: PO_CREATE, parameters: paramsEsc }, at),
       "AUTHORIZED",
       "The exact approved action (4800 EUR, vendor-1) is now authorized",
     );
@@ -304,14 +304,14 @@ async function main(): Promise<void> {
 
     const wrongAmount = monetaryParameters(money(4801, "EUR"), VENDOR);
     expectOutcome(
-      authorityAt(events, { agentId: AGENT_A, principalId: THEO, capability: PO_CREATE, parameters: wrongAmount }, at),
+      authorityAt(events, { agentId: AGENT_A, principalId: USER, capability: PO_CREATE, parameters: wrongAmount }, at),
       "REQUIRES_APPROVAL",
       "Changing the amount by 1 EUR makes the same approval unusable (I15 binds the exact fingerprint)",
     );
 
     const wrongRecipient = monetaryParameters(money(4800, "EUR"), OTHER_VENDOR);
     expectOutcome(
-      authorityAt(events, { agentId: AGENT_A, principalId: THEO, capability: PO_CREATE, parameters: wrongRecipient }, at),
+      authorityAt(events, { agentId: AGENT_A, principalId: USER, capability: PO_CREATE, parameters: wrongRecipient }, at),
       "REQUIRES_APPROVAL",
       "Changing the recipient makes the same approval unusable",
     );
@@ -326,7 +326,7 @@ async function main(): Promise<void> {
     actionId: "a-a-4800",
     executor: AGENT_A,
     decisionSequence: grantSeq,
-    chain: [delegationLink("d-theo-a"), approvalLink("appr-4800")],
+    chain: [delegationLink("d-user-a"), approvalLink("appr-4800")],
     fingerprint: fpEsc,
     occurredAt: hour(6),
   });
@@ -342,19 +342,19 @@ async function main(): Promise<void> {
     expectOutcome(report.execution.authorityAtDecision, "AUTHORIZED", "a-a-4800's execution was authorized at its own decision sequence");
     assertEqual(String(report.execution.consumedApprovalId), "appr-4800", "the report must name the consumed approval");
 
-    const reuse = authorityAt(events, { agentId: AGENT_A, principalId: THEO, capability: PO_CREATE, parameters: paramsEsc }, at);
+    const reuse = authorityAt(events, { agentId: AGENT_A, principalId: USER, capability: PO_CREATE, parameters: paramsEsc }, at);
     expectDenied(reuse, "C7_APPROVAL_ALREADY_CONSUMED", "The exact same request, asked again, is now denied: the approval is spent");
   }
 
   currentHour = 7;
-  const reqA2Draft = actionRequestDraft({ id: "a-a-4800-second", requester: AGENT_A, delegationId: "d-theo-a", capability: PO_CREATE, parameters: paramsEsc, occurredAt: hour(7) });
+  const reqA2Draft = actionRequestDraft({ id: "a-a-4800-second", requester: AGENT_A, delegationId: "d-user-a", capability: PO_CREATE, parameters: paramsEsc, occurredAt: hour(7) });
   const req2Seq = expectAccepted((await store.append([reqA2Draft])).outcomes[0], "A second, identical 4800 EUR request is recorded");
 
   const execA2Draft = actionExecutionDraft({
     actionId: "a-a-4800-second",
     executor: AGENT_A,
     decisionSequence: req2Seq,
-    chain: [delegationLink("d-theo-a"), approvalLink("appr-4800")],
+    chain: [delegationLink("d-user-a"), approvalLink("appr-4800")],
     fingerprint: fpEsc,
     occurredAt: hour(7),
   });
@@ -374,20 +374,20 @@ async function main(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  section("Révocation — Theo révoque d-theo-a ; les descendants qui en dépendent exclusivement tombent");
+  section("Révocation — User révoque d-user-a ; les descendants qui en dépendent exclusivement tombent");
   // -------------------------------------------------------------------------
   currentHour = 8;
-  const revokeDraft = revokeDelegationDraft({ targetId: "d-theo-a", issuedBy: THEO, reason: "POLICY_REVIEW", occurredAt: hour(8) });
-  const revokeSeq = expectAccepted((await store.append([revokeDraft])).outcomes[0], "Theo revokes d-theo-a");
+  const revokeDraft = revokeDelegationDraft({ targetId: "d-user-a", issuedBy: USER, reason: "POLICY_REVIEW", occurredAt: hour(8) });
+  const revokeSeq = expectAccepted((await store.append([revokeDraft])).outcomes[0], "The user revokes d-user-a");
 
   {
     const events = await store.getEvents();
     const at: AuthorityInstant = { atSequence: sequenceNumber(events.length), authorityTime: iso8601(hour(8)) };
-    const forA = authorityAt(events, { agentId: AGENT_A, principalId: THEO, capability: PO_CREATE, parameters: nonMonetaryParameters() }, at);
+    const forA = authorityAt(events, { agentId: AGENT_A, principalId: USER, capability: PO_CREATE, parameters: nonMonetaryParameters() }, at);
     expectDenied(forA, "C12_DELEGATION_REVOKED", "A's own authority is gone immediately");
 
-    const forB = authorityAt(events, { agentId: AGENT_B, principalId: THEO, capability: PO_CREATE, parameters: monetaryParameters(money(500, "EUR"), VENDOR) }, at);
-    expectDenied(forB, "C12_DELEGATION_REVOKED", "B's authority — which only ever existed through d-theo-a — falls too, even though d-a-b itself was never touched");
+    const forB = authorityAt(events, { agentId: AGENT_B, principalId: USER, capability: PO_CREATE, parameters: monetaryParameters(money(500, "EUR"), VENDOR) }, at);
+    expectDenied(forB, "C12_DELEGATION_REVOKED", "B's authority — which only ever existed through d-user-a — falls too, even though d-a-b itself was never touched");
   }
 
   // -------------------------------------------------------------------------
@@ -398,7 +398,7 @@ async function main(): Promise<void> {
   const backdatedDraft = actionRequestDraft({
     id: "a-a-backdated",
     requester: AGENT_A,
-    delegationId: "d-theo-a",
+    delegationId: "d-user-a",
     capability: PO_CREATE,
     parameters: paramsBackdated,
     occurredAt: "2020-01-01T00:00:00.000Z", // claims to have happened years before the delegation even existed
@@ -411,7 +411,7 @@ async function main(): Promise<void> {
   {
     const events = await store.getEvents();
     const at: AuthorityInstant = { atSequence: sequenceNumber(events.length), authorityTime: iso8601(hour(9)) };
-    const decision = authorityAt(events, { agentId: AGENT_A, principalId: THEO, capability: PO_CREATE, parameters: paramsBackdated }, at);
+    const decision = authorityAt(events, { agentId: AGENT_A, principalId: USER, capability: PO_CREATE, parameters: paramsBackdated }, at);
     expectDenied(decision, "C12_DELEGATION_REVOKED", "The backdated occurred_at does not resurrect a revoked delegation — sequence and authority_time are unmoved");
 
     const drift = findLateOrBackdatedEvents(events);
@@ -426,7 +426,7 @@ async function main(): Promise<void> {
   section("explain historique — l'autorité d'hier, expliquée aujourd'hui");
   // -------------------------------------------------------------------------
   const finalEvents = await store.getEvents();
-  const farFuture = hour(50); // well past both the revocation (hour 8) and d-theo-a's own expiry (hour 10)
+  const farFuture = hour(50); // well past both the revocation (hour 8) and d-user-a's own expiry (hour 10)
 
   // The invariant itself, checked in-process before we ever touch the CLI:
   // the decision AT the decision point must not move when "now" moves.
