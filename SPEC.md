@@ -398,6 +398,33 @@ et ne doivent être ni affaiblis ni reformulés au fil de l'implémentation.
     Y ». Test : un audit du texte produit par `explain()` ne doit contenir aucune
     formulation impliquant une preuve cryptographique ou une vérification
     d'identité forte.
+18. **I18 — `decision_sequence` ne peut jamais excéder sa propre `sequence`
+    (PROMPT 6a, finding #4).** `decision_sequence`, porté par une
+    `ACTION_EXECUTED`, est un champ auto-déclaré par l'émetteur de
+    l'événement — exactement comme `occurred_at` (I4) — et rien à l'ingestion
+    ne le contraint contre l'ordre causal réel : le moteur doit donc le
+    contraindre lui-même, à la résolution. Une `sequence` n'existe qu'une fois
+    l'événement qui la porte accepté dans le store canonique ; un point de
+    décision ne peut donc jamais se situer à une `sequence` postérieure **ou
+    égale** à celle de l'`ACTION_EXECUTED` qui le cite — un `decision_sequence`
+    égal à la `sequence` de sa propre exécution n'a pas plus de sens causal
+    qu'un `decision_sequence` strictement futur, puisqu'un événement ne peut
+    jamais servir de preuve à lui-même. Formellement, pour toute
+    `ACTION_EXECUTED` de `sequence` S : `decision_sequence < S` est requis.
+    Une violation de cette contrainte n'est jamais une preuve positive
+    d'absence d'autorité (ce n'est pas ce que le maillon *dit*, c'est que la
+    question elle-même n'a pas de sens causal) : la sortie est `UNKNOWN`,
+    jamais `DENIED` — tranché, pas « selon le contexte » — cohérent avec I1
+    (une question mal formée bloque, elle ne tranche pas sur le fond à sa
+    place). Cette règle s'applique à `execution.authorityAtDecision`
+    uniquement (`explainAction`) ; elle est sans objet pour `authorityAt`, qui
+    ne connaît aucun `decision_sequence`. Test : une `ACTION_EXECUTED` de
+    `sequence` S dont `decision_sequence >= S` doit produire `UNKNOWN` pour
+    `execution.authorityAtDecision`, même si une autorité par ailleurs valide
+    existe réellement à ce `decision_sequence` prétendu (i.e. même si
+    l'attaque, menée un peu différemment, aurait pu réussir) — le rejet porte
+    sur la forme causale de la citation, pas sur le contenu de l'autorité
+    citée.
 
 ## Règles d'application complémentaires
 
@@ -548,3 +575,4 @@ qu'`authorityAt` pourrait produire à partir de la seule empreinte (un
 | C22 | Type de contrainte inconnu ou non reconnu présent dans un payload de délégation, ou `schema_version` inconnue portée par un événement | `UNKNOWN`, mais **seulement** pour toute résolution qui dépend réellement de cet événement précis — un événement étranger à `schema_version` inconnue ailleurs dans le store n'affecte aucune résolution indépendante |
 | C23 | Plusieurs chaînes distinctes vers le même principal, dont au moins une intégralement valide selon C1–C9 | La sortie de la chaîne valide s'applique (les autres chaînes, même corrompues ou cycliques, n'abaissent jamais ce résultat) |
 | C24 | Aucune des chaînes menant au principal n'est intégralement valide et connue | `UNKNOWN` (ou `DENIED` si au moins une chaîne est intégralement connue et prouve positivement l'absence d'autorité, selon C11/C12) |
+| C25 *(explainAction, I18)* | `ACTION_EXECUTED` de `sequence` S portant `decision_sequence >= S` (citation causalement impossible d'un point de décision futur ou simultané) | `UNKNOWN` (pour `execution.authorityAtDecision` ; `C25_FUTURE_DECISION_SEQUENCE`), quelle que soit par ailleurs l'autorité disponible au `decision_sequence` prétendu |

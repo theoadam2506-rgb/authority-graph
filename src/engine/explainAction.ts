@@ -164,14 +164,23 @@ export function explainAction(events: CanonicalStore, query: ActionExplanationQu
 
   const requestFingerprint = computeActionFingerprint(request.payload.capability_requested, request.payload.parameters);
   const authorityAtDecision: AuthorityDecision =
-    execution.payload.action_fingerprint === requestFingerprint
-      ? resolveActionAuthority(
-          request,
-          events,
-          execution.payload.decision_sequence,
-          reconstructAuthorityTime(events, execution.payload.decision_sequence),
-        )
-      : { outcome: "DENIED", reasonCode: "C6_ACTION_FINGERPRINT_MISMATCH" };
+    execution.payload.decision_sequence >= execution.sequence
+      ? // I18: decision_sequence is self-declared by the event's emitter, exactly
+        // like occurred_at (I4), and nothing at ingestion constrains it against
+        // causal order. An ACTION_EXECUTED cannot cite, as its own decision
+        // point, a sequence that is later than or equal to itself — that event
+        // did not exist yet (or was itself only just being assigned a sequence)
+        // when this execution was recorded. This is a causal impossibility, not
+        // a positive proof of missing authority, so it is UNKNOWN, never DENIED.
+        { outcome: "UNKNOWN", reasonCode: "C25_FUTURE_DECISION_SEQUENCE" }
+      : execution.payload.action_fingerprint === requestFingerprint
+        ? resolveActionAuthority(
+            request,
+            events,
+            execution.payload.decision_sequence,
+            reconstructAuthorityTime(events, execution.payload.decision_sequence),
+          )
+        : { outcome: "DENIED", reasonCode: "C6_ACTION_FINGERPRINT_MISMATCH" };
 
   const consumedApprovalId = findApprovalLink(execution.payload.authority_chain_ref);
 
