@@ -63,34 +63,65 @@
 import { computeActionFingerprint, type AuthorityEvent, type CanonicalStore, type ChainLink } from "../domain/events.js";
 import {
   iso8601,
+  type ActionId,
   type AuthorityDecision,
   type CapabilityId,
   type DelegationId,
   type EventId,
   type Iso8601,
+  type PrincipalId,
   type SequenceNumber,
 } from "../domain/types.js";
 import { evaluateConstraints } from "./evaluateConstraints.js";
 import { validateChain, type DelegationEvent } from "./validateChain.js";
 import type { CapabilityIssuedEvent, ValidatedGrant } from "./capacity.js";
 
-type ActionRequestedEvent = Extract<AuthorityEvent, { readonly event_type: "ACTION_REQUESTED" }>;
+export type ActionRequestedEvent = Extract<AuthorityEvent, { readonly event_type: "ACTION_REQUESTED" }>;
 
-export type GrantRejectionReason =
+/**
+ * The subset of rejection reasons that make sense BEFORE a CAPABILITY_ISSUED
+ * event exists at all — i.e. the reasons `selectInvokedGrant` (the
+ * command-oriented core, PR4B-2) can produce. `GrantRejectionReason`
+ * (below) extends this with three more reasons that only make sense when
+ * checking an already-asserted candidate's claims against this same
+ * resolution (FINGERPRINT_MISMATCH, DECISION_SEQUENCE_NOT_IMMEDIATE,
+ * GRANTED_CHAIN_MISMATCH) — see `validateAndSelectGrant`, which is now a
+ * thin adapter built on top of `selectInvokedGrant`, kept only so PR4A's
+ * already-committed tests keep passing unmodified.
+ */
+export type GrantSelectionRejectionReason =
   | "ACTION_NOT_FOUND"
   | "ACTION_REQUESTED_NOT_VISIBLE_AT_DECISION"
-  | "FINGERPRINT_MISMATCH"
-  | "DECISION_SEQUENCE_NOT_IMMEDIATE"
   | "INVOKED_DELEGATION_NOT_FOUND"
   | "INVOKED_DELEGATION_NOT_OWNED_BY_REQUESTER"
-  | "NOT_AUTHORIZED"
-  | "GRANTED_CHAIN_MISMATCH";
+  | "NOT_AUTHORIZED";
+
+export type GrantRejectionReason = GrantSelectionRejectionReason | "FINGERPRINT_MISMATCH" | "DECISION_SEQUENCE_NOT_IMMEDIATE" | "GRANTED_CHAIN_MISMATCH";
 
 export type GrantValidationResult =
   | { readonly ok: true; readonly grant: ValidatedGrant }
   | { readonly ok: false; readonly reason: GrantRejectionReason; readonly decision?: AuthorityDecision };
 
-function findActionRequested(actionId: ActionRequestedEvent["payload"]["action_id"], store: CanonicalStore): ActionRequestedEvent | undefined {
+/**
+ * The GRANTED data `selectInvokedGrant` produces on success — deliberately
+ * NOT a CAPABILITY_ISSUED event or payload of any kind. `capability_id`,
+ * `enforcement_point_id`, and `expires_at` never appear here: they are not
+ * resolution outputs, they are Authority-generated/policy/command inputs
+ * decided elsewhere (see the design report, "AUTHORITY-CONTROLLED
+ * OUTPUT"). `decisionSequence` is not repeated here either — it is exactly
+ * the `snapshotSequence` the caller already passed in.
+ */
+export interface SelectedGrant {
+  readonly requestingPrincipalId: PrincipalId;
+  readonly actionFingerprint: ReturnType<typeof computeActionFingerprint>;
+  readonly grantedChainRef: readonly ChainLink[];
+}
+
+export type GrantSelectionResult =
+  | { readonly ok: true; readonly grant: SelectedGrant }
+  | { readonly ok: false; readonly reason: GrantSelectionRejectionReason; readonly decision?: AuthorityDecision };
+
+export function findActionRequested(actionId: ActionId, store: CanonicalStore): ActionRequestedEvent | undefined {
   for (const event of store) {
     if (event.event_type === "ACTION_REQUESTED" && event.payload.action_id === actionId) {
       return event;
@@ -99,7 +130,7 @@ function findActionRequested(actionId: ActionRequestedEvent["payload"]["action_i
   return undefined;
 }
 
-function findDelegationById(delegationId: DelegationId, visibleAtDecision: CanonicalStore): DelegationEvent | undefined {
+export function findDelegationById(delegationId: DelegationId, visibleAtDecision: CanonicalStore): DelegationEvent | undefined {
   for (const event of visibleAtDecision) {
     if ((event.event_type === "DELEGATION_CREATED" || event.event_type === "SUBDELEGATION_CREATED") && event.payload.delegation_id === delegationId) {
       return event;
@@ -116,7 +147,7 @@ function findDelegationById(delegationId: DelegationId, visibleAtDecision: Canon
  * small-local-helper convention evaluateConstraints.ts/ingest.ts already
  * each follow for their own private finders.
  */
-function reconstructAuthorityTimeAt(store: CanonicalStore, atSequence: SequenceNumber): Iso8601 {
+export function reconstructAuthorityTimeAt(store: CanonicalStore, atSequence: SequenceNumber): Iso8601 {
   let latest: { readonly ms: number; readonly iso: Iso8601 } | undefined;
   for (const event of store) {
     if (event.sequence <= atSequence) {
@@ -150,28 +181,97 @@ function chainsEqual(a: readonly ChainLink[], b: readonly ChainLink[]): boolean 
 }
 
 /**
- * The ASSERTED -> GRANTED boundary. Given a CAPABILITY_ISSUED event
- * (already assigned a `sequence`, as it would be once ingested — this
- * function does not itself ingest anything), decides whether its claims
- * are demonstrably true against the canonical store, and if so, returns
- * the one and only `ValidatedGrant` this codebase's production code is
- * capable of constructing.
+ * PR4B-2 — the command-oriented core: COMMAND -> DECISION, with no EVENT
+ * involved at any point. Given only `actionId` (the command's own input)
+ * and `snapshotSequence` (an Authority-computed instant — see the design
+ * report: this is never caller input), resolves INVOKED and, if and only
+ * if it is AUTHORIZED, returns the canonical GRANTED data a future
+ * CAPABILITY_ISSUED would be built from. Constructs no event, no
+ * `ValidatedGrant` — this function has no opinion about what happens
+ * after a successful selection; that is the orchestration layer's job
+ * (PR4B-2's command handler), not this pure function's.
  *
- * Every rejection reason below corresponds to a specific, deliberate
- * check — see the module docstring for the two structural policies
- * (INVOKED-only selection, decision_sequence freshness) that shape several
- * of them at once.
+ * Every rejection reason corresponds to a specific, deliberate check — see
+ * the module docstring for the two structural policies (INVOKED-only
+ * selection, decision_sequence freshness — freshness does not apply here
+ * in its original form, since there is no candidate-supplied
+ * decision_sequence to check freshness against; `snapshotSequence` is
+ * simply trusted, because by this function's contract it was already
+ * computed by Authority, not supplied by an untrusted candidate).
+ */
+export function selectInvokedGrant(store: CanonicalStore, actionId: ActionId, snapshotSequence: SequenceNumber): GrantSelectionResult {
+  const request = findActionRequested(actionId, store);
+  if (request === undefined) {
+    return { ok: false, reason: "ACTION_NOT_FOUND" };
+  }
+  if (request.sequence > snapshotSequence) {
+    // The request this selection claims to decide about did not exist yet
+    // at the claimed snapshot — a causal impossibility (I19's own root
+    // cause, applied here).
+    return { ok: false, reason: "ACTION_REQUESTED_NOT_VISIBLE_AT_DECISION" };
+  }
+
+  const visibleAtSnapshot = store.filter((event) => event.sequence <= snapshotSequence);
+  const invokedDelegation = findDelegationById(request.payload.delegation_id, visibleAtSnapshot);
+  if (invokedDelegation === undefined) {
+    return { ok: false, reason: "INVOKED_DELEGATION_NOT_FOUND" };
+  }
+  if (invokedDelegation.payload.grantee_principal_id !== request.payload.requesting_principal_id) {
+    // The invoked delegation_id is real, but it does not belong to the
+    // requester who invoked it — validateChain has no way to catch this on
+    // its own (see findCandidates, which pre-filters by grantee before
+    // validateChain is ever called on the normal authorityAt path; this
+    // function bypasses findCandidates on purpose — see the module
+    // docstring — so it must re-establish that same guarantee itself).
+    return { ok: false, reason: "INVOKED_DELEGATION_NOT_OWNED_BY_REQUESTER" };
+  }
+
+  const authorityTimeAtSnapshot = reconstructAuthorityTimeAt(store, snapshotSequence);
+  const validation = validateChain(invokedDelegation, request.payload.capability_requested, visibleAtSnapshot, undefined, authorityTimeAtSnapshot);
+
+  let decision: AuthorityDecision;
+  if (validation.kind === "valid") {
+    decision = evaluateConstraints(validation.chain, request.payload.capability_requested, request.payload.parameters, visibleAtSnapshot, request.payload.requesting_principal_id);
+  } else if (validation.kind === "denied") {
+    decision = { outcome: "DENIED", reasonCode: validation.reasonCode };
+  } else {
+    decision = { outcome: "UNKNOWN", reasonCode: validation.reasonCode };
+  }
+
+  if (decision.outcome !== "AUTHORIZED") {
+    return { ok: false, reason: "NOT_AUTHORIZED", decision };
+  }
+
+  const grantedChainRef: ChainLink[] = decision.chain.map((id): ChainLink => ({ kind: "delegation", delegation_id: id }));
+  if (decision.approvalId !== undefined) {
+    grantedChainRef.push({ kind: "approval", approval_id: decision.approvalId });
+  }
+
+  return {
+    ok: true,
+    grant: {
+      requestingPrincipalId: request.payload.requesting_principal_id,
+      actionFingerprint: computeActionFingerprint(request.payload.capability_requested, request.payload.parameters),
+      grantedChainRef,
+    },
+  };
+}
+
+/**
+ * The ASSERTED -> GRANTED boundary, EVENT-CANDIDATE-FIRST — kept as a thin
+ * adapter over `selectInvokedGrant` purely so PR4A's already-committed
+ * tests (tests/engine/grantValidation.test.ts) keep passing unmodified.
+ * New code should prefer `selectInvokedGrant` directly (see the design
+ * report: COMMAND -> DECISION -> EVENT, never EVENT CANDIDATE -> DECISION).
+ * Given a CAPABILITY_ISSUED event (already assigned a `sequence`, as it
+ * would be once ingested), decides whether ITS claims are demonstrably
+ * true, and if so, returns the one and only `ValidatedGrant` this
+ * codebase's production code is capable of constructing.
  */
 export function validateAndSelectGrant(store: CanonicalStore, candidate: CapabilityIssuedEvent): GrantValidationResult {
   const request = findActionRequested(candidate.payload.action_id, store);
   if (request === undefined) {
     return { ok: false, reason: "ACTION_NOT_FOUND" };
-  }
-  if (request.sequence > candidate.payload.decision_sequence) {
-    // The request this capability claims to decide about did not exist
-    // yet at the claimed decision point — a causal impossibility (I19's
-    // own root cause, applied here).
-    return { ok: false, reason: "ACTION_REQUESTED_NOT_VISIBLE_AT_DECISION" };
   }
 
   const canonicalFingerprint = computeActionFingerprint(request.payload.capability_requested, request.payload.parameters);
@@ -189,43 +289,12 @@ export function validateAndSelectGrant(store: CanonicalStore, candidate: Capabil
     return { ok: false, reason: "DECISION_SEQUENCE_NOT_IMMEDIATE" };
   }
 
-  const visibleAtDecision = store.filter((event) => event.sequence <= candidate.payload.decision_sequence);
-  const invokedDelegation = findDelegationById(request.payload.delegation_id, visibleAtDecision);
-  if (invokedDelegation === undefined) {
-    return { ok: false, reason: "INVOKED_DELEGATION_NOT_FOUND" };
-  }
-  if (invokedDelegation.payload.grantee_principal_id !== request.payload.requesting_principal_id) {
-    // The invoked delegation_id is real, but it does not belong to the
-    // requester who invoked it — validateChain has no way to catch this on
-    // its own (see findCandidates, which pre-filters by grantee before
-    // validateChain is ever called on the normal authorityAt path; this
-    // function bypasses findCandidates on purpose — see the module
-    // docstring — so it must re-establish that same guarantee itself).
-    return { ok: false, reason: "INVOKED_DELEGATION_NOT_OWNED_BY_REQUESTER" };
+  const selection = selectInvokedGrant(store, candidate.payload.action_id, candidate.payload.decision_sequence);
+  if (!selection.ok) {
+    return selection;
   }
 
-  const authorityTimeAtDecision = reconstructAuthorityTimeAt(store, candidate.payload.decision_sequence);
-  const validation = validateChain(invokedDelegation, request.payload.capability_requested, visibleAtDecision, undefined, authorityTimeAtDecision);
-
-  let decision: AuthorityDecision;
-  if (validation.kind === "valid") {
-    decision = evaluateConstraints(validation.chain, request.payload.capability_requested, request.payload.parameters, visibleAtDecision, request.payload.requesting_principal_id);
-  } else if (validation.kind === "denied") {
-    decision = { outcome: "DENIED", reasonCode: validation.reasonCode };
-  } else {
-    decision = { outcome: "UNKNOWN", reasonCode: validation.reasonCode };
-  }
-
-  if (decision.outcome !== "AUTHORIZED") {
-    return { ok: false, reason: "NOT_AUTHORIZED", decision };
-  }
-
-  const canonicalChain: ChainLink[] = decision.chain.map((id): ChainLink => ({ kind: "delegation", delegation_id: id }));
-  if (decision.approvalId !== undefined) {
-    canonicalChain.push({ kind: "approval", approval_id: decision.approvalId });
-  }
-
-  if (!chainsEqual(candidate.payload.granted_chain_ref, canonicalChain)) {
+  if (!chainsEqual(candidate.payload.granted_chain_ref, selection.grant.grantedChainRef)) {
     // The caller's asserted chain does not match what Authority's own
     // resolver actually produced for the invoked delegation. Rejected, not
     // silently replaced — see the module docstring: GRANTED is never a
