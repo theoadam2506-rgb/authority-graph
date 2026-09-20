@@ -47,6 +47,47 @@ export type RecipientId = Branded<string, "RecipientId">;
 export const recipientId = (value: string): RecipientId =>
   requireNonEmpty(value, "RecipientId") as RecipientId;
 
+/**
+ * Identifies an execution capability artifact — a future engine concept, not
+ * yet backed by any event type or resolution logic. Introduced now, ahead of
+ * that logic, purely so nothing downstream is tempted to represent it as a
+ * bare string or as a `DelegationId`: a capability is not a delegation and
+ * must never be interchangeable with one at the type level (I11's existing
+ * rule for opaque identifiers, applied here in advance of the concept it
+ * will eventually identify). Always assigned by Authority itself, never
+ * supplied by a caller — mirrors every other identifier in this module that
+ * the resolver, not the source, is the sole issuer of.
+ */
+export type CapabilityId = Branded<string, "CapabilityId">;
+export const capabilityId = (value: string): CapabilityId =>
+  requireNonEmpty(value, "CapabilityId") as CapabilityId;
+
+/**
+ * Identifies an enforcement point — the actor that would present/redeem a
+ * future execution capability — as a concept distinct from `PrincipalId`.
+ * An enforcement point (a gateway, an orchestrator, an MCP server) is not
+ * simply another kind of principal: conflating the two at the type level is
+ * exactly the confusion that let an unrelated actor's claimed identity stand
+ * in for an agent's own in earlier authority_chain_ref-based accounting.
+ * Not yet referenced by any event payload or resolution function.
+ */
+export type EnforcementPointId = Branded<string, "EnforcementPointId">;
+export const enforcementPointId = (value: string): EnforcementPointId =>
+  requireNonEmpty(value, "EnforcementPointId") as EnforcementPointId;
+
+/**
+ * A caller-supplied retry key, kept distinct from `CapabilityId` on purpose:
+ * the former is chosen by whoever calls a future issuance operation (so a
+ * retry after a lost response can find the same result instead of producing
+ * a second artifact); the latter is assigned by Authority alone. Merging
+ * the two would let a caller-controlled value stand in for an
+ * Authority-issued identity — the same category of mistake this module
+ * already refuses to allow between any two of its other branded IDs.
+ */
+export type ClientIdempotencyKey = Branded<string, "ClientIdempotencyKey">;
+export const clientIdempotencyKey = (value: string): ClientIdempotencyKey =>
+  requireNonEmpty(value, "ClientIdempotencyKey") as ClientIdempotencyKey;
+
 export type ReasonCode = Branded<string, "ReasonCode">;
 export const reasonCode = (value: string): ReasonCode => requireNonEmpty(value, "ReasonCode") as ReasonCode;
 
