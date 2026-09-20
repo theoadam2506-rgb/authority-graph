@@ -160,7 +160,7 @@ const PO_CREATE = capability("purchase_order", "create");
 
 async function main(): Promise<void> {
   // -------------------------------------------------------------------------
-  section("Délégation racine — User → Agent A");
+  section("Root delegation — User → Agent A");
   // -------------------------------------------------------------------------
   currentHour = 0;
   const rootDraft = rootDelegationDraft({
@@ -183,7 +183,7 @@ async function main(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  section("Sous-délégation valide — A → B, ≤ 2000");
+  section("Valid sub-delegation — A → B, ≤ 2000");
   // -------------------------------------------------------------------------
   currentHour = 1;
   const subDraft = subDelegationDraft({
@@ -199,7 +199,7 @@ async function main(): Promise<void> {
   expectAccepted((await store.append([subDraft])).outcomes[0], "Sub-delegation A -> B (<=2000, bounded within user -> A per I5)");
 
   // -------------------------------------------------------------------------
-  section("Laundering refusé — Mallory (jamais habilitée) tente une chaîne invalide");
+  section("Laundering rejected — Mallory (never granted anything) attempts an invalid chain");
   // -------------------------------------------------------------------------
   const beforeMallory = await store.getEvents();
   const malloryDraft = subDelegationDraft({
@@ -233,7 +233,7 @@ async function main(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  section("Action normale — B tente 1800 → AUTHORIZED");
+  section("Normal action — B attempts 1800 → AUTHORIZED");
   // -------------------------------------------------------------------------
   currentHour = 2;
   const paramsNormal = monetaryParameters(money(1800, "EUR"), VENDOR);
@@ -262,7 +262,7 @@ async function main(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  section("Escalade — 4800 dépasse B, passe par A via la délégation racine");
+  section("Escalation — 4800 exceeds B, goes through A via the root delegation");
   // -------------------------------------------------------------------------
   currentHour = 3;
   const paramsEsc = monetaryParameters(money(4800, "EUR"), VENDOR);
@@ -281,7 +281,7 @@ async function main(): Promise<void> {
   expectAccepted((await store.append([reqADraft])).outcomes[0], "A requests purchase_order.create for 4800 EUR");
 
   // -------------------------------------------------------------------------
-  section("Binding d'approbation — User approuve exactement l'action à 4800");
+  section("Approval binding — User approves exactly the 4800 action");
   // -------------------------------------------------------------------------
   currentHour = 4;
   const apprReqDraft = approvalRequestDraft({ id: "appr-4800", actionId: "a-a-4800", requestedFrom: USER, requester: AGENT_A, occurredAt: hour(4) });
@@ -318,7 +318,7 @@ async function main(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  section("Usage unique — exécution valide, puis seconde consommation → refus");
+  section("Single use — valid execution, then a second consumption attempt → denied");
   // -------------------------------------------------------------------------
   currentHour = 6;
   const fpEsc = computeActionFingerprint(PO_CREATE, paramsEsc);
@@ -374,7 +374,7 @@ async function main(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  section("Révocation — User révoque d-user-a ; les descendants qui en dépendent exclusivement tombent");
+  section("Revocation — User revokes d-user-a; descendants that depend on it exclusively fall too");
   // -------------------------------------------------------------------------
   currentHour = 8;
   const revokeDraft = revokeDelegationDraft({ targetId: "d-user-a", issuedBy: USER, reason: "POLICY_REVIEW", occurredAt: hour(8) });
@@ -391,7 +391,7 @@ async function main(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  section("Backdating — occurred_at antérieur injecté ; l'autorité n'est pas restaurée");
+  section("Backdating — an earlier occurred_at is injected; authority is not restored");
   // -------------------------------------------------------------------------
   currentHour = 9;
   const paramsBackdated = monetaryParameters(money(100, "EUR"), VENDOR);
@@ -423,7 +423,7 @@ async function main(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  section("explain historique — l'autorité d'hier, expliquée aujourd'hui");
+  section("Historical explain — yesterday's authority, explained today");
   // -------------------------------------------------------------------------
   const finalEvents = await store.getEvents();
   const farFuture = hour(50); // well past both the revocation (hour 8) and d-user-a's own expiry (hour 10)

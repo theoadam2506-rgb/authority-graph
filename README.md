@@ -74,18 +74,18 @@ $ npm run demo
 
 
 ==============================================================================
-1. Délégation racine — User → Agent A
+1. Root delegation — User → Agent A
 ==============================================================================
   ✓ Root delegation user -> A -> accepted at sequence 1
   ✓ A holds purchase_order.create directly from the user -> AUTHORIZED (chain: d-user-a)
 
 ==============================================================================
-2. Sous-délégation valide — A → B, ≤ 2000
+2. Valid sub-delegation — A → B, ≤ 2000
 ==============================================================================
   ✓ Sub-delegation A -> B (<=2000, bounded within user -> A per I5) -> accepted at sequence 2
 
 ==============================================================================
-3. Laundering refusé — Mallory (jamais habilitée) tente une chaîne invalide
+3. Laundering rejected — Mallory (never granted anything) attempts an invalid chain
 ==============================================================================
   ✓ Mallory's forged sub-delegation off user -> A -> rejected at ingestion (UNAUTHORIZED_SUBDELEGATION), no canonical sequence assigned
   ✓ Rejected draft appears in the security log (reasonCode: UNAUTHORIZED_SUBDELEGATION), event_id evt-subdelegation-3
@@ -93,21 +93,21 @@ $ npm run demo
   ✓ Mallory holds no authority whatsoever (her fabricated delegation never existed canonically) -> UNKNOWN (C24_NO_VALID_CHAIN)
 
 ==============================================================================
-4. Action normale — B tente 1800 → AUTHORIZED
+4. Normal action — B attempts 1800 → AUTHORIZED
 ==============================================================================
   ✓ B requests purchase_order.create for 1800 EUR -> accepted at sequence 3
   ✓ B executes the 1800 EUR action -> accepted at sequence 4
   ✓ B's 1800 EUR action is authorized, automatically, within its own band -> AUTHORIZED (chain: d-user-a -> d-a-b)
 
 ==============================================================================
-5. Escalade — 4800 dépasse B, passe par A via la délégation racine
+5. Escalation — 4800 exceeds B, goes through A via the root delegation
 ==============================================================================
   ✓ B cannot reach 4800 EUR — its own delegation caps it at 2000 -> DENIED (C8_AMOUNT_EXCEEDS_APPROVAL_CEILING)
   ✓ A can reach 4800 EUR via the root delegation, but it falls in the approval band (2500 < 4800 <= 5000) -> REQUIRES_APPROVAL (via d-user-a)
   ✓ A requests purchase_order.create for 4800 EUR -> accepted at sequence 5
 
 ==============================================================================
-6. Binding d'approbation — User approuve exactement l'action à 4800
+6. Approval binding — User approves exactly the 4800 action
 ==============================================================================
   ✓ A requests the user's approval for the 4800 EUR action -> accepted at sequence 6
   ✓ The user grants approval appr-4800 -> accepted at sequence 7
@@ -116,7 +116,7 @@ $ npm run demo
   ✓ Changing the recipient makes the same approval unusable -> REQUIRES_APPROVAL (via d-user-a)
 
 ==============================================================================
-7. Usage unique — exécution valide, puis seconde consommation → refus
+7. Single use — valid execution, then a second consumption attempt → denied
 ==============================================================================
   ✓ A executes the 4800 EUR action, consuming appr-4800 -> accepted at sequence 8
   ✓ a-a-4800's execution was authorized at its own decision sequence -> AUTHORIZED (chain: d-user-a, approval: appr-4800)
@@ -126,21 +126,21 @@ $ npm run demo
   ✓ But resolution denies it: the log recording it does not grant it authority -> DENIED (C7_APPROVAL_ALREADY_CONSUMED)
 
 ==============================================================================
-8. Révocation — User révoque d-user-a ; les descendants qui en dépendent exclusivement tombent
+8. Revocation — User revokes d-user-a; descendants that depend on it exclusively fall too
 ==============================================================================
   ✓ The user revokes d-user-a -> accepted at sequence 11
   ✓ A's own authority is gone immediately -> DENIED (C12_DELEGATION_REVOKED)
   ✓ B's authority — which only ever existed through d-user-a — falls too, even though d-a-b itself was never touched -> DENIED (C12_DELEGATION_REVOKED)
 
 ==============================================================================
-9. Backdating — occurred_at antérieur injecté ; l'autorité n'est pas restaurée
+9. Backdating — an earlier occurred_at is injected; authority is not restored
 ==============================================================================
   ✓ Ingestion accepts the structurally valid request regardless of its occurred_at claim (I4: occurred_at is never decisional) -> accepted at sequence 12
   ✓ The backdated occurred_at does not resurrect a revoked delegation — sequence and authority_time are unmoved -> DENIED (C12_DELEGATION_REVOKED)
   ✓ explain() flags LATE_OR_BACKDATED_EVENT_OBSERVED for this event (drift: 157885200000ms) — diagnostic only, and it changed no decision above
 
 ==============================================================================
-10. explain historique — l'autorité d'hier, expliquée aujourd'hui
+10. Historical explain — yesterday's authority, explained today
 ==============================================================================
   ✓ execution.authorityAtDecision is identical whether asked right after execution or 44 hours later
   ✓ ...while currentAuthority, asked today, reflects that this authority no longer exists -> DENIED (C11_CAPABILITY_NOT_COVERED)
