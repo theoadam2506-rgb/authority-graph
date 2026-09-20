@@ -40,7 +40,19 @@ import {
 } from "./grantValidation.js";
 import type { IssueCapabilityCommand } from "../domain/capabilityCommand.js";
 
-export type IssueCapabilityRejectionReason = "REQUESTER_MISMATCH" | GrantSelectionRejectionReason | "CAPACITY_EXCEEDED";
+/**
+ * `CAPABILITY_ID_COLLISION` is never returned by `issueCapability` itself —
+ * this pure function has no visibility into ingestion (it never touches an
+ * `EventSource`), so it cannot detect that a generated `capability_id`
+ * already exists canonically. It exists in this union only so the
+ * transactional layer (src/storage/capabilityIssuanceTransaction.ts, PR4B-3A)
+ * can construct an `IssueCapabilityResult` carrying it after ingestion
+ * itself rejects the draft — the exact same two-tier pattern
+ * `GrantRejectionReason` already uses over `GrantSelectionRejectionReason`
+ * (grantValidation.ts): a wider reason type for a value only a different
+ * layer ever actually produces.
+ */
+export type IssueCapabilityRejectionReason = "REQUESTER_MISMATCH" | GrantSelectionRejectionReason | "CAPACITY_EXCEEDED" | "CAPABILITY_ID_COLLISION";
 
 /**
  * Exactly the seven fields a future canonical CAPABILITY_ISSUED payload
@@ -59,9 +71,24 @@ export interface IssuedCapabilityData {
   readonly expires_at: Iso8601;
 }
 
+/**
+ * `CAPABILITY_ID_COLLISION` gets its own branch, carrying the specific
+ * `capability_id` that was proposed and refused — needed for audit (a
+ * caller/operator must be able to tell WHICH id a broken/forced generator
+ * collided on) without ever letting that id be mistaken for a canonical
+ * success: it is a DIFFERENT field (`capability_id`, not `capability`),
+ * on a branch whose own `ok` is `false`. `decision` is deliberately absent
+ * here too — this rejection has nothing to do with an authorization
+ * decision (see `AuthorityDecision`), so giving it one would be
+ * meaningless. This field is intentionally NOT added to the other
+ * rejection reasons: none of them have a refused business identifier to
+ * report, and adding an unused optional field to branches that never
+ * populate it would only invite confusion about what it means.
+ */
 export type IssueCapabilityResult =
   | { readonly ok: true; readonly capability: IssuedCapabilityData }
-  | { readonly ok: false; readonly reason: IssueCapabilityRejectionReason; readonly decision?: AuthorityDecision };
+  | { readonly ok: false; readonly reason: "CAPABILITY_ID_COLLISION"; readonly capability_id: CapabilityId }
+  | { readonly ok: false; readonly reason: Exclude<IssueCapabilityRejectionReason, "CAPABILITY_ID_COLLISION">; readonly decision?: AuthorityDecision };
 
 /**
  * Injected dependencies (mirrors the existing `IngestionClock` idiom in

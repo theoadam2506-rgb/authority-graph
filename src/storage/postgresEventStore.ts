@@ -31,10 +31,15 @@ import {
   type IngestRejectionCode,
   type SecurityLogEntry,
 } from "../domain/types.js";
-import { advanceTrustedTime, processDraft, rebuildIngestionState, type IngestionClock } from "../engine/ingest.js";
+import { advanceTrustedTime, processDraft, rebuildIngestionState, type IngestionClock, type IngestionState } from "../engine/ingest.js";
 import type { AppendResult, EventFilter, EventSource, SequenceRange } from "./eventStore.js";
 
-interface EventRow extends QueryResultRow {
+/**
+ * PR4B-3B: exported so `postgresCapabilityIssuanceTransaction.ts` reads
+ * the exact same row shape this module already reads — no second,
+ * independently-drifting definition of what a stored event row looks like.
+ */
+export interface EventRow extends QueryResultRow {
   readonly sequence: string; // BIGINT arrives as a string from node-postgres by default
   readonly event_id: string;
   readonly event_type: string;
@@ -61,8 +66,8 @@ function assertAssuranceLevel(value: string): AssuranceLevel {
   return value;
 }
 
-/** Reconstructs an `AuthorityEvent` from a stored row. A boundary cast at the end is unavoidable: nothing at the SQL layer can prove event_type/payload correlate, since that correlation was only ever a TypeScript-level guarantee at write time. */
-function rowToEvent(row: EventRow): AuthorityEvent {
+/** Reconstructs an `AuthorityEvent` from a stored row. A boundary cast at the end is unavoidable: nothing at the SQL layer can prove event_type/payload correlate, since that correlation was only ever a TypeScript-level guarantee at write time. Exported (PR4B-3B) for the same reuse reason as `EventRow`. */
+export function rowToEvent(row: EventRow): AuthorityEvent {
   return {
     event_id: eventId(row.event_id),
     schema_version: schemaVersion(row.schema_version),
@@ -77,7 +82,8 @@ function rowToEvent(row: EventRow): AuthorityEvent {
   } as AuthorityEvent;
 }
 
-async function insertEvent(client: PoolClient, event: AuthorityEvent): Promise<void> {
+/** Exported (PR4B-3B) so the capability-issuance transaction inserts a canonical event through this exact same statement — never a second, hand-written INSERT that could drift from this one. */
+export async function insertEvent(client: PoolClient, event: AuthorityEvent): Promise<void> {
   await client.query(
     `INSERT INTO authority_events
        (sequence, event_id, event_type, principal_id, schema_version, occurred_at, authority_time, recorded_at, assurance_level, payload)
@@ -117,6 +123,32 @@ function buildWhere(conditions: readonly { readonly clause: string; readonly val
 }
 
 /**
+ * PR4B-3B: the exact advisory-lock domain `append()` already used, factored
+ * out so `PostgresCapabilityIssuanceTransaction.issue()` acquires this SAME
+ * lock — not a second, independently-typed one that happens to look
+ * similar. Two callers taking this same `pg_advisory_xact_lock` key inside
+ * their own transactions is precisely what guarantees `append()` and
+ * `issue()` can never mutate `authority_events` concurrently — see that
+ * module's own docstring for the full argument.
+ */
+export async function lockAuthorityEventsTable(client: PoolClient): Promise<void> {
+  // A mutex over writers, not an authority decision (see module docstring).
+  await client.query("SELECT pg_advisory_xact_lock(hashtext('authority_events'))");
+}
+
+/**
+ * PR4B-3B: the exact "read everything, rebuild `IngestionState`" step
+ * `append()` already performed inline, factored out so
+ * `PostgresCapabilityIssuanceTransaction.issue()` reads the identical
+ * fresh snapshot — under the SAME lock (see `lockAuthorityEventsTable`) —
+ * rather than a second, hand-written re-implementation of this query.
+ */
+export async function readFreshIngestionState(client: PoolClient): Promise<IngestionState> {
+  const historyResult = await client.query<EventRow>("SELECT * FROM authority_events ORDER BY sequence ASC");
+  return rebuildIngestionState(historyResult.rows.map(rowToEvent));
+}
+
+/**
  * `EventSource` backed by Postgres. Exactly the three operations the
  * interface allows — see the module docstring for why `append()` looks the
  * way it does.
@@ -138,11 +170,9 @@ export class PostgresEventStore implements EventSource {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      // A mutex over writers, not an authority decision (see module docstring).
-      await client.query("SELECT pg_advisory_xact_lock(hashtext('authority_events'))");
+      await lockAuthorityEventsTable(client);
 
-      const historyResult = await client.query<EventRow>("SELECT * FROM authority_events ORDER BY sequence ASC");
-      let state = rebuildIngestionState(historyResult.rows.map(rowToEvent));
+      let state = await readFreshIngestionState(client);
 
       const outcomes: IngestOutcome[] = [];
       for (const [index, draft] of drafts.entries()) {

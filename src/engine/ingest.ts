@@ -65,8 +65,19 @@ function looksLikeEmail(value: string): boolean {
   return value.includes("@");
 }
 
-type BusinessId = { readonly kind: "delegation_id" | "action_id" | "approval_id"; readonly value: string };
+type BusinessId = { readonly kind: "delegation_id" | "action_id" | "approval_id" | "capability_id"; readonly value: string };
 
+/**
+ * PR4B-3A — `capability_id` joins this same, already-generic mechanism.
+ * This is NOT I8 (event_id dedup, above): it is the separate business-id
+ * collision check `processDraft` already runs for delegation_id/action_id/
+ * approval_id, extended with one more case. No existing case's behavior
+ * changes — delegation_id/action_id/approval_id collision detection is
+ * untouched, verified by the full historical suite staying green. A second
+ * CAPABILITY_ISSUED naming an already-accepted capability_id now fails
+ * closed with the same `BUSINESS_ID_COLLISION` reason code every other
+ * business-id kind already uses — no new reason code was needed.
+ */
 function businessIdOf(event: EventBody): BusinessId | undefined {
   if (event.event_type === "DELEGATION_CREATED" || event.event_type === "SUBDELEGATION_CREATED") {
     return { kind: "delegation_id", value: event.payload.delegation_id };
@@ -76,6 +87,9 @@ function businessIdOf(event: EventBody): BusinessId | undefined {
   }
   if (event.event_type === "APPROVAL_REQUESTED") {
     return { kind: "approval_id", value: event.payload.approval_id };
+  }
+  if (event.event_type === "CAPABILITY_ISSUED") {
+    return { kind: "capability_id", value: event.payload.capability_id };
   }
   return undefined;
 }

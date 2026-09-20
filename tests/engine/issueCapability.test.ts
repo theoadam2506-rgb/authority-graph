@@ -223,6 +223,9 @@ describe("issueCapability — E/F: INVOKED REQUIRES_APPROVAL is rejected, never 
       throw new Error("expected ok:false");
     }
     expect(result.reason).toBe("NOT_AUTHORIZED");
+    if (result.reason === "CAPABILITY_ID_COLLISION") {
+      throw new Error("expected NOT_AUTHORIZED, not CAPABILITY_ID_COLLISION");
+    }
     expect(result.decision?.outcome).toBe("REQUIRES_APPROVAL");
   });
 });
@@ -616,6 +619,9 @@ describe("issueCapability — C9-order-1: C9 (legacy, ACTION_EXECUTED-based) rej
       throw new Error("expected ok:false");
     }
     expect(result.reason).toBe("NOT_AUTHORIZED");
+    if (result.reason === "CAPABILITY_ID_COLLISION") {
+      throw new Error("expected NOT_AUTHORIZED, not CAPABILITY_ID_COLLISION");
+    }
     if (result.decision?.outcome !== "DENIED") {
       throw new Error("expected decision.outcome === DENIED");
     }

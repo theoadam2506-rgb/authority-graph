@@ -35,7 +35,18 @@ function scopeKey(scope: ScopedIdempotencyKey): string {
   return `${scope.authenticated_requester_id}\u0000${scope.operation}\u0000${scope.client_idempotency_key}`;
 }
 
-function commandsEqual(a: IssueCapabilityCommand, b: IssueCapabilityCommand): boolean {
+/**
+ * Exported (PR4B-3B): a Postgres-backed transaction persists this same
+ * comparison rule against a command round-tripped through JSONB, rather
+ * than an in-memory `IdempotencyRecord.command` — reusing this pure
+ * function directly is exactly the "small, clean, safe extraction" this
+ * codebase already prefers over any duplication (see
+ * `replaceExecutedIdempotencyResult`'s own docstring on `scopeKey`,
+ * PR4B-3A.5: unlike that key-representation export, this one exposes only
+ * a business-level comparison, not internal storage shape — nothing about
+ * this function's signature or behavior needed to change to be reused).
+ */
+export function commandsEqual(a: IssueCapabilityCommand, b: IssueCapabilityCommand): boolean {
   return a.action_id === b.action_id && a.enforcement_point_id === b.enforcement_point_id;
 }
 
@@ -98,4 +109,55 @@ export function issueCapabilityIdempotently(
   const nextState = new Map(state);
   nextState.set(key, { command, result });
   return { outcome: "EXECUTED", result, nextState };
+}
+
+/**
+ * PR4B-3A.1 — the one correction case `issueCapabilityIdempotently` itself
+ * cannot foresee: its own EXECUTED path just optimistically recorded an
+ * `ok:true` result under this exact scope, but a LATER admission step
+ * outside this module's knowledge (making the decision canonical — e.g.
+ * the transactional layer ingesting the resulting event) rejected it. The
+ * caller never needs, and must never reconstruct, this module's internal
+ * key representation or `IdempotencyRecord` shape to fix that; it calls
+ * this function instead — which owns both.
+ *
+ * Preconditions are CHECKED here, not trusted from the caller, and fail
+ * closed (throw) rather than being modeled as a `Result`: this function's
+ * only legitimate caller is the same logical turn that just produced the
+ * record it corrects (see capabilityIssuanceTransaction.ts). Calling it
+ * for a scope with no prior record, or with a `expectedCommand` that
+ * disagrees with what was actually recorded, is a programming error in
+ * that caller — not a business outcome — exactly the same category of
+ * fault the smart constructors in domain/types.ts already throw on.
+ *
+ * Reuses `commandsEqual`/`scopeKey` as they already exist — nothing here
+ * duplicates either rule.
+ */
+export function replaceExecutedIdempotencyResult(
+  state: IdempotencyState,
+  authenticatedPrincipal: AuthenticatedPrincipal,
+  clientIdempotencyKey: ClientIdempotencyKey,
+  expectedCommand: IssueCapabilityCommand,
+  correctedResult: IssueCapabilityResult,
+): IdempotencyState {
+  const scope: ScopedIdempotencyKey = {
+    authenticated_requester_id: authenticatedPrincipal.principalId,
+    operation: "ISSUE_CAPABILITY",
+    client_idempotency_key: clientIdempotencyKey,
+  };
+  const key = scopeKey(scope);
+  const existing = state.get(key);
+  if (existing === undefined) {
+    throw new Error(
+      "replaceExecutedIdempotencyResult: no existing record for this scope — this function only ever corrects a record issueCapabilityIdempotently already wrote in the same turn.",
+    );
+  }
+  if (!commandsEqual(existing.command, expectedCommand)) {
+    throw new Error(
+      "replaceExecutedIdempotencyResult: expectedCommand does not match the recorded command for this scope — refusing to overwrite a record belonging to a different command.",
+    );
+  }
+  const nextState = new Map(state);
+  nextState.set(key, { command: existing.command, result: correctedResult });
+  return nextState;
 }
