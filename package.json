@@ -11,7 +11,8 @@
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "authority": "tsx src/cli/authority.ts",
-    "demo": "tsx demo/run.ts"
+    "demo": "tsx demo/run.ts",
+    "quickstart": "tsx examples/quickstart.ts"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

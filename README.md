@@ -2,23 +2,91 @@
 
 An AI agent executes an action. Six months later, nobody can say exactly what
 human authority covered it at that moment, or why. This engine answers that
-question deterministically, from an append-only log of events — delegation,
-approval, execution nothing else.
+question deterministically, from an append-only log of events: delegation,
+approval, execution — nothing else.
 
-## What it does
+**In:** an append-only log of events (who delegated what to whom, under what
+limits, plus whatever approvals and executions actually happened) and a
+question (*could/did this agent do this?*, at a specific point in causal time
+and a specific trusted instant). **Out:** one of exactly four outcomes —
+`AUTHORIZED`, `DENIED`, `REQUIRES_APPROVAL`, `UNKNOWN` — each with a
+machine-checkable reason, never a bare yes/no.
+
+## 30-second example
+
+```ts
+import { authorityAt, ingestAll } from "./src/engine/authority.js";
+import {
+  capability, delegationId, eventId, monetaryParameters, money, noExpiry,
+  principalId, sequenceNumber, thresholds, CURRENT_SCHEMA_VERSION, iso8601,
+} from "./src/domain/types.js";
+
+const OWNER = principalId("human-owner");
+const AGENT_A = principalId("agent-a");
+const PURCHASE_ORDER_CREATE = capability("purchase_order", "create");
+const NOW = iso8601("2024-01-01T00:00:00.000Z"); // authority_time is always an explicit input, never Date.now()
+
+const { canonicalStore } = ingestAll(
+  [{
+    event_id: eventId("evt-delegation-1"), schema_version: CURRENT_SCHEMA_VERSION,
+    occurred_at: NOW, principal_id: OWNER, event_type: "DELEGATION_CREATED",
+    payload: {
+      delegation_id: delegationId("d-owner-agentA"), grantor_principal_id: OWNER,
+      grantor_type: "HUMAN_ROOT", grantee_principal_id: AGENT_A,
+      capabilities: [PURCHASE_ORDER_CREATE], can_delegate: false, expires_at: noExpiry,
+      thresholds: thresholds(2000, 2000), parent_delegation_id: null,
+    },
+  }],
+  { authorityTime: () => NOW },
+);
+
+const query = { agentId: AGENT_A, principalId: OWNER, capability: PURCHASE_ORDER_CREATE };
+const at = { atSequence: sequenceNumber(1), authorityTime: NOW };
+
+authorityAt(canonicalStore, { ...query, parameters: monetaryParameters(money(1800, "EUR")) }, at);
+// -> { outcome: "AUTHORIZED", chain: ["d-owner-agentA"] }
+
+authorityAt(canonicalStore, { ...query, parameters: monetaryParameters(money(4800, "EUR")) }, at);
+// -> { outcome: "DENIED", reasonCode: "C8_AMOUNT_EXCEEDS_APPROVAL_CEILING" }
+```
+
+Every function and type above is real, public production API — nothing here
+is a test-only shortcut. The full runnable version, including a historical
+`explainAction()` call, is [`examples/quickstart.ts`](./examples/quickstart.ts):
+
+```
+npm run quickstart
+```
+
+## Run it
+
+```
+git clone <this repository>
+npm install
+npm run demo        # the full scripted scenario below
+npm run quickstart   # the short story above, runnable and self-checking
+```
+
+This repository is not published to npm. `npm install` here installs this
+repo's own development dependencies from a local clone — it does not install
+a package named `authority-graph` from any registry (see
+[Status](#status) below). No database, no network, and no API key are needed
+for either command above.
+
+## What Authority answers
 
 The engine exposes exactly two operations, never a third path:
 
-- **`authorityAt(events, query, at)`**  prospective. *Would this be
+- **`authorityAt(events, query, at)`** — prospective. *Would this be
   authorized right now, given everything logged so far?* It never requires
-  the action to have already been requested it answers a question about
+  the action to have already been requested; it answers a question about
   the current state of authority, not about one specific past event.
 - **`explainAction(events, { actionId }, at)`** (and its formatted
   counterpart, `explain()`) — historical. *What happened to this specific
   action, and why?* It resolves authority both at the moment of any recorded
   execution and at the query's own instant. An action that was authorized
-  when it ran stays authorized at that point forever I3 (append-only)
-  forbids rewriting that conclusion even after the authority that backed
+  when it ran stays authorized at that point forever: I3 (append-only)
+  forbids rewriting that conclusion, even after the authority that backed
   it has since been revoked or expired.
 
 They stay separate on purpose. A question about the current state of
@@ -27,23 +95,7 @@ been requested, and a question about what actually happened to one action
 needs that action's own history (its approvals, its denials) — history a
 fresh, unrelated prospective query has no business consulting.
 
-## Quickstart
-
-```
-npm install
-npm run demo
-```
-
-One command, no database, no network, no API key. It plays a full scenario 
-delegation, sub-delegation, a rejected forgery attempt, an approval-gated
-escalation, single-use consumption, revocation, backdating, and a historical
-`authority explain` on a now-defunct authority — entirely in memory, and
-**asserts** the property each step claims to demonstrate. If any assumption
-stops holding, the script throws and exits non-zero; it is a narrative
-integration test, not a slideshow. Its actual output is reproduced byte for
-byte below.
-
-The CLI:
+## Using the CLI
 
 ```
 npm run authority -- explain <action_id> [--json] \
@@ -65,6 +117,15 @@ in `--json`. Reading a file is not re-running the ingestion-time checks
 against it, and the CLI does not pretend otherwise.
 
 ## Demo output
+
+One command, no database, no network, no API key. It plays a full scenario:
+delegation, sub-delegation, a rejected forgery attempt, an approval-gated
+escalation, single-use consumption, revocation, backdating, and a historical
+`authority explain` on a now-defunct authority — entirely in memory, and
+**asserts** the property each step claims to demonstrate. If any assumption
+stops holding, the script throws and exits non-zero; it is a narrative
+integration test, not a slideshow. Its actual output is reproduced byte for
+byte below.
 
 ```
 $ npm run demo
@@ -190,7 +251,7 @@ action was legitimate at sequence 8, back when it ran.
 
 - **No signatures, no verified identity.** V0 has no signature scheme.
   Every event, from every source, carries
-  `assurance_level: "ASSERTED_UNVERIFIED"` always. An "authorized"
+  `assurance_level: "ASSERTED_UNVERIFIED"`, always. An "authorized"
   decision means *the log contains events asserting a chain of grants, none
   of them contradicted*, not that any of those grants were cryptographically
   proven. The CLI and `explain()`'s output phrase every claim accordingly
@@ -200,7 +261,7 @@ action was legitimate at sequence 8, back when it ran.
   serializes cooperative writers and reconstructs ingestion state from
   canonical history on each append. This is intentionally not designed for
   high-throughput production workloads. No "works up to N events" claim is
-  made anywhere in this repo that number has never been benchmarked, and a
+  made anywhere in this repo: that number has never been benchmarked, and a
   guessed one would be worse than none.
 - **The `EventSource` API is append-only; the Postgres journal itself is
   not, against a privileged writer.** `pg_advisory_xact_lock` only protects
@@ -215,7 +276,7 @@ action was legitimate at sequence 8, back when it ran.
   place.
 - **Budget overspend from concurrent decisions (TOCTOU) is detected, not
   prevented.** Two individually `AUTHORIZED` decisions against the same
-  `total_budget`, made before either is executed, can combine to exceed it 
+  `total_budget`, made before either is executed, can combine to exceed it:
   V0 has no reservation primitive. Once both executions are ingested, the
   remaining budget at any later sequence honestly reflects the overspend
   (negative if necessary), and `explain()` reports it rather than hiding it.
@@ -224,13 +285,13 @@ action was legitimate at sequence 8, back when it ran.
 
 ## Further reading
 
-- [`SPEC.md`](./SPEC.md) the problem statement, the two operations, the
+- [`SPEC.md`](./SPEC.md) — the problem statement, the two operations, the
   four possible outcomes, and every numbered invariant (I1–I20) as a
   testable assertion, plus the exhaustive condition → outcome table.
-- [`THREAT_MODEL.md`](./THREAT_MODEL.md)  the attack table: for each
+- [`THREAT_MODEL.md`](./THREAT_MODEL.md) — the attack table: for each
   attack, which invariant is supposed to stop it, the defense mechanism, and
   the deterministic expected result.
-- [`EVENT_MODEL.md`](./EVENT_MODEL.md)  the wire-level event schema (all 8
+- [`EVENT_MODEL.md`](./EVENT_MODEL.md) — the wire-level event schema (all 8
   event types) and the canonical/security-log ingestion split.
 
 ## Independent audit
@@ -245,10 +306,20 @@ unmodified.
 
 Apache License 2.0 — see [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
 
+## Status
+
+V0. Not published to npm, and `package.json` is marked `private`: the
+supported way to use this project today is `git clone` plus the commands in
+[Run it](#run-it) above, not a package manager install. The in-memory engine
+and the Postgres backend are both covered by the test suite described below,
+including tests against a real Postgres instance; neither has been
+benchmarked or run at production scale.
+
 ## Development
 
 ```
-npm run typecheck   # tsc --noEmit
-npm test            # vitest run
-npm run demo        # the scenario above
+npm run typecheck    # tsc --noEmit
+npm test             # vitest run
+npm run demo         # the full scripted scenario
+npm run quickstart    # the short story from the top of this README
 ```
