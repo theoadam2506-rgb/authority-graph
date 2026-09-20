@@ -3,22 +3,22 @@
 An AI agent executes an action. Six months later, nobody can say exactly what
 human authority covered it at that moment, or why. This engine answers that
 question deterministically, from an append-only log of events — delegation,
-approval, execution — nothing else.
+approval, execution nothing else.
 
 ## What it does
 
 The engine exposes exactly two operations, never a third path:
 
-- **`authorityAt(events, query, at)`** — prospective. *Would this be
+- **`authorityAt(events, query, at)`**  prospective. *Would this be
   authorized right now, given everything logged so far?* It never requires
-  the action to have already been requested — it answers a question about
+  the action to have already been requested it answers a question about
   the current state of authority, not about one specific past event.
 - **`explainAction(events, { actionId }, at)`** (and its formatted
   counterpart, `explain()`) — historical. *What happened to this specific
   action, and why?* It resolves authority both at the moment of any recorded
   execution and at the query's own instant. An action that was authorized
-  when it ran stays authorized at that point forever — I3 (append-only)
-  forbids rewriting that conclusion — even after the authority that backed
+  when it ran stays authorized at that point forever I3 (append-only)
+  forbids rewriting that conclusion even after the authority that backed
   it has since been revoked or expired.
 
 They stay separate on purpose. A question about the current state of
@@ -34,7 +34,7 @@ npm install
 npm run demo
 ```
 
-One command, no database, no network, no API key. It plays a full scenario —
+One command, no database, no network, no API key. It plays a full scenario 
 delegation, sub-delegation, a rejected forgery attempt, an approval-gated
 escalation, single-use consumption, revocation, backdating, and a historical
 `authority explain` on a now-defunct authority — entirely in memory, and
@@ -74,18 +74,18 @@ $ npm run demo
 
 
 ==============================================================================
-1. Root delegation — User → Agent A
+1. Root delegation - User → Agent A
 ==============================================================================
   ✓ Root delegation user -> A -> accepted at sequence 1
   ✓ A holds purchase_order.create directly from the user -> AUTHORIZED (chain: d-user-a)
 
 ==============================================================================
-2. Valid sub-delegation — A → B, ≤ 2000
+2. Valid sub-delegation - A → B, ≤ 2000
 ==============================================================================
   ✓ Sub-delegation A -> B (<=2000, bounded within user -> A per I5) -> accepted at sequence 2
 
 ==============================================================================
-3. Laundering rejected — Mallory (never granted anything) attempts an invalid chain
+3. Laundering rejected - Mallory (never granted anything) attempts an invalid chain
 ==============================================================================
   ✓ Mallory's forged sub-delegation off user -> A -> rejected at ingestion (UNAUTHORIZED_SUBDELEGATION), no canonical sequence assigned
   ✓ Rejected draft appears in the security log (reasonCode: UNAUTHORIZED_SUBDELEGATION), event_id evt-subdelegation-3
@@ -93,7 +93,7 @@ $ npm run demo
   ✓ Mallory holds no authority whatsoever (her fabricated delegation never existed canonically) -> UNKNOWN (C24_NO_VALID_CHAIN)
 
 ==============================================================================
-4. Normal action — B attempts 1800 → AUTHORIZED
+4. Normal action - B attempts 1800 → AUTHORIZED
 ==============================================================================
   ✓ B requests purchase_order.create for 1800 EUR -> accepted at sequence 3
   ✓ B executes the 1800 EUR action -> accepted at sequence 4
@@ -102,7 +102,7 @@ $ npm run demo
 ==============================================================================
 5. Escalation — 4800 exceeds B, goes through A via the root delegation
 ==============================================================================
-  ✓ B cannot reach 4800 EUR — its own delegation caps it at 2000 -> DENIED (C8_AMOUNT_EXCEEDS_APPROVAL_CEILING)
+  ✓ B cannot reach 4800 EUR its own delegation caps it at 2000 -> DENIED (C8_AMOUNT_EXCEEDS_APPROVAL_CEILING)
   ✓ A can reach 4800 EUR via the root delegation, but it falls in the approval band (2500 < 4800 <= 5000) -> REQUIRES_APPROVAL (via d-user-a)
   ✓ A requests purchase_order.create for 4800 EUR -> accepted at sequence 5
 
@@ -144,7 +144,7 @@ $ npm run demo
 ==============================================================================
   ✓ execution.authorityAtDecision is identical whether asked right after execution or 44 hours later
   ✓ ...while currentAuthority, asked today, reflects that this authority no longer exists -> DENIED (C11_CAPABILITY_NOT_COVERED)
-  (the chain is both revoked — sequence 11 — and, independently, expired past 2025-01-01T10:00:00.000Z: either fact alone would deny it today)
+  (the chain is both revoked — sequence 11 and, independently, expired past 2025-01-01T10:00:00.000Z: either fact alone would deny it today)
 
   --- authority explain a-a-4800 (real CLI output) ---
 
@@ -170,7 +170,7 @@ $ npm run demo
   Clock drift diagnostics:
     LATE_OR_BACKDATED_EVENT_OBSERVED: ACTION_REQUESTED (evt-action-request-13) — |authority_time - occurred_at| = 157885200000ms (authority_time: 2025-01-01T09:00:00.000Z, occurred_at: 2020-01-01T00:00:00.000Z)
 
-  assurance_level: ASSERTED_UNVERIFIED — no cryptographic signature or verified identity backs any event in this log (I17); every claim above is "the log contains an event asserting", never a proof.
+  assurance_level: ASSERTED_UNVERIFIED  no cryptographic signature or verified identity backs any event in this log (I17); every claim above is "the log contains an event asserting", never a proof.
 
   ✓ CLI confirms: authorized at its own decision sequence -> AUTHORIZED (chain: d-user-a, approval: appr-4800)
   ✓ CLI confirms: not authorized today -> DENIED (C11_CAPABILITY_NOT_COVERED)
@@ -190,7 +190,7 @@ action was legitimate at sequence 8, back when it ran.
 
 - **No signatures, no verified identity.** V0 has no signature scheme.
   Every event, from every source, carries
-  `assurance_level: "ASSERTED_UNVERIFIED"` — always. An "authorized"
+  `assurance_level: "ASSERTED_UNVERIFIED"` always. An "authorized"
   decision means *the log contains events asserting a chain of grants, none
   of them contradicted*, not that any of those grants were cryptographically
   proven. The CLI and `explain()`'s output phrase every claim accordingly
@@ -200,7 +200,7 @@ action was legitimate at sequence 8, back when it ran.
   serializes cooperative writers and reconstructs ingestion state from
   canonical history on each append. This is intentionally not designed for
   high-throughput production workloads. No "works up to N events" claim is
-  made anywhere in this repo — that number has never been benchmarked, and a
+  made anywhere in this repo that number has never been benchmarked, and a
   guessed one would be worse than none.
 - **The `EventSource` API is append-only; the Postgres journal itself is
   not, against a privileged writer.** `pg_advisory_xact_lock` only protects
@@ -215,7 +215,7 @@ action was legitimate at sequence 8, back when it ran.
   place.
 - **Budget overspend from concurrent decisions (TOCTOU) is detected, not
   prevented.** Two individually `AUTHORIZED` decisions against the same
-  `total_budget`, made before either is executed, can combine to exceed it —
+  `total_budget`, made before either is executed, can combine to exceed it 
   V0 has no reservation primitive. Once both executions are ingested, the
   remaining budget at any later sequence honestly reflects the overspend
   (negative if necessary), and `explain()` reports it rather than hiding it.
@@ -224,13 +224,13 @@ action was legitimate at sequence 8, back when it ran.
 
 ## Further reading
 
-- [`SPEC.md`](./SPEC.md) — the problem statement, the two operations, the
+- [`SPEC.md`](./SPEC.md) the problem statement, the two operations, the
   four possible outcomes, and every numbered invariant (I1–I20) as a
   testable assertion, plus the exhaustive condition → outcome table.
-- [`THREAT_MODEL.md`](./THREAT_MODEL.md) — the attack table: for each
+- [`THREAT_MODEL.md`](./THREAT_MODEL.md)  the attack table: for each
   attack, which invariant is supposed to stop it, the defense mechanism, and
   the deterministic expected result.
-- [`EVENT_MODEL.md`](./EVENT_MODEL.md) — the wire-level event schema (all 8
+- [`EVENT_MODEL.md`](./EVENT_MODEL.md)  the wire-level event schema (all 8
   event types) and the canonical/security-log ingestion split.
 
 ## Independent audit
