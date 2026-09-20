@@ -225,7 +225,20 @@ export function isEventType<T extends AuthorityEventType>(
   return event.event_type === type;
 }
 
-export function toDraft(event: AuthorityEvent): DraftAuthorityEvent {
+/**
+ * Generic over its input's own narrowed `event_type` (PR4B-2 ergonomics
+ * fix): calling `toDraft` on an already-narrowed `AuthorityEvent` (e.g. via
+ * `isEventType`) now returns the correspondingly narrowed
+ * `DraftAuthorityEvent` member, instead of unconditionally widening back to
+ * the full union. Calling it on an unnarrowed `AuthorityEvent` still
+ * returns the full `DraftAuthorityEvent` union exactly as before —
+ * `E["event_type"]` is `AuthorityEventType` in that case, so
+ * `Extract<DraftAuthorityEvent, {event_type: AuthorityEventType}>` is
+ * `DraftAuthorityEvent` itself. Purely a typing precision improvement, not
+ * a runtime behavior change (the function body is unchanged) and not a
+ * security property of any kind.
+ */
+export function toDraft<E extends AuthorityEvent>(event: E): Extract<DraftAuthorityEvent, { readonly event_type: E["event_type"] }> {
   return {
     event_id: event.event_id,
     schema_version: event.schema_version,
@@ -233,7 +246,7 @@ export function toDraft(event: AuthorityEvent): DraftAuthorityEvent {
     principal_id: event.principal_id,
     event_type: event.event_type,
     payload: event.payload,
-  } as DraftAuthorityEvent;
+  } as Extract<DraftAuthorityEvent, { readonly event_type: E["event_type"] }>;
 }
 
 // ---------------------------------------------------------------------------
