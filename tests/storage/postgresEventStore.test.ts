@@ -110,33 +110,27 @@ describe.skipIf(!databaseAvailable)("PostgresEventStore — real Postgres, seque
   });
 
   /**
-   * PR4B-3B DISCOVERY — this is NOT the InMemory backend's own behavior
-   * (tests/storage/eventStore.test.ts's equivalent test asserts the
-   * opposite, correct outcome and remains green). `processDraft`'s I8
-   * dedup (ingest.ts's `hashDraft`) compares `JSON.stringify(draft)`
-   * against the stored draft it reconstructs via `rebuildIngestionState`.
-   * For `InMemoryEventStore` that reconstructed draft is the exact same
-   * JS object shape the original had, so key order — and therefore the
-   * stringified output — is preserved. For `PostgresEventStore`, the
-   * reconstructed draft's payload comes back from a JSONB column, and
-   * Postgres does NOT preserve the original key order when it stores and
-   * re-emits JSONB (verified directly: a payload inserted with
-   * `delegation_id` first comes back with `expires_at` first). The two
-   * JSON.stringify outputs then differ byte-for-byte despite carrying
-   * identical data, so `hashDraft` sees them as different, and a genuine
-   * byte-identical retry of the SAME draft is rejected as
-   * `EVENT_ID_CONFLICT` instead of being treated as an idempotent no-op.
-   *
-   * This is a real, pre-existing gap in `PostgresEventStore`+`hashDraft`'s
-   * dedup mechanism, invisible until this round's first-ever real-Postgres
-   * test of this class — completely unrelated to PR4B-3B's actual scope
-   * (capability issuance) and NOT fixed here: doing so would mean changing
-   * `ingest.ts`'s hashing semantics, which is out of this round's mandate
-   * and affects all 8 legacy event types, not just CAPABILITY_ISSUED. This
-   * test asserts the CURRENT, real (not aspirational) behavior, and exists
-   * so this gap is documented and tracked rather than silently unnoticed.
+   * PR4B-4 — FIXED (originally reported as a PR4B-3B discovery, then a red
+   * spec test in the PR4B-4 audit round; now green). `processDraft`'s I8
+   * dedup (ingest.ts's `hashDraft`) now canonicalizes an object's keys
+   * (recursively sorted) before `JSON.stringify`, before comparing against
+   * the stored draft `rebuildIngestionState` reconstructs. For
+   * `InMemoryEventStore` the reconstructed draft was always the exact same
+   * JS object shape the original had, so this backend's own equivalent
+   * test (tests/storage/eventStore.test.ts) was already green before this
+   * fix. For `PostgresEventStore`, the reconstructed draft's payload comes
+   * back from a JSONB column, and Postgres does NOT preserve the original
+   * key order when it stores and re-emits JSONB (verified directly: a
+   * payload inserted with `delegation_id` first comes back with
+   * `expires_at` first) — sorting both sides' keys before comparing
+   * closes exactly this gap, without touching array order, `null`-vs-
+   * absent, or primitive types (see tests/engine/hashDraftCanonicalization.test.ts
+   * for the dedicated regression locks proving those stay exactly as
+   * strict as before). SPEC.md's own wording for I8 ("contenu strictement
+   * identique") was always about content equivalence, never serialization-
+   * byte equivalence — this fix makes the code match that definition.
    */
-  it("[KNOWN GAP, out of PR4B-3B's scope] a byte-identical re-append of the same event_id is currently NOT treated as idempotent — JSONB does not preserve payload key order, breaking hashDraft's JSON.stringify comparison for this backend only", async () => {
+  it("[PR4B-4] a client retrying with its own original draft is treated as idempotent against what Postgres actually stored, never EVENT_ID_CONFLICT", async () => {
     const store = new PostgresEventStore(pool, sequentialClock);
     const draft = toDraft(
       rootDelegation({ sequence: 1, id: "d-idempotent-pg", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT_A, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false }),
@@ -145,8 +139,20 @@ describe.skipIf(!databaseAvailable)("PostgresEventStore — real Postgres, seque
     const first = await store.append([draft]);
     expect(first.outcomes).toEqual([{ accepted: true, sequence: seq(1) }]);
 
+    // NOTE on scenario precision (found while writing this test): resubmitting
+    // a draft rebuilt from `store.getEvents()` does NOT reproduce this bug —
+    // two independent JSONB reads of the SAME stored row come back with the
+    // SAME (reordered, but internally consistent) key order every time, so
+    // they hash equal to each other regardless of the original insertion
+    // order. The real gap is between the STORED representation (already
+    // reordered by JSONB) and a CLIENT'S OWN, freshly-built retry — e.g. an
+    // HTTP client resubmitting the same logical request body it always
+    // builds the same way, or exactly `draft` here, unchanged. That
+    // resubmission is compared, at ingestion, against `readFreshIngestionState`'s
+    // JSONB-derived reconstruction of the already-stored event — and it is
+    // THAT comparison that currently mismatches.
     const second = await store.append([draft]);
-    expect(second.outcomes).toEqual([{ accepted: false, reasonCode: "EVENT_ID_CONFLICT" }]);
+    expect(second.outcomes).toEqual([{ accepted: true, sequence: seq(1) }]);
 
     const all = await store.getEvents();
     expect(all).toHaveLength(1);

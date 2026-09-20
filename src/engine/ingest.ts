@@ -57,8 +57,77 @@ export interface IngestionClock {
   readonly authorityTime: (draft: DraftAuthorityEvent, index: number) => Iso8601;
 }
 
+/**
+ * PR4B-4 — canonicalizes a value for `hashDraft` by sorting every object's
+ * own keys (recursively), and nothing else. I8 (SPEC.md: "deux événements
+ * portant le même event_id et un contenu strictement identique") talks
+ * about CONTENT equivalence, not byte-serialization equivalence — plain
+ * `JSON.stringify` conflated the two, because it serializes an object's
+ * keys in JS insertion order, which Postgres's JSONB storage does not
+ * preserve on round-trip (verified directly against a real instance: a
+ * payload inserted with `delegation_id` first comes back with
+ * `expires_at` first). Two logically identical drafts could then hash
+ * differently for a reason that has nothing to do with I8's own content
+ * equivalence — this function closes exactly that gap, and nothing wider:
+ *
+ *   - OBJECTS: keys sorted by name, values canonicalized recursively.
+ *   - ARRAYS: length and element ORDER preserved exactly — an array's
+ *     order is business data in this domain (e.g. `authority_chain_ref`'s
+ *     root-to-terminal order), never serialization noise. Only each
+ *     element is canonicalized, never the array's own shape.
+ *   - PRIMITIVES (string/number/boolean/`null`): passed through
+ *     completely unchanged — no coercion, no normalization. `1` and `"1"`,
+ *     `true` and `"true"`, stay distinct. A timestamp string is a string;
+ *     it is never parsed, reformatted, or compared as a time value here.
+ *   - `null` vs an ABSENT key: never merged. `canonicalize` only ever
+ *     iterates keys a `Object.keys` call actually returns; an absent key
+ *     was never a key to sort, and an explicit `null` value passes
+ *     through unchanged — the two remain exactly as distinguishable as
+ *     they already were under plain `JSON.stringify`.
+ *   - `undefined`: deliberately NOT special-cased. `JSON.stringify`
+ *     already drops an object property whose value is `undefined`, and
+ *     already serializes an `undefined` array element as `null` — this
+ *     function does not change either behavior. An object property whose
+ *     value is `undefined` is still present among `Object.keys`, so it is
+ *     still sorted into position by this function, but `JSON.stringify`
+ *     on the canonicalized result drops it exactly as it would have
+ *     dropped it from the original — the sort step touches key ORDER
+ *     only, never which keys survive serialization.
+ *
+ * No dependency on Postgres, or on anything outside this pure function's
+ * own argument: this belongs to the pure ingestion engine, exactly like
+ * every other function in this file.
+ */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalize);
+  }
+  if (value !== null && typeof value === "object") {
+    const canonicalObject: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      canonicalObject[key] = canonicalize((value as Record<string, unknown>)[key]);
+    }
+    return canonicalObject;
+  }
+  return value;
+}
+
+/**
+ * `payload_hash` (security_log, EVENT_MODEL.md: "le hash du ou des
+ * payloads en cause") is a diagnostic value attached to a REJECTED
+ * ingestion attempt for audit/display purposes only — never read back and
+ * compared against a stored value anywhere in this codebase (grep
+ * confirms `getSecurityLog()`'s only consumers display it; nothing
+ * recomputes a past `hashDraft` call and checks it against a persisted
+ * `payload_hash`). It is not a stable, versioned identifier this or any
+ * future PR promises to keep bit-for-bit reproducible across an algorithm
+ * change — canonicalizing key order here changes this hash's output for
+ * any draft whose keys were not already sorted, and no historical
+ * `payload_hash` already written to a `security_log` table is migrated or
+ * recomputed by this change.
+ */
 function hashDraft(draft: DraftAuthorityEvent): string {
-  return createHash("sha256").update(JSON.stringify(draft), "utf8").digest("hex");
+  return createHash("sha256").update(JSON.stringify(canonicalize(draft)), "utf8").digest("hex");
 }
 
 function looksLikeEmail(value: string): boolean {
