@@ -17,7 +17,7 @@ machine-checkable reason, never a bare yes/no.
 ```ts
 import { authorityAt, ingestAll } from "./src/engine/authority.js";
 import {
-  capability, delegationId, eventId, monetaryParameters, money, noExpiry,
+  actionId, capability, delegationId, eventId, monetaryParameters, money, noExpiry,
   principalId, sequenceNumber, thresholds, CURRENT_SCHEMA_VERSION, iso8601,
 } from "./src/domain/types.js";
 
@@ -35,6 +35,17 @@ const { canonicalStore } = ingestAll(
       grantor_type: "HUMAN_ROOT", grantee_principal_id: AGENT_A,
       capabilities: [PURCHASE_ORDER_CREATE], can_delegate: false, expires_at: noExpiry,
       thresholds: thresholds(2000, 2000), parent_delegation_id: null,
+    },
+  }, {
+    // Used later by the capability-issuance example below — harmless here:
+    // authorityAt() never reads ACTION_REQUESTED, so it doesn't change the
+    // two outcomes shown right after this block.
+    event_id: eventId("evt-action-request-1"), schema_version: CURRENT_SCHEMA_VERSION,
+    occurred_at: NOW, principal_id: AGENT_A, event_type: "ACTION_REQUESTED",
+    payload: {
+      action_id: actionId("act-1"), requesting_principal_id: AGENT_A,
+      delegation_id: delegationId("d-owner-agentA"), capability_requested: PURCHASE_ORDER_CREATE,
+      parameters: monetaryParameters(money(1800, "EUR")),
     },
   }],
   { authorityTime: () => NOW },
@@ -94,6 +105,127 @@ authority must never be structurally dependent on some past action having
 been requested, and a question about what actually happened to one action
 needs that action's own history (its approvals, its denials) — history a
 fresh, unrelated prospective query has no business consulting.
+
+## Capability issuance
+
+Alongside the two read-side operations above, the engine also exposes a
+separate **write-side capability**: capability issuance. This does not add a
+third way to *ask* about authority — `authorityAt`/`explainAction` remain
+the only two query operations. Capability issuance is a distinct kind of
+call that, on success, *writes* a new `CAPABILITY_ISSUED` event recording a
+decision already made — but two layers are involved, and only one of them
+ever touches storage:
+
+- **`issueCapability`** — the pure **capability decision kernel**. It
+  resolves the same INVOKED delegation chain and the same capacity
+  accounting a prospective question would, and returns an
+  `IssueCapabilityResult` — nothing more. Calling it directly persists
+  **nothing**: no event is written, no store is touched, and it does not
+  even take an idempotency key as a parameter.
+- **Transactional capability issuance** — `CapabilityIssuanceTransaction`
+  (in-memory) or `PostgresCapabilityIssuanceTransaction` (PostgreSQL, see
+  [PostgreSQL deployment](#postgresql-deployment) below) — is what actually
+  calls the kernel, decides whether the result becomes canonical, and, on
+  success, writes `CAPABILITY_ISSUED` under an idempotency key so that a
+  retry never produces a second one. This transactional boundary is the
+  only supported way to make a capability-issuance decision durable.
+
+The example below continues the [30-second example](#30-second-example)
+above, reusing its `AGENT_A` and `canonicalStore` — including the
+`ACTION_REQUESTED` (`act-1`, 1800 EUR) that example's own store now carries
+for exactly this purpose. It calls `issueCapability` directly to show the
+decision kernel's own shape — this call by itself persists nothing; see
+[PostgreSQL deployment](#postgresql-deployment) below for the transactional
+call that actually writes the event.
+
+```ts
+import { issueCapability, type IssueCapabilityDependencies } from "./src/engine/issueCapability.js";
+import type { AuthenticatedPrincipal } from "./src/domain/authenticatedPrincipal.js";
+import { actionId, capabilityId, enforcementPointId, iso8601 } from "./src/domain/types.js";
+import type { IssueCapabilityCommand } from "./src/domain/capabilityCommand.js";
+
+// AuthenticatedPrincipal is a caller-supplied ASSERTION, not something this
+// call verifies: authentication (JWT/mTLS/API key — whatever the deployment
+// uses) is assumed to have already happened at the deployment boundary,
+// before this identity is constructed. AGENT_A is the same principal
+// declared in the 30-second example above.
+const authenticatedPrincipal: AuthenticatedPrincipal = { principalId: AGENT_A };
+
+const command: IssueCapabilityCommand = {
+  action_id: actionId("act-1"),
+  enforcement_point_id: enforcementPointId("ep-gateway-1"),
+};
+
+// expiresAt is injected by the caller, not a constant of the engine itself
+// — 5 minutes here is only this example's own deployment policy.
+const dependencies: IssueCapabilityDependencies = {
+  nextCapabilityId: () => capabilityId("cap-1"),
+  expiresAt: (authorityTime) => iso8601(new Date(Date.parse(authorityTime) + 5 * 60_000).toISOString()),
+};
+
+// authorityTime is explicit and caller-supplied — never Date.now(), never
+// reconstructed from the log's own last event.
+const authorityTime = iso8601("2025-01-01T00:20:00.000Z");
+
+// canonicalStore is the same store produced by ingestAll(...) in the
+// 30-second example above.
+const result = issueCapability(canonicalStore, authenticatedPrincipal, command, dependencies, authorityTime);
+// -> { ok: true, capability: { capability_id: "cap-1", action_id: "act-1",
+//      expires_at: "2025-01-01T00:25:00.000Z", ... } } — this is the actual
+//    result of running this exact call; it is still only a DECISION, not a
+//    written event: nothing has been persisted by this call alone (see
+//    below). A mismatched requester, an over-capacity or expired
+//    delegation, or a stale `authorityTime` would instead return
+//    `{ ok: false, reason: ... }` — see `SPEC.md` I21–I24 for the exact
+//    reasons.
+```
+
+To actually record this decision as a canonical `CAPABILITY_ISSUED` event,
+call `issue(...)` on `InMemoryCapabilityIssuanceTransaction` or
+`PostgresCapabilityIssuanceTransaction` instead of calling `issueCapability`
+directly — see [PostgreSQL deployment](#postgresql-deployment) below.
+
+Idempotence goes through `issueCapabilityIdempotently`, keyed on
+`(authenticated requester, operation, a caller-supplied `ClientIdempotencyKey`)`:
+the first call under a given key fixes the outcome — including a refusal —
+permanently for that key. A retry under the same key later `REPLAYS` the
+exact original result, without re-evaluating anything (a new `authorityTime`
+on the retry changes nothing); a different command under the same key is
+`IDEMPOTENCY_CONFLICT`, never silently resolved one way or the other. A
+caller wanting a genuinely new decision must use a new key. A retry never
+produces a second `CAPABILITY_ISSUED` event, and a refused attempt — for any
+reason, including a stale `authorityTime` — never produces one at all;
+see [`SPEC.md`](./SPEC.md) for the exact invariants and
+[`EVENT_MODEL.md`](./EVENT_MODEL.md) for the event's field-by-field
+definition.
+
+`enforcement_point_id` is REQUESTED by the caller, not verified: no
+enforcement-point habilitation registry exists yet, so this value is copied
+through as-is on success and never checked against anything.
+
+### PostgreSQL deployment
+
+Getting the full transactional guarantee — exactly one canonical
+`CAPABILITY_ISSUED` per idempotency key, the event and its idempotency
+record always becoming visible together — requires going through
+`PostgresCapabilityIssuanceTransaction`, not calling the pure
+`issueCapability` function directly against your own storage. It runs one
+real ACID transaction per call (`BEGIN`/`COMMIT`/`ROLLBACK` on one
+connection) and acquires the *same* Postgres advisory lock that
+`PostgresEventStore.append()` already uses for ordinary event ingestion —
+the two writers are serialized against each other by construction, never
+by convention.
+
+This is **not** a claim that the underlying Postgres journal is
+cryptographically append-only: the advisory lock is a cooperative mutex
+between writers that go through this API, not a database-level permission
+barrier (see [What it doesn't do](#what-it-doesnt-do) above — the same
+caveat that already applies to `PostgresEventStore`).
+
+The in-memory equivalent, `InMemoryCapabilityIssuanceTransaction`, gives the
+same *observable* sequencing guarantees but only within one process and one
+instance — it is a promise-chain mutex, not a crash-atomic transaction; see
+`SPEC.md` for exactly which guarantees are, and are not, backend-independent.
 
 ## Using the CLI
 
@@ -291,8 +423,9 @@ action was legitimate at sequence 8, back when it ran.
 - [`THREAT_MODEL.md`](./THREAT_MODEL.md) — the attack table: for each
   attack, which invariant is supposed to stop it, the defense mechanism, and
   the deterministic expected result.
-- [`EVENT_MODEL.md`](./EVENT_MODEL.md) — the wire-level event schema (all 8
-  event types) and the canonical/security-log ingestion split.
+- [`EVENT_MODEL.md`](./EVENT_MODEL.md) — the wire-level event schema (all 9
+  event types, including `CAPABILITY_ISSUED`) and the canonical/security-log
+  ingestion split.
 
 ## Independent audit
 

@@ -9,7 +9,7 @@ l'ingestion (rejet, pas de valeur par défaut — cf. I1).
 | Champ | Type | Attribué par | Description |
 |---|---|---|---|
 | `event_id` | identifiant opaque (UUID) | la source | Clé d'idempotence (I8). |
-| `event_type` | enum | la source | Un des 8 types listés ci-dessous. |
+| `event_type` | enum | la source | Un des 9 types listés ci-dessous. |
 | `occurred_at` | timestamp ISO 8601 | la source | Déclaratif, non fiable, jamais décisionnel (I4). Conservé pour l'audit ; signalé s'il dérive trop de `authority_time`. |
 | `recorded_at` | timestamp ISO 8601 | Authority, à l'ingestion | Horloge d'infrastructure au moment où le store a vu l'événement. Diagnostic opérationnel uniquement, jamais décisionnel. |
 | `authority_time` | timestamp ISO 8601 | Authority, à l'ingestion | Horloge décisionnelle, garantie monotone non décroissante par rapport à `sequence`. Seule horloge utilisée pour évaluer `expires_at` (I4). |
@@ -105,7 +105,7 @@ seule chaîne, puis hashés en SHA-256, encodés en hexadécimal minuscule. Le r
 est `action_fingerprint`. Cette fonction est pure et déterministe (I2) : mêmes
 entrées ⇒ même empreinte, toujours.
 
-## Les 8 types d'événements
+## Les 9 types d'événements
 
 ### 1. `DELEGATION_CREATED`
 
@@ -244,3 +244,59 @@ même `approval_id` ; toute autre est `DENIED`.
 Un `ACTION_EXECUTED` sans décision `AUTHORIZED` démontrable à `decision_sequence`,
 ou dont l'`action_fingerprint` ne correspond pas, est une violation détectée par le
 resolver, pas un cas silencieusement accepté par le schéma.
+
+### 9. `CAPABILITY_ISSUED`
+
+Produit uniquement par la commande d'émission de capacité
+(`issueCapability`/`issueCapabilityIdempotently`, PR3 à PR4B-5A — voir
+`SPEC.md`, I21–I24), jamais par la voie d'ingestion `authorityAt`/
+`explainAction` décrite plus haut. Contrairement aux huit types
+précédents, cet événement n'est jamais fourni par une source externe : il
+est auto-produit par Authority elle-même, au moment où la commande décide
+d'accepter l'émission.
+
+| Champ payload | Type | Description |
+|---|---|---|
+| `capability_id` | identifiant opaque | Identifiant métier protégé de la capacité émise ; une collision (générateur forcé ou défectueux) est rejetée fail-closed (I24), jamais silencieusement acceptée. |
+| `action_id` | identifiant opaque | L'`ACTION_REQUESTED` dont la commande découle. |
+| `action_fingerprint` | chaîne hexadécimale | Empreinte canonique (I15) de l'action résolue, calculée de façon identique aux autres types. |
+| `decision_sequence` | entier | La `snapshotSequence` au moment de la décision — un ordre causal, jamais dérivé du temps (I21). |
+| `granted_chain_ref` | liste ordonnée de maillons | La chaîne GRANTED canonique résolue pour la délégation invoquée. |
+| `enforcement_point_id` | identifiant opaque | Le point d'application demandé par la commande — copié tel quel si l'émission réussit, jamais vérifié contre un registre d'habilitation (aucun tel registre n'existe en V0). |
+| `expires_at` | timestamp | Fournie par une politique injectée (dépendance de la commande), ancrée sur le même `authorityTime` explicite que la décision — jamais un instant reconstruit ou lu en direct. |
+
+Champs d'enveloppe, particularités pour ce type :
+
+- **`occurred_at`** : égal à `authorityTime`, l'instant explicite auquel la
+  décision a été prise et la capacité construite (I21). Cette égalité ne
+  représente **jamais** l'instant où l'écriture a été physiquement rendue
+  durable — voir `recorded_at`, ci-dessous, pour cette notion distincte.
+- **`recorded_at`** : lue séparément depuis l'horloge d'infrastructure au
+  moment où le store voit effectivement passer l'événement, exactement
+  comme pour tout autre type. Aucune relation d'ordre absolue entre
+  `recorded_at` et `occurred_at` n'est garantie pour `CAPABILITY_ISSUED` :
+  ce sont deux horloges de nature différente, jamais comparées entre elles
+  par le moteur.
+- **`authority_time`** : égal à `authorityTime`, l'instant de confiance
+  explicite fourni à la commande — jamais reconstruit du store.
+- **`principal_id`** : champ d'enveloppe obligatoire (comme pour tout
+  événement), ici renseigné avec l'identité du demandeur authentifié
+  (`AuthenticatedPrincipal`). Il ne doit **pas** être lu comme désignant un
+  auteur humain ou un agent ayant personnellement réalisé l'acte d'émission
+  : aucun participant du graphe de délégation ne « accorde » cet événement
+  au sens où un `grantor_principal_id`/`approving_principal_id` le fait
+  ailleurs. C'est un champ conservé pour la cohérence structurelle de
+  l'enveloppe commune, pas une attribution d'autorité ni une preuve
+  d'identité.
+
+Un `CAPABILITY_ISSUED` n'est produit **que** sur une décision acceptée.
+Toute commande refusée — y compris pour `STALE_AUTHORITY_TIME` (I22) —
+n'écrit jamais cet événement, quel que soit le nombre de tentatives sous
+la même clé d'idempotence ; voir `SPEC.md`, I22 et I24, pour le détail
+normatif. `STALE_AUTHORITY_TIME` n'est pas un type d'événement : c'est un
+résultat de refus de la commande elle-même, jamais une donnée journalisée
+au sens de ce document.
+
+Un rejeu idempotent (`REPLAYED`, sous la même clé) ne crée jamais un second
+`CAPABILITY_ISSUED` : le résultat retourné est celui de l'exécution
+d'origine, sans nouvel événement ni nouvelle évaluation.

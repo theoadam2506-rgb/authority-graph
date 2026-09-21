@@ -700,6 +700,112 @@ et ne doivent être ni affaiblis ni reformulés au fil de l'implémentation.
     réduire le `total_budget` de ce tiers : une requête légitime de ce tiers,
     dans sa propre bande, reste `AUTHORIZED`.
 
+Les quatre invariants suivants (I21–I24) portent sur une surface distincte :
+la **capability issuance** (`issueCapability`/`issueCapabilityIdempotently`,
+PR3 à PR4B-5A), une commande explicite — COMMAND -> DÉCISION -> DONNÉES
+D'ÉVÉNEMENT — plutôt qu'une question posée sur l'état courant. Elle
+n'introduit pas une troisième opération de lecture : `authorityAt` et
+`explainAction` restent les deux seules opérations qui répondent à une
+question ; `issueCapability` est un chemin d'écriture séparé, qui réutilise
+la même résolution de délégation invoquée et le même modèle de capacité,
+mais qui, en cas de succès, écrit un événement `CAPABILITY_ISSUED` fixant
+cette décision de façon permanente.
+
+21. **I21 — L'instant d'évaluation d'une commande d'émission est explicite,
+    jamais reconstruit.** `issueCapability` reçoit `authorityTime` comme
+    paramètre séparé et obligatoire — jamais un champ d'`IssueCapabilityCommand`,
+    jamais une valeur dérivée du dernier `authority_time` visible dans le
+    store. Reconstruire cet instant depuis le journal était un défaut réel :
+    le temps peut passer sans qu'aucun nouvel événement soit journalisé, et
+    cette reconstruction laissait paraître valide indéfiniment une
+    délégation expirée depuis longtemps, faute d'événement postérieur pour
+    le révéler. `authorityTime` (l'instant de confiance explicite) et
+    `snapshotSequence` (la causalité : quels événements sont visibles)
+    restent deux axes indépendants, jamais confondus — sur le même modèle
+    que le couple `{atSequence, authorityTime}` d'`authorityAt`.
+    Sur une émission acceptée : `decision_sequence = snapshotSequence` (
+    jamais dérivé du temps) ; `authority_time = authorityTime` ; et,
+    l'événement `CAPABILITY_ISSUED` étant auto-produit par Authority elle-même
+    (la source de cet événement est le code de la transaction, pas un
+    système externe), `occurred_at = authorityTime` également — cette valeur
+    représente l'instant logique où Authority a pris la décision et construit
+    la capability, jamais l'instant où l'écriture a été physiquement rendue
+    durable. `recorded_at` reste l'horloge d'infrastructure, lue séparément,
+    au moment où le store voit effectivement passer l'événement ; aucune
+    relation d'ordre absolue entre `recorded_at` et `occurred_at` n'est
+    garantie — ce sont deux horloges de nature différente, jamais comparées
+    entre elles par le moteur.
+
+22. **I22 — Une commande d'émission refuse un instant explicite antérieur à
+    la borne de confiance que la transaction doit préserver.** Ce n'est
+    **pas** un verdict d'autorité : l'agent peut détenir une autorité
+    parfaitement valide à cet instant précis. C'est une précondition de
+    cohérence temporelle de la commande elle-même, distincte du diagnostic
+    `LATE_OR_BACKDATED_EVENT_OBSERVED` (I4) qui ne bloque jamais aucune
+    décision — celle-ci bloque, déterministiquement, chaque fois qu'elle
+    s'applique. La règle publique :
+    - une émission est refusée avec `STALE_AUTHORITY_TIME` lorsque
+      `authorityTime` est antérieur à la borne temporelle de confiance que
+      la transaction d'émission (InMemory ou PostgreSQL) doit préserver pour
+      ce store ;
+    - **au minimum**, cette borne ne peut jamais être inférieure au maximum
+      des `authority_time` déjà canoniquement visibles dans le store — mais
+      ce plancher n'est pas une définition exhaustive : la transaction reste
+      libre de préserver une borne de confiance plus stricte que ce seul
+      maximum canonique (une transaction ne doit jamais accepter une valeur
+      qu'elle sait, par un moyen quelconque à sa disposition, être déjà
+      dépassée) ;
+    - une valeur égale à la borne applicable est acceptée, jamais refusée ;
+    - un store sans aucun événement canonique n'a pas de maximum, donc rien
+      n'y est jamais `STALE_AUTHORITY_TIME` ;
+    - aucune émission acceptée ne peut résulter d'un clamp silencieux de
+      `authorityTime` : soit la valeur explicite fournie est utilisée
+      telle quelle pour `authority_time`/`occurred_at`/l'évaluation
+      d'expiration, soit l'émission est refusée — jamais une troisième
+      voie qui substituerait silencieusement une autre valeur ;
+    - aucun `CAPABILITY_ISSUED` n'est jamais écrit pour une commande refusée
+      `STALE_AUTHORITY_TIME`, exactement comme pour tout autre refus (I24).
+    Les deux backends (InMemory et PostgreSQL) appliquent cette garantie à
+    leur propre frontière transactionnelle ; voir `THREAT_MODEL.md` pour la
+    défense correspondante.
+
+23. **I23 — Portée et permanence de l'idempotence d'une commande d'émission.**
+    La clé d'idempotence est le triplet `(authenticated_requester_id,
+    operation, client_idempotency_key)` — jamais la clé brute fournie par
+    l'appelant seule, puisque deux appelants authentifiés différents
+    pourraient sinon présenter la même clé brute et entrer en collision.
+    La première exécution sous une clé donnée fixe le résultat de façon
+    permanente pour cette clé, **y compris un refus** (`STALE_AUTHORITY_TIME`
+    ou tout autre) : ce résultat est celui que toute relecture ultérieure
+    sous la même clé doit reproduire à l'identique. Une nouvelle tentative
+    sous la même clé, à un `authorityTime` différent, ne réévalue jamais rien
+    : elle rejoue le résultat original — `authorityTime` n'entre ni dans la
+    comparaison des commandes, ni dans la clé de portée elle-même,
+    précisément pour qu'un `authorityTime` différent seul ne puisse jamais
+    transformer une relecture légitime en conflit. Un appelant qui veut
+    réellement une nouvelle décision doit utiliser une nouvelle clé. Une
+    même clé réutilisée avec une commande différente (`action_id` et/ou
+    `enforcement_point_id` différents) est un `IDEMPOTENCY_CONFLICT` : ni
+    l'ancien ni le nouveau résultat n'est retourné comme s'il convenait,
+    l'appelant doit résoudre le conflit lui-même.
+
+24. **I24 — Une émission de capacité n'est visible qu'entière, jamais
+    partielle.** Un succès (`CAPABILITY_ISSUED` canonique) et son
+    enregistrement d'idempotence associé deviennent visibles ensemble, ou
+    aucun des deux ; un refus, quelle qu'en soit la raison, n'écrit jamais
+    de `CAPABILITY_ISSUED`. `capability_id` est un identifiant métier
+    protégé : une collision (générateur forcé ou défectueux) est rejetée de
+    façon fail-closed, et aucun enregistrement de succès n'est jamais
+    conservé pour une émission ainsi rejetée. Cette garantie de visibilité
+    conjointe est qualifiée différemment selon le backend : PostgreSQL
+    l'obtient par une vraie transaction ACID (`BEGIN`/`COMMIT`/`ROLLBACK`) ;
+    l'implémentation InMemory l'obtient par sérialisation stricte des appels
+    sur une seule instance (un mutex à file de promesses), sans garantie de
+    crash-atomicité au-delà de ce que le modèle en mémoire implique déjà —
+    les deux backends ne doivent jamais être présentés comme offrant la même
+    force de garantie au repos, seulement la même séquence observable de
+    résultats en l'absence de panne.
+
 ## Règles d'application complémentaires
 
 Ces règles ne sont pas des invariants numérotés supplémentaires : elles précisent
