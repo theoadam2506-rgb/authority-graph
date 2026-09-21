@@ -35,12 +35,12 @@
  */
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 import type { AuthorityEvent } from "../domain/events.js";
-import type { CapabilityId, ClientIdempotencyKey, EventId, SequenceNumber } from "../domain/types.js";
+import type { CapabilityId, ClientIdempotencyKey, EventId, Iso8601, SequenceNumber } from "../domain/types.js";
 import type { AuthenticatedPrincipal } from "../domain/authenticatedPrincipal.js";
 import type { IssueCapabilityCommand } from "../domain/capabilityCommand.js";
 import { issueCapability, type IssueCapabilityDependencies, type IssueCapabilityResult } from "../engine/issueCapability.js";
 import { commandsEqual } from "../engine/issueCapabilityIdempotency.js";
-import { advanceTrustedTime, processDraft, type IngestionClock } from "../engine/ingest.js";
+import { advanceTrustedTime, processDraft } from "../engine/ingest.js";
 import { buildCapabilityIssuedDraft, type CapabilityIssuanceOutcome, type CapabilityIssuanceTransaction } from "./capabilityIssuanceTransaction.js";
 import { insertEvent, lockAuthorityEventsTable, readFreshIngestionState } from "./postgresEventStore.js";
 
@@ -115,12 +115,21 @@ async function insertIdempotencyRow(
  */
 export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuanceTransaction {
   private readonly pool: Pool;
-  private readonly clock: IngestionClock;
   private readonly readInfrastructureClock: () => string;
 
-  constructor(pool: Pool, clock: IngestionClock, readInfrastructureClock: () => string = () => new Date().toISOString()) {
+  /**
+   * PR4B-5 — no `IngestionClock` constructor parameter anymore: this class
+   * used to consult one, ONLY to stamp the eventual CAPABILITY_ISSUED
+   * event's authority_time, and only AFTER the decision (`issueCapability`)
+   * had already been made against a stale, reconstructed instant — see the
+   * design report. Now the decision and the event both use the same
+   * explicit `authorityTime` this class's `issue()` receives; an
+   * `IngestionClock` would have nothing left to do here. `IngestionClock`'s
+   * role elsewhere (batch ingestion via `PostgresEventStore.append()`) is
+   * unchanged.
+   */
+  constructor(pool: Pool, readInfrastructureClock: () => string = () => new Date().toISOString()) {
     this.pool = pool;
-    this.clock = clock;
     this.readInfrastructureClock = readInfrastructureClock;
   }
 
@@ -129,6 +138,7 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
     clientIdempotencyKey: ClientIdempotencyKey,
     command: IssueCapabilityCommand,
     dependencies: IssueCapabilityDependencies,
+    authorityTime: Iso8601,
   ): Promise<CapabilityIssuanceOutcome> {
     const client = await this.pool.connect();
     try {
@@ -165,8 +175,10 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
       const snapshot = state.canonicalStore;
 
       // C. the pure decision — issueCapability never touches Postgres,
-      // never authenticates, never reads a live clock.
-      const decision = issueCapability(snapshot, authenticatedPrincipal, command, dependencies);
+      // never authenticates, never reads a live clock. `authorityTime` is
+      // this call's own explicit, caller-supplied instant (PR4B-5) — never
+      // reconstructed from `snapshot`.
+      const decision = issueCapability(snapshot, authenticatedPrincipal, command, dependencies, authorityTime);
 
       if (!decision.ok) {
         // A normal business rejection (REQUESTER_MISMATCH, NOT_AUTHORIZED,
@@ -184,8 +196,13 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
       // mirrors append()'s own per-batch-of-one usage: this transaction
       // only ever ingests a single draft, so there is no "previous draft
       // in this batch" to clamp against.
-      const draft = buildCapabilityIssuedDraft(authenticatedPrincipal, snapshot, decision.capability);
-      const advanced = advanceTrustedTime(undefined, this.clock.authorityTime(draft, 0));
+      const draft = buildCapabilityIssuedDraft(authenticatedPrincipal, authorityTime, decision.capability);
+      // PR4B-5 — `authorityTime` directly, never a clock: the same explicit
+      // instant already used for the decision above becomes this event's
+      // trusted authority_time. `advanceTrustedTime(undefined, ...)` still
+      // mirrors append()'s own per-batch-of-one usage (see the comment this
+      // replaces) — no "previous draft in this batch" to clamp against.
+      const advanced = advanceTrustedTime(undefined, authorityTime);
       const recordedAtIso = this.readInfrastructureClock();
       const admission = processDraft(state, draft, advanced.iso, recordedAtIso);
 

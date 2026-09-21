@@ -32,7 +32,6 @@ import { remainingCapacity, type ValidatedGrant } from "./capacity.js";
 import {
   findActionRequested,
   findDelegationById,
-  reconstructAuthorityTimeAt,
   selectInvokedGrant,
   validateAndSelectGrant,
   type GrantSelectionRejectionReason,
@@ -51,8 +50,24 @@ import type { IssueCapabilityCommand } from "../domain/capabilityCommand.js";
  * `GrantRejectionReason` already uses over `GrantSelectionRejectionReason`
  * (grantValidation.ts): a wider reason type for a value only a different
  * layer ever actually produces.
+ *
+ * PR4B-5A — `STALE_AUTHORITY_TIME` is, unlike `CAPABILITY_ID_COLLISION`,
+ * returned directly by `issueCapability` itself (see the check near the
+ * top of the function body): the explicit `authorityTime` this decision
+ * was asked to use is strictly older than an `authority_time` already
+ * canonically visible in `store`. This is never an authority verdict —
+ * the agent may hold perfectly valid authority at that instant — so it
+ * must never be reported as `NOT_AUTHORIZED`/`CAPACITY_EXCEEDED`, and it
+ * is not a diagnostic signal like `LATE_OR_BACKDATED_EVENT_OBSERVED`
+ * (THREAT_MODEL.md A1, about `occurred_at` drift, never decisional): this
+ * one DOES block the decision, deterministically and every time.
  */
-export type IssueCapabilityRejectionReason = "REQUESTER_MISMATCH" | GrantSelectionRejectionReason | "CAPACITY_EXCEEDED" | "CAPABILITY_ID_COLLISION";
+export type IssueCapabilityRejectionReason =
+  | "REQUESTER_MISMATCH"
+  | "STALE_AUTHORITY_TIME"
+  | GrantSelectionRejectionReason
+  | "CAPACITY_EXCEEDED"
+  | "CAPABILITY_ID_COLLISION";
 
 /**
  * Exactly the seven fields a future canonical CAPABILITY_ISSUED payload
@@ -101,8 +116,15 @@ export type IssueCapabilityResult =
  */
 export interface IssueCapabilityDependencies {
   readonly nextCapabilityId: () => CapabilityId;
-  /** `snapshotAuthorityTime` is the reconstructed trusted instant at `snapshotSequence` — never a live clock read. */
-  readonly expiresAt: (snapshotAuthorityTime: Iso8601) => Iso8601;
+  /**
+   * PR4B-5 — `authorityTime` here is exactly the caller-supplied explicit
+   * instant `issueCapability` itself receives (see that function's own
+   * `authorityTime` parameter) — never a value reconstructed from the
+   * store, never a live clock read. Before PR4B-5 this received a
+   * `snapshotAuthorityTime` reconstructed from the log's own last event,
+   * which was the root cause this PR fixes (see PR4B-5's design report).
+   */
+  readonly expiresAt: (authorityTime: Iso8601) => Iso8601;
 }
 
 function computeSnapshotSequence(store: CanonicalStore): SequenceNumber {
@@ -113,6 +135,31 @@ function computeSnapshotSequence(store: CanonicalStore): SequenceNumber {
     }
   }
   return sequenceNumber(max);
+}
+
+/**
+ * PR4B-5A — the maximum `authority_time` already canonically visible in
+ * `store`, in epoch milliseconds. Returns `undefined` for an empty store
+ * (there is then no maximum to be older than — a snapshot with no events
+ * can never be "stale"). Deliberately parses only `event.authority_time`
+ * (an envelope field Authority itself assigned at ingestion, never
+ * source-supplied) — never `occurred_at`, never `recorded_at`, never
+ * `Date.now()`. This mirrors `reconstructAuthorityTimeAt`
+ * (grantValidation.ts) exactly in HOW it scans the store, but is used for
+ * a different purpose: that function reconstructs a single, legitimately
+ * historical instant; this one is a pure structural fact about the
+ * snapshot, checked against a caller-supplied `authorityTime`, never
+ * substituted for it.
+ */
+function computeMaxVisibleAuthorityTimeMs(store: CanonicalStore): number | undefined {
+  let max: number | undefined;
+  for (const event of store) {
+    const ms = Date.parse(event.authority_time);
+    if (max === undefined || ms > max) {
+      max = ms;
+    }
+  }
+  return max;
 }
 
 /**
@@ -162,12 +209,26 @@ function collectValidatedGrants(store: CanonicalStore): readonly ValidatedGrant[
  * verified" different types at this specific boundary, so a future adapter
  * cannot pass one where the other was intended without at least writing an
  * explicit, greppable cast to do so.
+ *
+ * PR4B-5 — `authorityTime` is the caller-supplied trusted instant this
+ * decision is evaluated at, on the exact same model as
+ * `authorityAt(store, query, at: AuthorityInstant)`'s own `authorityTime`
+ * (authorityAt.ts): never derived from the store, never a live clock read.
+ * `snapshotSequence` (computed below) and `authorityTime` are two
+ * deliberately independent dimensions — the former says which events are
+ * VISIBLE (causality), the latter says WHEN this decision is evaluated
+ * from a trust perspective (wall-clock-equivalent). Before PR4B-5, this
+ * function had no such parameter and instead reconstructed an instant from
+ * the store's own last event via `reconstructAuthorityTimeAt` — which is
+ * exactly the "time can pass with no new event" bug PR4B-5 fixes (see its
+ * design report and tests/engine/issueCapabilityProspectiveTime.test.ts).
  */
 export function issueCapability(
   store: CanonicalStore,
   authenticatedPrincipal: AuthenticatedPrincipal,
   command: IssueCapabilityCommand,
   dependencies: IssueCapabilityDependencies,
+  authorityTime: Iso8601,
 ): IssueCapabilityResult {
   const authenticatedRequesterId = authenticatedPrincipal.principalId;
 
@@ -187,11 +248,30 @@ export function issueCapability(
     return { ok: false, reason: "REQUESTER_MISMATCH" };
   }
 
+  // PR4B-5A — the explicit authorityTime this decision is asked to use
+  // must never be older than an authority_time already canonically
+  // visible in `store`. Checked here, deliberately AFTER the requester
+  // check above (authentication-shaped checks keep their existing
+  // priority — REQUESTER_MISMATCH still wins over a stale instant for
+  // the same call) and BEFORE any authority resolution, capacity
+  // accounting, or `dependencies.expiresAt`/`nextCapabilityId` call
+  // below: a stale instant must never cause any of those to run. The
+  // bound is inclusive on the valid side (`authorityTime === max visible`
+  // is coherent) — only strictly older is refused. An empty store has no
+  // maximum, so nothing can be stale against it.
+  const maxVisibleAuthorityTimeMs = computeMaxVisibleAuthorityTimeMs(store);
+  if (maxVisibleAuthorityTimeMs !== undefined && Date.parse(authorityTime) < maxVisibleAuthorityTimeMs) {
+    return { ok: false, reason: "STALE_AUTHORITY_TIME" };
+  }
+
   // 3. snapshotSequence = the last canonical sequence visible right now.
   const snapshotSequence = computeSnapshotSequence(store);
 
-  // 4-5. resolve INVOKED only, produce the canonical GRANTED chain.
-  const selection = selectInvokedGrant(store, command.action_id, snapshotSequence);
+  // 4-5. resolve INVOKED only, produce the canonical GRANTED chain. The
+  // same explicit authorityTime this whole decision is evaluated at —
+  // never reconstructed from the store — is what validateChain uses for
+  // the expiration check (see selectInvokedGrant/grantValidation.ts).
+  const selection = selectInvokedGrant(store, command.action_id, snapshotSequence, authorityTime);
   if (!selection.ok) {
     return selection;
   }
@@ -222,10 +302,10 @@ export function issueCapability(
     }
   }
 
-  // 9. expires_at from an injected POLICY, anchored to the reconstructed
-  // snapshot instant — never the caller, never a live clock.
-  const snapshotAuthorityTime = reconstructAuthorityTimeAt(store, snapshotSequence);
-  const expiresAt = dependencies.expiresAt(snapshotAuthorityTime);
+  // 9. expires_at from an injected POLICY, anchored to the SAME explicit
+  // authorityTime this decision was evaluated at (PR4B-5) — never a
+  // reconstructed snapshot instant, never a live clock.
+  const expiresAt = dependencies.expiresAt(authorityTime);
 
   // 10. capability_id from an injected, deterministic generator.
   const capabilityId = dependencies.nextCapabilityId();

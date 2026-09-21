@@ -198,8 +198,27 @@ function chainsEqual(a: readonly ChainLink[], b: readonly ChainLink[]): boolean 
  * decision_sequence to check freshness against; `snapshotSequence` is
  * simply trusted, because by this function's contract it was already
  * computed by Authority, not supplied by an untrusted candidate).
+ *
+ * PR4B-5 — `authorityTime` is the caller-supplied trusted instant this
+ * selection is evaluated at, passed straight through to `validateChain`.
+ * It is a dimension deliberately independent from `snapshotSequence`:
+ * the latter fixes WHICH events are visible (causality), the former fixes
+ * WHEN, from a trust perspective, expiration/temporal constraints are
+ * checked. This function no longer reconstructs an instant from the store
+ * itself for this purpose — `reconstructAuthorityTimeAt` (below) remains
+ * exported and legitimate for genuinely historical reconstruction (e.g.
+ * `validateAndSelectGrant`'s re-check of an already-issued grant, anchored
+ * to that grant's own recorded `authority_time`), but using it here, for a
+ * PROSPECTIVE decision, was exactly the bug PR4B-5 fixes: time can pass
+ * with no new event, and a delegation that expired hours ago must not look
+ * valid forever for want of a subsequent event.
  */
-export function selectInvokedGrant(store: CanonicalStore, actionId: ActionId, snapshotSequence: SequenceNumber): GrantSelectionResult {
+export function selectInvokedGrant(
+  store: CanonicalStore,
+  actionId: ActionId,
+  snapshotSequence: SequenceNumber,
+  authorityTime: Iso8601,
+): GrantSelectionResult {
   const request = findActionRequested(actionId, store);
   if (request === undefined) {
     return { ok: false, reason: "ACTION_NOT_FOUND" };
@@ -226,8 +245,7 @@ export function selectInvokedGrant(store: CanonicalStore, actionId: ActionId, sn
     return { ok: false, reason: "INVOKED_DELEGATION_NOT_OWNED_BY_REQUESTER" };
   }
 
-  const authorityTimeAtSnapshot = reconstructAuthorityTimeAt(store, snapshotSequence);
-  const validation = validateChain(invokedDelegation, request.payload.capability_requested, visibleAtSnapshot, undefined, authorityTimeAtSnapshot);
+  const validation = validateChain(invokedDelegation, request.payload.capability_requested, visibleAtSnapshot, undefined, authorityTime);
 
   let decision: AuthorityDecision;
   if (validation.kind === "valid") {
@@ -289,7 +307,16 @@ export function validateAndSelectGrant(store: CanonicalStore, candidate: Capabil
     return { ok: false, reason: "DECISION_SEQUENCE_NOT_IMMEDIATE" };
   }
 
-  const selection = selectInvokedGrant(store, candidate.payload.action_id, candidate.payload.decision_sequence);
+  // PR4B-5 — `candidate.authority_time` is the ENVELOPE field, assigned by
+  // Authority itself at ingestion (never source-supplied, unlike
+  // `decision_sequence` above) — since the fix, it honestly carries the
+  // real explicit authorityTime this candidate's original decision was
+  // evaluated at. Re-checking it now against that same recorded instant is
+  // the correct historical reconstruction: this call is re-validating an
+  // ALREADY-DECIDED past grant, not making a new prospective one, so
+  // reusing the event's own trustworthy authority_time here — rather than
+  // reconstructing anything — is exactly right.
+  const selection = selectInvokedGrant(store, candidate.payload.action_id, candidate.payload.decision_sequence, candidate.authority_time);
   if (!selection.ok) {
     return selection;
   }

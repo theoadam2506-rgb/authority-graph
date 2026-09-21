@@ -33,7 +33,7 @@ import { PostgresCapabilityIssuanceTransaction } from "../../src/storage/postgre
 import type { IssueCapabilityDependencies } from "../../src/engine/issueCapability.js";
 import type { AuthenticatedPrincipal } from "../../src/domain/authenticatedPrincipal.js";
 import { isEventType, toDraft } from "../../src/domain/events.js";
-import { capabilityId, clientIdempotencyKey, enforcementPointId, iso8601, monetaryParameters, thresholds, type PrincipalId } from "../../src/domain/types.js";
+import { capabilityId, clientIdempotencyKey, enforcementPointId, expiresAt, iso8601, monetaryParameters, nonMonetaryParameters, thresholds, type PrincipalId } from "../../src/domain/types.js";
 import type { IssueCapabilityCommand } from "../../src/domain/capabilityCommand.js";
 import { principal } from "../fixtures/ids.js";
 import { EUR, PURCHASE_ORDER_CREATE, THEO, actionRequest, rootDelegation, sequentialClock, subDelegation } from "../fixtures/scenarios.js";
@@ -65,6 +65,15 @@ const AGENT = principal("pg-t-agent");
 const AGENT_A = principal("pg-t-agent-a");
 const AGENT_B = principal("pg-t-agent-b");
 const EP = enforcementPointId("ep-pg-t");
+
+/**
+ * PR4B-5 — the explicit prospective authorityTime every transactional call
+ * in this file now passes. None of T1-T9's delegations declare a finite
+ * `expires_at` (they default to `noExpiry`), so its exact value is
+ * inconsequential to those tests' outcomes — the dedicated expiration
+ * scenario (T10 below) builds its own delegation with a finite expires_at.
+ */
+const AUTHORITY_TIME = iso8601("2025-01-01T00:20:00.000Z");
 
 function authenticated(id: PrincipalId): AuthenticatedPrincipal {
   return { principalId: id };
@@ -117,14 +126,14 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
     }
     await seed([toDraft(root), toDraft(request)]);
 
-    const transaction = new PostgresCapabilityIssuanceTransaction(pool, sequentialClock);
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
     const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
     const key = clientIdempotencyKey("pg-t1-key");
     const deps = makeDependencies();
 
     const [resultA, resultB] = await Promise.all([
-      transaction.issue(authenticated(AGENT), key, command, deps),
-      transaction.issue(authenticated(AGENT), key, command, deps),
+      transaction.issue(authenticated(AGENT), key, command, deps, AUTHORITY_TIME),
+      transaction.issue(authenticated(AGENT), key, command, deps, AUTHORITY_TIME),
     ]);
 
     const outcomes = [resultA.outcome, resultB.outcome];
@@ -151,13 +160,13 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
     }
     await seed([toDraft(root), toDraft(request1), toDraft(request2)]);
 
-    const transaction = new PostgresCapabilityIssuanceTransaction(pool, sequentialClock);
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
     const key = clientIdempotencyKey("pg-t2-key");
     const deps = makeDependencies();
 
     const [resultA, resultB] = await Promise.all([
-      transaction.issue(authenticated(AGENT), key, { action_id: request1.payload.action_id, enforcement_point_id: EP }, deps),
-      transaction.issue(authenticated(AGENT), key, { action_id: request2.payload.action_id, enforcement_point_id: EP }, deps),
+      transaction.issue(authenticated(AGENT), key, { action_id: request1.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
+      transaction.issue(authenticated(AGENT), key, { action_id: request2.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
     ]);
 
     const outcomes = [resultA.outcome, resultB.outcome];
@@ -177,12 +186,12 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
     }
     await seed([toDraft(root), toDraft(requestA), toDraft(requestB)]);
 
-    const transaction = new PostgresCapabilityIssuanceTransaction(pool, sequentialClock);
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
     const deps = makeDependencies();
 
     const [resultA, resultB] = await Promise.all([
-      transaction.issue(authenticated(AGENT), clientIdempotencyKey("pg-t3-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps),
-      transaction.issue(authenticated(AGENT), clientIdempotencyKey("pg-t3-key-b"), { action_id: requestB.payload.action_id, enforcement_point_id: EP }, deps),
+      transaction.issue(authenticated(AGENT), clientIdempotencyKey("pg-t3-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
+      transaction.issue(authenticated(AGENT), clientIdempotencyKey("pg-t3-key-b"), { action_id: requestB.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
     ]);
 
     expect([resultA, resultB].filter(isExecutedOk)).toHaveLength(1);
@@ -199,12 +208,12 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
     }
     await seed([toDraft(d1), toDraft(d2a), toDraft(d2b), toDraft(requestA), toDraft(requestB)]);
 
-    const transaction = new PostgresCapabilityIssuanceTransaction(pool, sequentialClock);
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
     const deps = makeDependencies();
 
     const [resultA, resultB] = await Promise.all([
-      transaction.issue(authenticated(AGENT_A), clientIdempotencyKey("pg-t4-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps),
-      transaction.issue(authenticated(AGENT_B), clientIdempotencyKey("pg-t4-key-b"), { action_id: requestB.payload.action_id, enforcement_point_id: EP }, deps),
+      transaction.issue(authenticated(AGENT_A), clientIdempotencyKey("pg-t4-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
+      transaction.issue(authenticated(AGENT_B), clientIdempotencyKey("pg-t4-key-b"), { action_id: requestB.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
     ]);
 
     expect([resultA, resultB].filter(isExecutedOk)).toHaveLength(1);
@@ -220,7 +229,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
     }
     await seed([toDraft(root), ...requests.map((r) => toDraft(r))]);
 
-    const transaction = new PostgresCapabilityIssuanceTransaction(pool, sequentialClock);
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
     const deps = makeDependencies();
 
     const results = await Promise.all(
@@ -228,7 +237,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
         if (!isEventType(request, "ACTION_REQUESTED")) {
           throw new Error("fixture returned an unexpected event_type");
         }
-        return transaction.issue(authenticated(AGENT), clientIdempotencyKey(`pg-t5-key-${index}`), { action_id: request.payload.action_id, enforcement_point_id: EP }, deps);
+        return transaction.issue(authenticated(AGENT), clientIdempotencyKey(`pg-t5-key-${index}`), { action_id: request.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME);
       }),
     );
 
@@ -243,12 +252,12 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
     }
     await seed([toDraft(root), toDraft(request)]);
 
-    const transaction = new PostgresCapabilityIssuanceTransaction(pool, sequentialClock);
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
     const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
     const key = clientIdempotencyKey("pg-t6-key");
     const deps = makeDependencies();
 
-    const first = await transaction.issue(authenticated(AGENT), key, command, deps);
+    const first = await transaction.issue(authenticated(AGENT), key, command, deps, AUTHORITY_TIME);
     if (!isExecutedOk(first) || first.outcome !== "EXECUTED" || !first.result.ok) {
       throw new Error("expected the first attempt to execute and succeed");
     }
@@ -256,8 +265,8 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
     // A brand-new transaction object (a fresh pool client under the hood)
     // simulates the caller retrying without any in-process state of its
     // own to rely on — durability here comes only from the database.
-    const retryTransaction = new PostgresCapabilityIssuanceTransaction(pool, sequentialClock);
-    const retry = await retryTransaction.issue(authenticated(AGENT), key, command, deps);
+    const retryTransaction = new PostgresCapabilityIssuanceTransaction(pool);
+    const retry = await retryTransaction.issue(authenticated(AGENT), key, command, deps, AUTHORITY_TIME);
     expect(retry.outcome).toBe("REPLAYED");
     if (retry.outcome !== "REPLAYED" || !retry.result.ok) {
       throw new Error("expected a successful REPLAYED result");
@@ -277,8 +286,8 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
     }
     await seed([toDraft(root), toDraft(request)]);
 
-    const transaction = new PostgresCapabilityIssuanceTransaction(pool, sequentialClock);
-    const result = await transaction.issue(authenticated(AGENT), clientIdempotencyKey("pg-t7-key"), { action_id: request.payload.action_id, enforcement_point_id: EP }, makeDependencies());
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
+    const result = await transaction.issue(authenticated(AGENT), clientIdempotencyKey("pg-t7-key"), { action_id: request.payload.action_id, enforcement_point_id: EP }, makeDependencies(), AUTHORITY_TIME);
     if (!isExecutedOk(result) || result.outcome !== "EXECUTED" || !result.result.ok) {
       throw new Error("expected this emission to succeed");
     }
@@ -300,28 +309,28 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
     }
     await seed([toDraft(root), toDraft(requestA), toDraft(requestB)]);
 
-    const transaction = new PostgresCapabilityIssuanceTransaction(pool, sequentialClock);
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
     const collidingId = capabilityId("pg-t8-forced-collision");
     const deps: IssueCapabilityDependencies = {
       nextCapabilityId: () => collidingId,
       expiresAt: (snapshotAuthorityTime) => iso8601(new Date(Date.parse(snapshotAuthorityTime) + 5 * 60_000).toISOString()),
     };
 
-    const first = await transaction.issue(authenticated(AGENT), clientIdempotencyKey("pg-t8-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps);
+    const first = await transaction.issue(authenticated(AGENT), clientIdempotencyKey("pg-t8-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME);
     if (!isExecutedOk(first) || first.outcome !== "EXECUTED" || !first.result.ok) {
       throw new Error("expected the first emission to succeed");
     }
 
     const secondKey = clientIdempotencyKey("pg-t8-key-b");
     const secondCommand: IssueCapabilityCommand = { action_id: requestB.payload.action_id, enforcement_point_id: EP };
-    const second = await transaction.issue(authenticated(AGENT), secondKey, secondCommand, deps);
+    const second = await transaction.issue(authenticated(AGENT), secondKey, secondCommand, deps, AUTHORITY_TIME);
     expect(second.outcome).toBe("EXECUTED");
     if (second.outcome !== "EXECUTED") {
       throw new Error("expected EXECUTED (a rejection, different scope from the first)");
     }
     expect(second.result).toEqual({ ok: false, reason: "CAPABILITY_ID_COLLISION", capability_id: collidingId });
 
-    const retry = await transaction.issue(authenticated(AGENT), secondKey, secondCommand, deps);
+    const retry = await transaction.issue(authenticated(AGENT), secondKey, secondCommand, deps, AUTHORITY_TIME);
     expect(retry.outcome).toBe("REPLAYED");
     if (retry.outcome !== "REPLAYED") {
       throw new Error("expected REPLAYED");
@@ -340,14 +349,267 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
     }
     await seed([toDraft(root), toDraft(request)]);
 
-    const transaction = new PostgresCapabilityIssuanceTransaction(pool, sequentialClock);
-    const result = await transaction.issue(authenticated(AGENT), clientIdempotencyKey("pg-t9-key"), { action_id: request.payload.action_id, enforcement_point_id: EP }, makeDependencies());
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
+    const result = await transaction.issue(authenticated(AGENT), clientIdempotencyKey("pg-t9-key"), { action_id: request.payload.action_id, enforcement_point_id: EP }, makeDependencies(), AUTHORITY_TIME);
     if (!isExecutedOk(result) || result.outcome !== "EXECUTED" || !result.result.ok) {
       throw new Error("expected ok:true");
     }
 
     const { rows } = await pool.query("SELECT sequence FROM authority_events WHERE event_type = 'CAPABILITY_ISSUED'");
     expect(Number(rows[0].sequence)).toBe(Number(result.result.capability.decision_sequence) + 1);
+  });
+
+  it("T10 — PR4B-5: rejects issuance past expires_at even with zero events between the log's last authority_time and the explicit evaluation instant; retry REPLAYs the same refusal; no partial mutation", async () => {
+    const T1 = iso8601("2030-01-01T10:00:00.000Z");
+    const T2 = "2030-01-01T11:00:00.000Z"; // expires_at
+    const T3 = iso8601("2030-01-01T12:00:00.000Z"); // T1 < T2 < T3, first attempt
+    const T4 = iso8601("2030-01-01T13:00:00.000Z"); // T3 < T4, retry
+
+    const root = rootDelegation({
+      sequence: 1,
+      id: "d-t10",
+      grantor: THEO,
+      grantorType: "HUMAN_ROOT",
+      grantee: AGENT,
+      capabilities: [PURCHASE_ORDER_CREATE],
+      canDelegate: false,
+      amountThresholds: thresholds(100000, 100000),
+      expires: expiresAt(iso8601(T2)),
+    });
+    const request = actionRequest({ sequence: 2, id: "act-t10", requester: AGENT, delegationId: "d-t10", parameters: nonMonetaryParameters() });
+    if (!isEventType(request, "ACTION_REQUESTED")) {
+      throw new Error("fixture returned an unexpected event_type");
+    }
+    // Seed with a store whose clock always returns T1 — the journal's last
+    // authority_time is pinned to T1, and no event carrying a later
+    // authority_time is ever ingested. No new event is added between T1
+    // and T3.
+    const seededAtStore = new PostgresEventStore(pool, { authorityTime: () => T1 });
+    const seedResult = await seededAtStore.append([toDraft(root), toDraft(request)]);
+    for (const outcome of seedResult.outcomes) {
+      if (!outcome.accepted) {
+        throw new Error(`seed fixture rejected: ${outcome.reasonCode}`);
+      }
+    }
+
+    const preRows = await pool.query("SELECT authority_time FROM authority_events ORDER BY sequence");
+    expect(preRows.rows).toHaveLength(2);
+    for (const row of preRows.rows) {
+      expect(new Date(row.authority_time).toISOString()).toBe(T1);
+    }
+
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
+    const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
+    const key = clientIdempotencyKey("pg-t10-key");
+    const deps = makeDependencies();
+
+    const first = await transaction.issue(authenticated(AGENT), key, command, deps, T3);
+    expect(first.outcome).toBe("EXECUTED");
+    if (first.outcome !== "EXECUTED") {
+      throw new Error("expected EXECUTED");
+    }
+    expect(first.result.ok).toBe(false);
+    if (first.result.ok) {
+      throw new Error("expected ok:false — the delegation must be treated as expired at T3");
+    }
+    expect(first.result.reason).toBe("NOT_AUTHORIZED");
+
+    const afterFirst = await pool.query("SELECT count(*) FROM authority_events WHERE event_type = 'CAPABILITY_ISSUED'");
+    expect(Number(afterFirst.rows[0].count)).toBe(0);
+    const idempotencyAfterFirst = await pool.query("SELECT result FROM capability_issuance_idempotency WHERE client_idempotency_key = $1", [key]);
+    expect(idempotencyAfterFirst.rows).toHaveLength(1);
+    expect(idempotencyAfterFirst.rows[0].result).toEqual(first.result);
+
+    // Retry, same scope, later real instant T4 — REPLAYED, never
+    // re-evaluated at T4, no new event, no second idempotency row.
+    const retryTransaction = new PostgresCapabilityIssuanceTransaction(pool);
+    const retry = await retryTransaction.issue(authenticated(AGENT), key, command, deps, T4);
+    expect(retry.outcome).toBe("REPLAYED");
+    if (retry.outcome !== "REPLAYED") {
+      throw new Error("expected REPLAYED");
+    }
+    expect(retry.result).toEqual(first.result);
+
+    const finalEventCount = await pool.query("SELECT count(*) FROM authority_events WHERE event_type = 'CAPABILITY_ISSUED'");
+    expect(Number(finalEventCount.rows[0].count)).toBe(0);
+    const finalIdempotencyCount = await pool.query("SELECT count(*) FROM capability_issuance_idempotency WHERE client_idempotency_key = $1", [key]);
+    expect(Number(finalIdempotencyCount.rows[0].count)).toBe(1);
+  });
+
+  it("T10b — the same scenario, evaluated strictly before expires_at, is accepted; authority_time/decision_sequence on the produced row are exact", async () => {
+    const T1 = iso8601("2030-01-01T10:00:00.000Z");
+    const T2 = "2030-01-01T11:00:00.000Z"; // expires_at
+    const T3_BEFORE = iso8601("2030-01-01T10:30:00.000Z"); // T1 < T3_BEFORE < T2
+
+    const root = rootDelegation({
+      sequence: 1,
+      id: "d-t10b",
+      grantor: THEO,
+      grantorType: "HUMAN_ROOT",
+      grantee: AGENT,
+      capabilities: [PURCHASE_ORDER_CREATE],
+      canDelegate: false,
+      amountThresholds: thresholds(100000, 100000),
+      expires: expiresAt(iso8601(T2)),
+    });
+    const request = actionRequest({ sequence: 2, id: "act-t10b", requester: AGENT, delegationId: "d-t10b", parameters: nonMonetaryParameters() });
+    if (!isEventType(request, "ACTION_REQUESTED")) {
+      throw new Error("fixture returned an unexpected event_type");
+    }
+    const seededAtStore = new PostgresEventStore(pool, { authorityTime: () => T1 });
+    const seedResult = await seededAtStore.append([toDraft(root), toDraft(request)]);
+    for (const outcome of seedResult.outcomes) {
+      if (!outcome.accepted) {
+        throw new Error(`seed fixture rejected: ${outcome.reasonCode}`);
+      }
+    }
+
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
+    const result = await transaction.issue(authenticated(AGENT), clientIdempotencyKey("pg-t10b-key"), { action_id: request.payload.action_id, enforcement_point_id: EP }, makeDependencies(), T3_BEFORE);
+    if (!isExecutedOk(result) || result.outcome !== "EXECUTED" || !result.result.ok) {
+      throw new Error("expected the issuance to succeed before expiration");
+    }
+    expect(result.result.capability.decision_sequence).toBe(2);
+
+    const { rows } = await pool.query("SELECT authority_time, payload ->> 'decision_sequence' AS decision_sequence FROM authority_events WHERE event_type = 'CAPABILITY_ISSUED'");
+    expect(rows).toHaveLength(1);
+    expect(new Date(rows[0].authority_time).toISOString()).toBe(T3_BEFORE);
+    expect(Number(rows[0].decision_sequence)).toBe(2);
+  });
+
+  it("T11 — PR4B-5A: authorityTime older than the canonical maximum ALREADY IN THE DATABASE must be refused with STALE_AUTHORITY_TIME, never silently accepted, never a partial mutation", async () => {
+    const T1 = iso8601("2030-01-01T10:00:00.000Z");
+    const T3 = iso8601("2030-01-01T11:00:00.000Z"); // T1 < T3 < T4
+    const T4 = iso8601("2030-01-01T12:00:00.000Z"); // already canonical, in the DB, before this issue() call
+
+    const root = rootDelegation({
+      sequence: 1,
+      id: "d-t11",
+      grantor: THEO,
+      grantorType: "HUMAN_ROOT",
+      grantee: AGENT,
+      capabilities: [PURCHASE_ORDER_CREATE],
+      canDelegate: false,
+      amountThresholds: thresholds(100000, 100000),
+      // no expires_at — the agent's own authority remains perfectly valid
+      // at T3; only the evaluation instant itself is incoherent with what
+      // the database already canonically knows.
+    });
+    const request = actionRequest({ sequence: 2, id: "act-t11", requester: AGENT, delegationId: "d-t11", parameters: nonMonetaryParameters() });
+    if (!isEventType(request, "ACTION_REQUESTED")) {
+      throw new Error("fixture returned an unexpected event_type");
+    }
+
+    // The delegation is seeded at T1; the ACTION_REQUESTED is itself the
+    // LATER, already-canonical, genuinely ACCEPTED event — seeded at T4.
+    // This does not invalidate the delegation (no expires_at) and consumes
+    // no capacity (no totalBudget declared) — it is ordinary history a
+    // real deployment would have.
+    const rootStore = new PostgresEventStore(pool, { authorityTime: () => T1 });
+    const rootSeed = await rootStore.append([toDraft(root)]);
+    for (const outcome of rootSeed.outcomes) {
+      if (!outcome.accepted) {
+        throw new Error(`seed fixture rejected: ${outcome.reasonCode}`);
+      }
+    }
+    const requestStore = new PostgresEventStore(pool, { authorityTime: () => T4 });
+    const requestSeed = await requestStore.append([toDraft(request)]);
+    for (const outcome of requestSeed.outcomes) {
+      if (!outcome.accepted) {
+        throw new Error(`seed fixture rejected: ${outcome.reasonCode}`);
+      }
+    }
+
+    const preRows = await pool.query("SELECT authority_time FROM authority_events ORDER BY sequence");
+    expect(preRows.rows).toHaveLength(2);
+    expect(new Date(preRows.rows[0].authority_time).toISOString()).toBe(T1);
+    expect(new Date(preRows.rows[1].authority_time).toISOString()).toBe(T4);
+
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
+    const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
+    const key = clientIdempotencyKey("pg-t11-key");
+
+    const result = await transaction.issue(authenticated(AGENT), key, command, makeDependencies(), T3);
+
+    // SECURE, EXPECTED behavior once fixed: EXECUTED carrying an explicit
+    // temporal-consistency refusal, never NOT_AUTHORIZED (the agent's
+    // authority is not the problem), never a row silently written with
+    // authority_time = T3 (which the current, unfixed code does — Postgres
+    // never clamps at all, see the PR4B-5A audit). This is the SECURE
+    // expectation; it is expected to fail until PR4B-5A's fix lands.
+    expect(result.outcome).toBe("EXECUTED");
+    if (result.outcome !== "EXECUTED") {
+      throw new Error("expected EXECUTED");
+    }
+    expect(result.result.ok).toBe(false);
+    expect(result.result).toEqual({ ok: false, reason: "STALE_AUTHORITY_TIME" });
+
+    const eventRows = await pool.query("SELECT count(*) FROM authority_events WHERE event_type = 'CAPABILITY_ISSUED'");
+    expect(Number(eventRows.rows[0].count)).toBe(0);
+    const idempotencyRows = await pool.query("SELECT result FROM capability_issuance_idempotency WHERE client_idempotency_key = $1", [key]);
+    expect(idempotencyRows.rows).toHaveLength(1);
+    expect(idempotencyRows.rows[0].result).toEqual(result.result);
+    // No partial mutation: still exactly the two seeded rows, unchanged.
+    const allRows = await pool.query("SELECT count(*) FROM authority_events");
+    expect(Number(allRows.rows[0].count)).toBe(2);
+  });
+
+  it("T12 — PR4B-5A: idempotence of a STALE_AUTHORITY_TIME refusal against real Postgres — retry REPLAYs, a new key gets a fresh decision", async () => {
+    const T1 = iso8601("2030-01-01T10:00:00.000Z");
+    const T3 = iso8601("2030-01-01T11:00:00.000Z"); // stale first attempt
+    const T4 = iso8601("2030-01-01T12:00:00.000Z"); // already canonical
+    const T5 = iso8601("2030-01-01T13:00:00.000Z"); // T5 > T4 — individually coherent
+
+    const root = rootDelegation({ sequence: 1, id: "d-t12pg", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const request = actionRequest({ sequence: 2, id: "act-t12pg", requester: AGENT, delegationId: "d-t12pg", parameters: nonMonetaryParameters() });
+    if (!isEventType(request, "ACTION_REQUESTED")) {
+      throw new Error("fixture returned an unexpected event_type");
+    }
+
+    const rootStore = new PostgresEventStore(pool, { authorityTime: () => T1 });
+    await rootStore.append([toDraft(root)]);
+    const requestStore = new PostgresEventStore(pool, { authorityTime: () => T4 });
+    await requestStore.append([toDraft(request)]);
+
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
+    const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
+    const key = clientIdempotencyKey("pg-t12-key");
+    const deps = makeDependencies();
+
+    const first = await transaction.issue(authenticated(AGENT), key, command, deps, T3);
+    if (first.outcome !== "EXECUTED") {
+      throw new Error("expected EXECUTED (a stale refusal)");
+    }
+    expect(first.result).toEqual({ ok: false, reason: "STALE_AUTHORITY_TIME" });
+
+    // Retry: same key, same command, individually-coherent T5 (> T4).
+    // Must REPLAY the exact original refusal — never re-evaluate.
+    const retryTransaction = new PostgresCapabilityIssuanceTransaction(pool);
+    const retry = await retryTransaction.issue(authenticated(AGENT), key, command, deps, T5);
+    expect(retry.outcome).toBe("REPLAYED");
+    if (retry.outcome !== "REPLAYED") {
+      throw new Error("expected REPLAYED");
+    }
+    expect(retry.result).toEqual(first.result);
+
+    const afterRetryEvents = await pool.query("SELECT count(*) FROM authority_events WHERE event_type = 'CAPABILITY_ISSUED'");
+    expect(Number(afterRetryEvents.rows[0].count)).toBe(0);
+    const afterRetryIdempotency = await pool.query("SELECT count(*) FROM capability_issuance_idempotency WHERE client_idempotency_key = $1", [key]);
+    expect(Number(afterRetryIdempotency.rows[0].count)).toBe(1);
+
+    // A NEW clientIdempotencyKey at that same coherent T5 gets a genuine,
+    // fresh decision.
+    const key2 = clientIdempotencyKey("pg-t12-key-2");
+    const secondTransaction = new PostgresCapabilityIssuanceTransaction(pool);
+    const second = await secondTransaction.issue(authenticated(AGENT), key2, command, deps, T5);
+    expect(second.outcome).toBe("EXECUTED");
+    if (second.outcome !== "EXECUTED") {
+      throw new Error("expected EXECUTED");
+    }
+    expect(second.result.ok).toBe(true);
+
+    const finalEvents = await pool.query("SELECT count(*) FROM authority_events WHERE event_type = 'CAPABILITY_ISSUED'");
+    expect(Number(finalEvents.rows[0].count)).toBe(1);
   });
 
   it("crash consistency — an uncommitted concurrent write is never observable: a second connection's INSERT, left uncommitted, does not appear once its client disconnects", async () => {

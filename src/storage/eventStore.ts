@@ -31,7 +31,7 @@
  * row is written.
  */
 import type { AuthorityEvent, AuthorityEventType, CanonicalStore, DraftAuthorityEvent } from "../domain/events.js";
-import type { IngestOutcome, PrincipalId, SecurityLogEntry, SequenceNumber } from "../domain/types.js";
+import type { IngestOutcome, Iso8601, PrincipalId, SecurityLogEntry, SequenceNumber } from "../domain/types.js";
 import { advanceTrustedTime, processDraft, type IngestionClock, type IngestionState } from "../engine/ingest.js";
 
 export interface EventFilter {
@@ -113,11 +113,47 @@ export class InMemoryEventStore implements EventSource {
     this.readInfrastructureClock = readInfrastructureClock ?? (() => new Date().toISOString());
   }
 
+  /**
+   * PR4B-5 — `explicitAuthorityTime`, when supplied, is used verbatim as
+   * the trusted instant for the draft at index 0 ONLY, bypassing
+   * `this.clock.authorityTime(draft, index)` for that one draft — reserved
+   * for `CapabilityIssuanceTransaction` (src/storage/capabilityIssuanceTransaction.ts),
+   * the one caller that has already decided, at an explicit caller-supplied
+   * instant, what a CAPABILITY_ISSUED event's authority_time must be, and
+   * must not have this store's own configured clock silently override it.
+   *
+   * PR4B-5A — that instant still goes through the SAME monotone-non-
+   * decreasing clamp (`advanceTrustedTime`) as every other draft, against
+   * `this.lastTrustedTimeMs` — a hidden high-water mark that can advance
+   * past this snapshot's own canonical maximum (e.g. after an earlier,
+   * REJECTED draft's own clock reading still advanced it — rejection never
+   * un-advances it). `issueCapability`'s own check (issueCapability.ts)
+   * only sees the canonical `CanonicalStore`, never this private field, so
+   * it cannot catch that case. For the one draft using
+   * `explicitAuthorityTime`, this method now detects whether the clamp
+   * would silently change the supplied instant and, if so, refuses this
+   * one draft outright (`STALE_AUTHORITY_TIME`) instead of writing a
+   * canonical event whose `authority_time` would then differ from the
+   * instant the decision was actually evaluated at. `lastTrustedTimeMs`
+   * is deliberately left untouched on this path — nothing is ingested, so
+   * nothing about the store's ordinary clock state should move because of
+   * it. Every other caller (any multi-draft batch, or a single draft with
+   * no override) is entirely unaffected: `this.clock` decides, and the
+   * clamp applies, exactly as before.
+   */
   // eslint-disable-next-line @typescript-eslint/require-await
-  async append(drafts: readonly DraftAuthorityEvent[]): Promise<AppendResult> {
+  async append(drafts: readonly DraftAuthorityEvent[], explicitAuthorityTime?: Iso8601): Promise<AppendResult> {
     const outcomes: IngestOutcome[] = [];
     for (const [index, draft] of drafts.entries()) {
-      const advanced = advanceTrustedTime(this.lastTrustedTimeMs, this.clock.authorityTime(draft, index));
+      const usesExplicitAuthorityTime = explicitAuthorityTime !== undefined && index === 0;
+      const suppliedIso = usesExplicitAuthorityTime ? explicitAuthorityTime : this.clock.authorityTime(draft, index);
+      const advanced = advanceTrustedTime(this.lastTrustedTimeMs, suppliedIso);
+
+      if (usesExplicitAuthorityTime && advanced.ms !== Date.parse(suppliedIso)) {
+        outcomes.push({ accepted: false, reasonCode: "STALE_AUTHORITY_TIME" });
+        continue;
+      }
+
       this.lastTrustedTimeMs = advanced.ms;
       // recorded_at is infrastructure I/O, read here and only here.
       const recordedAtIso = this.readInfrastructureClock();

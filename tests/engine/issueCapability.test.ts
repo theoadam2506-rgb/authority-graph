@@ -29,6 +29,15 @@ const OTHER = principal("issue-capability-other-requester");
 const EP = enforcementPointId("ep-gateway-1");
 
 /**
+ * PR4B-5 — the explicit prospective authorityTime every call in this file
+ * now passes. None of these scenarios' delegations declare a finite
+ * `expires_at` (they default to `noExpiry`), so its exact value is
+ * inconsequential to any of these tests' outcomes — expiration itself is
+ * covered by tests/engine/issueCapabilityProspectiveTime.test.ts, not here.
+ */
+const AUTHORITY_TIME = iso8601("2025-01-01T00:20:00.000Z");
+
+/**
  * PRE-COMMIT REVIEW CORRECTION: `issueCapability` now receives
  * `AuthenticatedPrincipal`, not a raw `PrincipalId` — this is the local
  * test-side construction of "an identity the deployment's auth layer has
@@ -95,7 +104,7 @@ describe("issueCapability — A: correctly authenticated requester reaches resol
     const ingested = ingestAll([toDraft(root), toDraft(request)], sequentialClock);
     const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
 
-    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT), command, makeDependencies());
+    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT), command, makeDependencies(), AUTHORITY_TIME);
     expect(result.ok).toBe(true);
   });
 });
@@ -120,7 +129,7 @@ describe("issueCapability — B: authenticated requester differs from ACTION_REQ
     const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
 
     // OTHER is a real, authenticated principal — just not the one who made this request.
-    const result = issueCapability(ingested.canonicalStore, authenticated(OTHER), command, makeDependencies());
+    const result = issueCapability(ingested.canonicalStore, authenticated(OTHER), command, makeDependencies(), AUTHORITY_TIME);
     expect(result).toEqual({ ok: false, reason: "REQUESTER_MISMATCH" });
   });
 });
@@ -128,7 +137,7 @@ describe("issueCapability — B: authenticated requester differs from ACTION_REQ
 describe("issueCapability — C: action_id references no ACTION_REQUESTED", () => {
   it("is rejected with ACTION_NOT_FOUND", () => {
     const command: IssueCapabilityCommand = { action_id: actionId("act-ghost"), enforcement_point_id: EP };
-    const result = issueCapability([], authenticated(AGENT), command, makeDependencies());
+    const result = issueCapability([], authenticated(AGENT), command, makeDependencies(), AUTHORITY_TIME);
     expect(result).toEqual({ ok: false, reason: "ACTION_NOT_FOUND" });
   });
 });
@@ -152,7 +161,7 @@ describe("issueCapability — D: INVOKED AUTHORIZED builds a capability with the
     const ingested = ingestAll([toDraft(root), toDraft(request)], sequentialClock);
     const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
 
-    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT), command, makeDependencies());
+    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT), command, makeDependencies(), AUTHORITY_TIME);
     expect(result.ok).toBe(true);
     if (!result.ok) {
       throw new Error("expected ok:true");
@@ -217,7 +226,7 @@ describe("issueCapability — E/F: INVOKED REQUIRES_APPROVAL is rejected, never 
     const ingested = ingestAll([toDraft(d1), toDraft(d2), toDraft(d3), toDraft(d4), toDraft(request)], sequentialClock);
     const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
 
-    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT_C), command, makeDependencies());
+    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT_C), command, makeDependencies(), AUTHORITY_TIME);
     expect(result.ok).toBe(false);
     if (result.ok) {
       throw new Error("expected ok:false");
@@ -241,7 +250,7 @@ describe("issueCapability — G: a valid approval on the INVOKED chain allows is
     );
     const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
 
-    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT_C), command, makeDependencies());
+    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT_C), command, makeDependencies(), AUTHORITY_TIME);
     expect(result.ok).toBe(true);
     if (!result.ok) {
       throw new Error("expected ok:true");
@@ -275,7 +284,7 @@ describe("issueCapability — H: an unbounded delegation in GRANTED imposes no a
     const ingested = ingestAll([toDraft(root), toDraft(request)], sequentialClock);
     const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
 
-    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT), command, makeDependencies());
+    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT), command, makeDependencies(), AUTHORITY_TIME);
     expect(result.ok).toBe(true);
   });
 });
@@ -312,7 +321,7 @@ describe("issueCapability — I: an insufficient bounded delegation rejects the 
     const deps = makeDependencies();
     const baseStore = ingestAll([toDraft(root), toDraft(priorRequest), toDraft(request)], sequentialClock).canonicalStore;
     const priorCommand: IssueCapabilityCommand = { action_id: priorRequest.payload.action_id, enforcement_point_id: EP };
-    const prior = issueCapability(baseStore, authenticated(AGENT), priorCommand, deps);
+    const prior = issueCapability(baseStore, authenticated(AGENT), priorCommand, deps, AUTHORITY_TIME);
     expect(prior.ok).toBe(true);
     if (!prior.ok) {
       throw new Error("expected the prior 800 EUR grant to succeed");
@@ -323,7 +332,7 @@ describe("issueCapability — I: an insufficient bounded delegation rejects the 
     ).canonicalStore;
 
     const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
-    const result = issueCapability(store, authenticated(AGENT), command, deps);
+    const result = issueCapability(store, authenticated(AGENT), command, deps, AUTHORITY_TIME);
     expect(result).toEqual({ ok: false, reason: "CAPACITY_EXCEEDED" });
   });
 });
@@ -359,7 +368,7 @@ describe("issueCapability — J: a two-level chain with two sufficient budgets c
     const ingested = ingestAll([toDraft(d1), toDraft(d2), toDraft(request)], sequentialClock);
     const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
 
-    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT_B), command, makeDependencies());
+    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT_B), command, makeDependencies(), AUTHORITY_TIME);
     expect(result.ok).toBe(true);
     if (!result.ok) {
       throw new Error("expected ok:true");
@@ -407,7 +416,7 @@ describe("issueCapability — K: parent sufficient, child insufficient rejects t
     const deps = makeDependencies();
     const baseStore = ingestAll([toDraft(d1), toDraft(d2), toDraft(priorRequest), toDraft(request)], sequentialClock).canonicalStore;
     const priorCommand: IssueCapabilityCommand = { action_id: priorRequest.payload.action_id, enforcement_point_id: EP };
-    const prior = issueCapability(baseStore, authenticated(AGENT_B), priorCommand, deps);
+    const prior = issueCapability(baseStore, authenticated(AGENT_B), priorCommand, deps, AUTHORITY_TIME);
     expect(prior.ok).toBe(true);
     if (!prior.ok) {
       throw new Error("expected the prior 100 EUR grant to succeed");
@@ -418,7 +427,7 @@ describe("issueCapability — K: parent sufficient, child insufficient rejects t
     ).canonicalStore;
 
     const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
-    const result = issueCapability(store, authenticated(AGENT_B), command, deps);
+    const result = issueCapability(store, authenticated(AGENT_B), command, deps, AUTHORITY_TIME);
     expect(result).toEqual({ ok: false, reason: "CAPACITY_EXCEEDED" });
   });
 });
@@ -445,7 +454,7 @@ describe("issueCapability — L: two sequential emissions that together would ex
 
     const deps = makeDependencies();
     const firstCommand: IssueCapabilityCommand = { action_id: requestOne.payload.action_id, enforcement_point_id: EP };
-    const first = issueCapability(store, authenticated(AGENT), firstCommand, deps);
+    const first = issueCapability(store, authenticated(AGENT), firstCommand, deps, AUTHORITY_TIME);
     expect(first.ok).toBe(true);
     if (!first.ok) {
       throw new Error("expected ok:true");
@@ -461,7 +470,7 @@ describe("issueCapability — L: two sequential emissions that together would ex
     store = reingested.canonicalStore;
 
     const secondCommand: IssueCapabilityCommand = { action_id: requestTwo.payload.action_id, enforcement_point_id: EP };
-    const second = issueCapability(store, authenticated(AGENT), secondCommand, deps);
+    const second = issueCapability(store, authenticated(AGENT), secondCommand, deps, AUTHORITY_TIME);
     expect(second).toEqual({ ok: false, reason: "CAPACITY_EXCEEDED" });
   });
 });
@@ -493,13 +502,13 @@ describe("issueCapabilityIdempotently — M: same scope + same command replays, 
     const deps = makeDependencies();
     const key = clientIdempotencyKey("key-1");
 
-    const first = issueCapabilityIdempotently(EMPTY_IDEMPOTENCY_STATE, store, authenticated(AGENT), key, command, deps);
+    const first = issueCapabilityIdempotently(EMPTY_IDEMPOTENCY_STATE, store, authenticated(AGENT), key, command, deps, AUTHORITY_TIME);
     expect(first.outcome).toBe("EXECUTED");
     if (first.outcome === "IDEMPOTENCY_CONFLICT") {
       throw new Error("expected EXECUTED");
     }
 
-    const second = issueCapabilityIdempotently(first.nextState, store, authenticated(AGENT), key, command, deps);
+    const second = issueCapabilityIdempotently(first.nextState, store, authenticated(AGENT), key, command, deps, AUTHORITY_TIME);
     expect(second.outcome).toBe("REPLAYED");
     if (second.outcome === "IDEMPOTENCY_CONFLICT") {
       throw new Error("expected REPLAYED");
@@ -514,7 +523,7 @@ describe("issueCapabilityIdempotently — N: same scope + a different command co
     const deps = makeDependencies();
     const key = clientIdempotencyKey("key-1");
 
-    const first = issueCapabilityIdempotently(EMPTY_IDEMPOTENCY_STATE, store, authenticated(AGENT), key, { action_id: request.payload.action_id, enforcement_point_id: EP }, deps);
+    const first = issueCapabilityIdempotently(EMPTY_IDEMPOTENCY_STATE, store, authenticated(AGENT), key, { action_id: request.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME);
     const second = issueCapabilityIdempotently(
       first.nextState,
       store,
@@ -522,6 +531,7 @@ describe("issueCapabilityIdempotently — N: same scope + a different command co
       key,
       { action_id: request2.payload.action_id, enforcement_point_id: EP }, // different action_id, same scope
       deps,
+      AUTHORITY_TIME,
     );
     expect(second.outcome).toBe("IDEMPOTENCY_CONFLICT");
   });
@@ -558,8 +568,8 @@ describe("issueCapabilityIdempotently — O: same client key, different requeste
     const sameRawKey = clientIdempotencyKey("shared-raw-key");
     const deps = makeDependencies();
 
-    const resultA = issueCapabilityIdempotently(EMPTY_IDEMPOTENCY_STATE, ingested.canonicalStore, authenticated(AGENT_A), sameRawKey, { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps);
-    const resultB = issueCapabilityIdempotently(resultA.nextState, ingested.canonicalStore, authenticated(AGENT_B), sameRawKey, { action_id: requestB.payload.action_id, enforcement_point_id: EP }, deps);
+    const resultA = issueCapabilityIdempotently(EMPTY_IDEMPOTENCY_STATE, ingested.canonicalStore, authenticated(AGENT_A), sameRawKey, { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME);
+    const resultB = issueCapabilityIdempotently(resultA.nextState, ingested.canonicalStore, authenticated(AGENT_B), sameRawKey, { action_id: requestB.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME);
 
     expect(resultA.outcome).toBe("EXECUTED");
     expect(resultB.outcome).toBe("EXECUTED");
@@ -613,7 +623,7 @@ describe("issueCapability — C9-order-1: C9 (legacy, ACTION_EXECUTED-based) rej
     // No CAPABILITY_ISSUED exists anywhere in this store: remainingCapacity
     // would report the full, undiminished 100 EUR if it were ever reached.
     // It is never reached — C9 rejects first, inside selectInvokedGrant.
-    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT), command, makeDependencies());
+    const result = issueCapability(ingested.canonicalStore, authenticated(AGENT), command, makeDependencies(), AUTHORITY_TIME);
     expect(result.ok).toBe(false);
     if (result.ok) {
       throw new Error("expected ok:false");
@@ -650,7 +660,7 @@ describe("issueCapability — C9-order-2: a request that clears C9 but exceeds c
     const deps = makeDependencies();
     const baseStore = ingestAll([toDraft(root), toDraft(priorRequest), toDraft(request)], sequentialClock).canonicalStore;
     const priorCommand: IssueCapabilityCommand = { action_id: priorRequest.payload.action_id, enforcement_point_id: EP };
-    const prior = issueCapability(baseStore, authenticated(AGENT), priorCommand, deps);
+    const prior = issueCapability(baseStore, authenticated(AGENT), priorCommand, deps, AUTHORITY_TIME);
     expect(prior.ok).toBe(true);
     if (!prior.ok) {
       throw new Error("expected the prior 800 EUR grant to succeed");
@@ -665,7 +675,7 @@ describe("issueCapability — C9-order-2: a request that clears C9 but exceeds c
     // never reject this on its own. Only remainingCapacity, seeing the
     // prior 800 EUR CAPABILITY_ISSUED grant, rejects it.
     const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
-    const result = issueCapability(store, authenticated(AGENT), command, deps);
+    const result = issueCapability(store, authenticated(AGENT), command, deps, AUTHORITY_TIME);
     expect(result).toEqual({ ok: false, reason: "CAPACITY_EXCEEDED" });
   });
 });

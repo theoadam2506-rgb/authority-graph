@@ -391,7 +391,14 @@ export type IngestRejectionCode =
   | "UNAUTHORIZED_REVOCATION"
   | "UNAUTHORIZED_SUBDELEGATION"
   | "UNAUTHORIZED_APPROVAL_DECISION"
-  | "UNKNOWN_SCHEMA_VERSION";
+  | "UNKNOWN_SCHEMA_VERSION"
+  // PR4B-5A — never produced by `processDraft`/ingest.ts (legacy ingestion
+  // is entirely untouched): `InMemoryEventStore.append()` alone returns
+  // this, strictly scoped to the one draft carrying the `explicitAuthorityTime`
+  // bypass reserved for capability issuance, when that instant would
+  // otherwise be silently clamped upward by the store's own hidden
+  // monotonic high-water mark. See eventStore.ts.
+  | "STALE_AUTHORITY_TIME";
 
 export type IngestOutcome =
   | { readonly accepted: true; readonly sequence: SequenceNumber }

@@ -12,7 +12,7 @@
  * of the pure kernel and of `issueCapabilityIdempotently` itself, neither
  * of which this round touches in behavior.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ingestAll } from "../../src/engine/authority.js";
 import { type IssueCapabilityDependencies, type IssueCapabilityResult } from "../../src/engine/issueCapability.js";
 import { issueCapabilityIdempotently, replaceExecutedIdempotencyResult, EMPTY_IDEMPOTENCY_STATE, type IdempotencyState } from "../../src/engine/issueCapabilityIdempotency.js";
@@ -20,7 +20,7 @@ import { InMemoryCapabilityIssuanceTransaction, type CapabilityIssuanceOutcome }
 import { InMemoryEventStore } from "../../src/storage/eventStore.js";
 import type { AuthenticatedPrincipal } from "../../src/domain/authenticatedPrincipal.js";
 import { isEventType, toDraft } from "../../src/domain/events.js";
-import { actionId, capabilityId, clientIdempotencyKey, enforcementPointId, iso8601, monetaryParameters, thresholds, type PrincipalId } from "../../src/domain/types.js";
+import { actionId, capabilityId, clientIdempotencyKey, enforcementPointId, expiresAt, iso8601, monetaryParameters, nonMonetaryParameters, thresholds, type PrincipalId } from "../../src/domain/types.js";
 import type { IssueCapabilityCommand } from "../../src/domain/capabilityCommand.js";
 import { principal } from "../fixtures/ids.js";
 import { EUR, PURCHASE_ORDER_CREATE, THEO, actionRequest, rootDelegation, sequentialClock, subDelegation } from "../fixtures/scenarios.js";
@@ -29,6 +29,15 @@ const AGENT = principal("pr4b3a-agent");
 const AGENT_A = principal("pr4b3a-agent-a");
 const AGENT_B = principal("pr4b3a-agent-b");
 const EP = enforcementPointId("ep-pr4b3a");
+
+/**
+ * PR4B-5 — the explicit prospective authorityTime every transactional call
+ * in this file now passes. None of T1-T9/T11's delegations declare a
+ * finite `expires_at` (they default to `noExpiry`), so its exact value is
+ * inconsequential to any of these tests' outcomes — the T1/T2/T3
+ * expiration-under-transaction scenario has its own dedicated tests below.
+ */
+const AUTHORITY_TIME = iso8601("2025-01-01T00:20:00.000Z");
 
 function authenticated(id: PrincipalId): AuthenticatedPrincipal {
   return { principalId: id };
@@ -44,6 +53,20 @@ function makeDependencies(startId = 1): IssueCapabilityDependencies {
 
 async function seededStore(drafts: readonly ReturnType<typeof toDraft>[]): Promise<InMemoryEventStore> {
   const store = new InMemoryEventStore(sequentialClock);
+  await store.append(drafts);
+  return store;
+}
+
+/**
+ * PR4B-5 — `toDraft` strips `authority_time` (it's an ingested-only field);
+ * `seededStore` reassigns it via `sequentialClock`, which ignores whatever
+ * `timing.authorityTime` a fixture builder was given. The T12 scenario
+ * needs its seed events pinned to one exact, fixed authority_time (T1) —
+ * this variant seeds with a clock that always returns that one instant,
+ * regardless of draft/index.
+ */
+async function seededStoreAt(drafts: readonly ReturnType<typeof toDraft>[], authorityTime: ReturnType<typeof iso8601>): Promise<InMemoryEventStore> {
+  const store = new InMemoryEventStore({ authorityTime: () => authorityTime });
   await store.append(drafts);
   return store;
 }
@@ -70,8 +93,8 @@ describe("T1 — same requester + same idempotency key + same command, concurren
     const deps = makeDependencies();
 
     const [resultA, resultB] = await Promise.all([
-      transaction.issue(authenticated(AGENT), key, command, deps),
-      transaction.issue(authenticated(AGENT), key, command, deps),
+      transaction.issue(authenticated(AGENT), key, command, deps, AUTHORITY_TIME),
+      transaction.issue(authenticated(AGENT), key, command, deps, AUTHORITY_TIME),
     ]);
 
     const outcomes = [resultA.outcome, resultB.outcome];
@@ -109,8 +132,8 @@ describe("T2 — same requester + same idempotency key + different commands, con
     const deps = makeDependencies();
 
     const [resultA, resultB] = await Promise.all([
-      transaction.issue(authenticated(AGENT), key, { action_id: request1.payload.action_id, enforcement_point_id: EP }, deps),
-      transaction.issue(authenticated(AGENT), key, { action_id: request2.payload.action_id, enforcement_point_id: EP }, deps),
+      transaction.issue(authenticated(AGENT), key, { action_id: request1.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
+      transaction.issue(authenticated(AGENT), key, { action_id: request2.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
     ]);
 
     const outcomes = [resultA.outcome, resultB.outcome];
@@ -139,8 +162,8 @@ describe("T3 — different idempotency keys, shared capacity", () => {
     const deps = makeDependencies();
 
     const [resultA, resultB] = await Promise.all([
-      transaction.issue(authenticated(AGENT), clientIdempotencyKey("t3-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps),
-      transaction.issue(authenticated(AGENT), clientIdempotencyKey("t3-key-b"), { action_id: requestB.payload.action_id, enforcement_point_id: EP }, deps),
+      transaction.issue(authenticated(AGENT), clientIdempotencyKey("t3-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
+      transaction.issue(authenticated(AGENT), clientIdempotencyKey("t3-key-b"), { action_id: requestB.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
     ]);
 
     const successCount = [resultA, resultB].filter(isExecutedOk).length;
@@ -172,8 +195,8 @@ describe("T4 — two terminal delegations sharing one bounded ancestor", () => {
     const deps = makeDependencies();
 
     const [resultA, resultB] = await Promise.all([
-      transaction.issue(authenticated(AGENT_A), clientIdempotencyKey("t4-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps),
-      transaction.issue(authenticated(AGENT_B), clientIdempotencyKey("t4-key-b"), { action_id: requestB.payload.action_id, enforcement_point_id: EP }, deps),
+      transaction.issue(authenticated(AGENT_A), clientIdempotencyKey("t4-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
+      transaction.issue(authenticated(AGENT_B), clientIdempotencyKey("t4-key-b"), { action_id: requestB.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
     ]);
 
     const successCount = [resultA, resultB].filter(isExecutedOk).length;
@@ -205,7 +228,7 @@ describe("T5 — N-way concurrency", () => {
         if (!isEventType(request, "ACTION_REQUESTED")) {
           throw new Error("fixture returned an unexpected event_type");
         }
-        return transaction.issue(authenticated(AGENT), clientIdempotencyKey(`t5-key-${index}`), { action_id: request.payload.action_id, enforcement_point_id: EP }, deps);
+        return transaction.issue(authenticated(AGENT), clientIdempotencyKey(`t5-key-${index}`), { action_id: request.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME);
       }),
     );
 
@@ -234,7 +257,7 @@ describe("T6 — retry after a committed response is lost", () => {
     const key = clientIdempotencyKey("t6-key");
     const deps = makeDependencies();
 
-    const first = await transaction.issue(authenticated(AGENT), key, command, deps);
+    const first = await transaction.issue(authenticated(AGENT), key, command, deps, AUTHORITY_TIME);
     if (!isExecutedOk(first)) {
       throw new Error("expected the first attempt to execute and succeed");
     }
@@ -242,7 +265,7 @@ describe("T6 — retry after a committed response is lost", () => {
     // "The response never reached the original caller" — the caller simply
     // retries with the same requester/key/command. It never needs to know
     // or supply any prior state itself: the transaction owns it.
-    const retry = await transaction.issue(authenticated(AGENT), key, command, deps);
+    const retry = await transaction.issue(authenticated(AGENT), key, command, deps, AUTHORITY_TIME);
     expect(retry.outcome).toBe("REPLAYED");
     if (retry.outcome === "IDEMPOTENCY_CONFLICT" || !retry.result.ok) {
       throw new Error("expected a successful REPLAYED result");
@@ -272,7 +295,7 @@ describe("T7 — atomicity of the event write and the idempotency record", () =>
     const key = clientIdempotencyKey("t7-key");
     const deps = makeDependencies();
 
-    const result = await transaction.issue(authenticated(AGENT), key, command, deps);
+    const result = await transaction.issue(authenticated(AGENT), key, command, deps, AUTHORITY_TIME);
     if (!isExecutedOk(result)) {
       throw new Error("expected this emission to succeed");
     }
@@ -317,7 +340,7 @@ describe("T8 — forced capability_id collision", () => {
       expiresAt: (snapshotAuthorityTime) => iso8601(new Date(Date.parse(snapshotAuthorityTime) + 5 * 60_000).toISOString()),
     };
 
-    const first = await transaction.issue(authenticated(AGENT), clientIdempotencyKey("t8-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps);
+    const first = await transaction.issue(authenticated(AGENT), clientIdempotencyKey("t8-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME);
     if (!isExecutedOk(first)) {
       throw new Error("expected the first emission to succeed");
     }
@@ -325,7 +348,7 @@ describe("T8 — forced capability_id collision", () => {
 
     const secondKey = clientIdempotencyKey("t8-key-b");
     const secondCommand: IssueCapabilityCommand = { action_id: requestB.payload.action_id, enforcement_point_id: EP };
-    const second = await transaction.issue(authenticated(AGENT), secondKey, secondCommand, deps);
+    const second = await transaction.issue(authenticated(AGENT), secondKey, secondCommand, deps, AUTHORITY_TIME);
     expect(second.outcome).toBe("EXECUTED");
     if (second.outcome !== "EXECUTED") {
       throw new Error("expected EXECUTED (a rejection, not a replay or conflict — different scope)");
@@ -339,7 +362,7 @@ describe("T8 — forced capability_id collision", () => {
     // A retry with the SAME scope+command REPLAYs the exact same failure,
     // including the same refused capability_id — never a fresh attempt,
     // never a different id.
-    const retry = await transaction.issue(authenticated(AGENT), secondKey, secondCommand, deps);
+    const retry = await transaction.issue(authenticated(AGENT), secondKey, secondCommand, deps, AUTHORITY_TIME);
     expect(retry.outcome).toBe("REPLAYED");
     if (retry.outcome !== "REPLAYED") {
       throw new Error("expected REPLAYED");
@@ -380,7 +403,7 @@ describe("replaceExecutedIdempotencyResult — pure correction of an already-rec
     const store = ingestAll([toDraft(root), toDraft(request)], sequentialClock).canonicalStore;
     const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
     const key = clientIdempotencyKey("correction-key");
-    const initial = issueCapabilityIdempotently(EMPTY_IDEMPOTENCY_STATE, store, authenticated(AGENT), key, command, makeDependencies());
+    const initial = issueCapabilityIdempotently(EMPTY_IDEMPOTENCY_STATE, store, authenticated(AGENT), key, command, makeDependencies(), AUTHORITY_TIME);
     if (initial.outcome !== "EXECUTED" || !initial.result.ok) {
       throw new Error("expected a genuine EXECUTED/ok:true record to correct");
     }
@@ -393,7 +416,7 @@ describe("replaceExecutedIdempotencyResult — pure correction of an already-rec
 
     const nextState = replaceExecutedIdempotencyResult(priorState, authenticated(AGENT), key, command, correctedResult);
 
-    const replayed = issueCapabilityIdempotently(nextState, [], authenticated(AGENT), key, command, makeDependencies());
+    const replayed = issueCapabilityIdempotently(nextState, [], authenticated(AGENT), key, command, makeDependencies(), AUTHORITY_TIME);
     expect(replayed.outcome).toBe("REPLAYED");
     if (replayed.outcome !== "REPLAYED") {
       throw new Error("expected REPLAYED");
@@ -442,7 +465,7 @@ describe("T9 — snapshot/sequence adjacency", () => {
     const transaction = new InMemoryCapabilityIssuanceTransaction(store);
     const deps = makeDependencies();
 
-    const result = await transaction.issue(authenticated(AGENT), clientIdempotencyKey("t9-key"), { action_id: request.payload.action_id, enforcement_point_id: EP }, deps);
+    const result = await transaction.issue(authenticated(AGENT), clientIdempotencyKey("t9-key"), { action_id: request.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME);
     if (!isExecutedOk(result)) {
       throw new Error("expected ok:true");
     }
@@ -467,8 +490,8 @@ describe("T9 — snapshot/sequence adjacency", () => {
     const deps = makeDependencies();
 
     const [resultA, resultB] = await Promise.all([
-      transaction.issue(authenticated(AGENT), clientIdempotencyKey("t9b-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps),
-      transaction.issue(authenticated(AGENT), clientIdempotencyKey("t9b-key-b"), { action_id: requestB.payload.action_id, enforcement_point_id: EP }, deps),
+      transaction.issue(authenticated(AGENT), clientIdempotencyKey("t9b-key-a"), { action_id: requestA.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
+      transaction.issue(authenticated(AGENT), clientIdempotencyKey("t9b-key-b"), { action_id: requestB.payload.action_id, enforcement_point_id: EP }, deps, AUTHORITY_TIME),
     ]);
     if (!isExecutedOk(resultA) || !isExecutedOk(resultB)) {
       throw new Error("expected both unrelated issuances to succeed");
@@ -541,17 +564,295 @@ describe("T11 — non-regression: issueCapabilityIdempotently's PR4B-2 propertie
     const key = clientIdempotencyKey("t11-key");
     const deps = makeDependencies();
 
-    const first = issueCapabilityIdempotently(EMPTY_IDEMPOTENCY_STATE, store, authenticated(AGENT), key, command, deps);
+    const first = issueCapabilityIdempotently(EMPTY_IDEMPOTENCY_STATE, store, authenticated(AGENT), key, command, deps, AUTHORITY_TIME);
     expect(first.outcome).toBe("EXECUTED");
     if (first.outcome === "IDEMPOTENCY_CONFLICT") {
       throw new Error("expected EXECUTED");
     }
 
-    const second = issueCapabilityIdempotently(first.nextState, store, authenticated(AGENT), key, command, deps);
+    const second = issueCapabilityIdempotently(first.nextState, store, authenticated(AGENT), key, command, deps, AUTHORITY_TIME);
     expect(second.outcome).toBe("REPLAYED");
     if (second.outcome === "IDEMPOTENCY_CONFLICT") {
       throw new Error("expected REPLAYED");
     }
     expect(second.result).toEqual(first.result);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T12 — PR4B-5: expiration under the real transactional boundary, with
+// zero events between the log's own last authority_time and the explicit
+// evaluation instant.
+// ---------------------------------------------------------------------------
+
+describe("T12 — InMemoryCapabilityIssuanceTransaction rejects issuance past expires_at even with zero events between the log's last authority_time and the explicit evaluation instant", () => {
+  it("EXECUTED with result.ok===false, no CAPABILITY_ISSUED written; a retry with the same key at a later authorityTime REPLAYs the same refusal", async () => {
+    const T1 = iso8601("2030-01-01T10:00:00.000Z");
+    const T2 = "2030-01-01T11:00:00.000Z"; // expires_at
+    const T3 = iso8601("2030-01-01T12:00:00.000Z"); // T1 < T2 < T3, first attempt
+    const T4 = iso8601("2030-01-01T13:00:00.000Z"); // T3 < T4, retry
+
+    const root = rootDelegation({
+      sequence: 1,
+      id: "d-t12",
+      grantor: THEO,
+      grantorType: "HUMAN_ROOT",
+      grantee: AGENT,
+      capabilities: [PURCHASE_ORDER_CREATE],
+      canDelegate: false,
+      amountThresholds: thresholds(100000, 100000),
+      expires: expiresAt(iso8601(T2)),
+      timing: { authorityTime: T1 },
+    });
+    const request = actionRequest({
+      sequence: 2,
+      id: "act-t12",
+      requester: AGENT,
+      delegationId: "d-t12",
+      parameters: nonMonetaryParameters(),
+      timing: { authorityTime: T1 },
+    });
+    if (!isEventType(request, "ACTION_REQUESTED")) {
+      throw new Error("fixture returned an unexpected event_type");
+    }
+    const store = await seededStoreAt([toDraft(root), toDraft(request)], T1);
+    const transaction = new InMemoryCapabilityIssuanceTransaction(store);
+    const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
+    const key = clientIdempotencyKey("t12-key");
+    const deps = makeDependencies();
+
+    // No event with authority_time > T1 exists anywhere in this store —
+    // the whole point: time (T1 -> T3) passed with zero new events.
+    const preStore = await store.getEvents();
+    expect(preStore).toHaveLength(2);
+    for (const event of preStore) {
+      expect(event.authority_time).toBe(T1);
+    }
+
+    const first = await transaction.issue(authenticated(AGENT), key, command, deps, T3);
+    expect(first.outcome).toBe("EXECUTED");
+    if (first.outcome !== "EXECUTED") {
+      throw new Error("expected EXECUTED");
+    }
+    expect(first.result.ok).toBe(false);
+    if (first.result.ok) {
+      throw new Error("expected ok:false — the delegation must be treated as expired at T3");
+    }
+    expect(first.result.reason).toBe("NOT_AUTHORIZED");
+
+    const afterFirst = await store.getEvents();
+    expect(afterFirst.filter((e) => e.event_type === "CAPABILITY_ISSUED")).toHaveLength(0);
+
+    // Retry, same scope, later real instant T4 — REPLAYED, never
+    // re-evaluated at T4, same refusal exactly.
+    const retry = await transaction.issue(authenticated(AGENT), key, command, deps, T4);
+    expect(retry.outcome).toBe("REPLAYED");
+    if (retry.outcome !== "REPLAYED") {
+      throw new Error("expected REPLAYED");
+    }
+    expect(retry.result).toEqual(first.result);
+
+    const finalStore = await store.getEvents();
+    expect(finalStore.filter((e) => e.event_type === "CAPABILITY_ISSUED")).toHaveLength(0);
+  });
+
+  it("the same scenario, evaluated at an explicit authorityTime strictly before expires_at, is accepted — authority_time/decision_sequence on the produced event are exact", async () => {
+    const T1 = iso8601("2030-01-01T10:00:00.000Z");
+    const T2 = "2030-01-01T11:00:00.000Z"; // expires_at
+    const T3_BEFORE = iso8601("2030-01-01T10:30:00.000Z"); // T1 < T3_BEFORE < T2
+
+    const root = rootDelegation({
+      sequence: 1,
+      id: "d-t12b",
+      grantor: THEO,
+      grantorType: "HUMAN_ROOT",
+      grantee: AGENT,
+      capabilities: [PURCHASE_ORDER_CREATE],
+      canDelegate: false,
+      amountThresholds: thresholds(100000, 100000),
+      expires: expiresAt(iso8601(T2)),
+      timing: { authorityTime: T1 },
+    });
+    const request = actionRequest({
+      sequence: 2,
+      id: "act-t12b",
+      requester: AGENT,
+      delegationId: "d-t12b",
+      parameters: nonMonetaryParameters(),
+      timing: { authorityTime: T1 },
+    });
+    if (!isEventType(request, "ACTION_REQUESTED")) {
+      throw new Error("fixture returned an unexpected event_type");
+    }
+    const store = await seededStoreAt([toDraft(root), toDraft(request)], T1);
+    const transaction = new InMemoryCapabilityIssuanceTransaction(store);
+    const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
+    const deps = makeDependencies();
+
+    const result = await transaction.issue(authenticated(AGENT), clientIdempotencyKey("t12b-key"), command, deps, T3_BEFORE);
+    if (!isExecutedOk(result)) {
+      throw new Error("expected the issuance to succeed before expiration");
+    }
+    expect(result.result.capability.decision_sequence).toBe(2);
+
+    const finalStore = await store.getEvents();
+    const issued = finalStore.find((e) => e.event_type === "CAPABILITY_ISSUED");
+    if (issued === undefined) {
+      throw new Error("expected a canonical CAPABILITY_ISSUED event");
+    }
+    expect(issued.authority_time).toBe(T3_BEFORE);
+    expect(issued.authority_time).not.toBe(T1);
+    if (issued.event_type !== "CAPABILITY_ISSUED") {
+      throw new Error("unreachable");
+    }
+    expect(issued.payload.decision_sequence).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T13/T14 — PR4B-5A: the hidden InMemoryEventStore.lastTrustedTimeMs
+// high-water mark, and its interaction with idempotence.
+// ---------------------------------------------------------------------------
+
+describe("T13 — PR4B-5A: a rejected draft's clock reading must not become a hidden high-water mark that silently clamps a later, otherwise-valid explicit authorityTime", () => {
+  it("EXECUTED / ok:false / STALE_AUTHORITY_TIME; no CAPABILITY_ISSUED is ever written with T4 silently clamped in", async () => {
+    const T1 = iso8601("2030-01-01T10:00:00.000Z");
+    const T3 = iso8601("2030-01-01T11:00:00.000Z"); // T1 < T3 < T4
+    const T4 = iso8601("2030-01-01T12:00:00.000Z");
+
+    const root = rootDelegation({ sequence: 1, id: "d-t13", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const request = actionRequest({ sequence: 2, id: "act-t13", requester: AGENT, delegationId: "d-t13", parameters: monetaryParameters(EUR(100)) });
+    if (!isEventType(request, "ACTION_REQUESTED")) {
+      throw new Error("fixture returned an unexpected event_type");
+    }
+    const store = await seededStoreAt([toDraft(root), toDraft(request)], T1);
+
+    // Advance the store's own PRIVATE lastTrustedTimeMs to T4 by having it
+    // process — and REJECT — an unrelated draft whose supplied instant is
+    // T4. `d-t13` has canDelegate:false, so any SUBDELEGATION_CREATED
+    // naming it as parent is rejected (UNAUTHORIZED_SUBDELEGATION) — never
+    // reaching the canonical store. `explicitAuthorityTime` here plays
+    // exactly the role a store's own configured IngestionClock would play
+    // for this one draft — this is the real public append() API, not a
+    // fabricated clock object.
+    const rejectedDraft = toDraft(
+      subDelegation({ sequence: 3, id: "d-t13-rejected", parentId: "d-t13", grantor: AGENT, grantee: AGENT_B, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false }),
+    );
+    const rejectionResult = await store.append([rejectedDraft], T4);
+    expect(rejectionResult.outcomes).toEqual([{ accepted: false, reasonCode: "UNAUTHORIZED_SUBDELEGATION" }]);
+
+    // The canonical maximum genuinely stays at T1 — the rejected draft
+    // never entered the canonical store.
+    const preIssueStore = await store.getEvents();
+    expect(preIssueStore).toHaveLength(2);
+    for (const event of preIssueStore) {
+      expect(event.authority_time).toBe(T1);
+    }
+
+    const transaction = new InMemoryCapabilityIssuanceTransaction(store);
+    const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
+    const key = clientIdempotencyKey("t13-key");
+    const nextCapabilityId = vi.fn(() => capabilityId("cap-t13-should-never-be-generated"));
+    const expiresAtSpy = vi.fn((authorityTime: string) => iso8601(new Date(Date.parse(authorityTime) + 5 * 60_000).toISOString()));
+    const deps: IssueCapabilityDependencies = { nextCapabilityId, expiresAt: expiresAtSpy };
+
+    const result = await transaction.issue(authenticated(AGENT), key, command, deps, T3);
+
+    // SECURE, EXPECTED behavior once fixed: EXECUTED with an explicit
+    // temporal-consistency refusal, never a silent clamp to T4. ACTUAL,
+    // CURRENT behavior: store.append([draft], T3) clamps T3 up to T4 via
+    // advanceTrustedTime(this.lastTrustedTimeMs, T3) and silently writes
+    // authority_time = T4 — this assertion is the SECURE expectation,
+    // expected to fail until PR4B-5A's fix lands.
+    expect(result.outcome).toBe("EXECUTED");
+    if (result.outcome !== "EXECUTED") {
+      throw new Error("expected EXECUTED");
+    }
+    expect(result.result.ok).toBe(false);
+    expect(result.result).toEqual({ ok: false, reason: "STALE_AUTHORITY_TIME" });
+    // Unlike the pure-kernel STALE_AUTHORITY_TIME scenario (which never
+    // reaches `dependencies`), THIS hidden-high-water-mark case is, by
+    // construction, invisible to `issueCapability`: from the kernel's own
+    // view of the canonical store (max = T1), T3 is NOT stale — the
+    // decision legitimately proceeds and calls both dependencies, exactly
+    // as any other successful decision would. Only the persistence layer
+    // (InMemoryEventStore.append, which alone knows about
+    // lastTrustedTimeMs) detects and refuses the write afterwards. Both
+    // dependencies are therefore expected to have been called exactly
+    // once — what must never happen is a canonical event actually being
+    // written (asserted below).
+    expect(nextCapabilityId).toHaveBeenCalledTimes(1);
+    expect(expiresAtSpy).toHaveBeenCalledTimes(1);
+
+    const finalStore = await store.getEvents();
+    expect(finalStore.filter((e) => e.event_type === "CAPABILITY_ISSUED")).toHaveLength(0);
+    // No canonical event of ANY kind was added by this issue() call —
+    // still exactly the two seeded events, still both at T1.
+    expect(finalStore).toHaveLength(2);
+  });
+});
+
+describe("T14 — PR4B-5A: idempotence of a STALE_AUTHORITY_TIME refusal", () => {
+  it("retry with the same key at a later, individually-valid authorityTime REPLAYs the exact stale refusal, without re-evaluating or generating a capability; a NEW key with that same later instant gets a real, fresh decision", async () => {
+    const T1 = iso8601("2030-01-01T10:00:00.000Z");
+    const T3 = iso8601("2030-01-01T11:00:00.000Z"); // stale first attempt
+    const T4 = iso8601("2030-01-01T12:00:00.000Z"); // the hidden high-water mark
+    const T5 = iso8601("2030-01-01T13:00:00.000Z"); // T5 > T4 — individually coherent
+
+    const root = rootDelegation({ sequence: 1, id: "d-t14", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const request = actionRequest({ sequence: 2, id: "act-t14", requester: AGENT, delegationId: "d-t14", parameters: monetaryParameters(EUR(100)) });
+    if (!isEventType(request, "ACTION_REQUESTED")) {
+      throw new Error("fixture returned an unexpected event_type");
+    }
+    const store = await seededStoreAt([toDraft(root), toDraft(request)], T1);
+
+    const rejectedDraft = toDraft(
+      subDelegation({ sequence: 3, id: "d-t14-rejected", parentId: "d-t14", grantor: AGENT, grantee: AGENT_B, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false }),
+    );
+    await store.append([rejectedDraft], T4);
+
+    const transaction = new InMemoryCapabilityIssuanceTransaction(store);
+    const command: IssueCapabilityCommand = { action_id: request.payload.action_id, enforcement_point_id: EP };
+    const key = clientIdempotencyKey("t14-key");
+    const deps = makeDependencies();
+
+    const first = await transaction.issue(authenticated(AGENT), key, command, deps, T3);
+    if (first.outcome !== "EXECUTED") {
+      throw new Error("expected EXECUTED (a stale refusal, not a replay or conflict)");
+    }
+    expect(first.result).toEqual({ ok: false, reason: "STALE_AUTHORITY_TIME" });
+
+    // Retry: same key, same command, a DIFFERENT (individually coherent,
+    // T5 > T4) authorityTime. Must REPLAY the exact original refusal —
+    // never re-evaluate, never generate a capability, never become
+    // IDEMPOTENCY_CONFLICT merely because authorityTime differs.
+    const nextCapabilityIdRetry = vi.fn(() => capabilityId("cap-t14-should-never-be-generated"));
+    const expiresAtRetry = vi.fn((authorityTime: string) => iso8601(new Date(Date.parse(authorityTime) + 5 * 60_000).toISOString()));
+    const retryDeps: IssueCapabilityDependencies = { nextCapabilityId: nextCapabilityIdRetry, expiresAt: expiresAtRetry };
+
+    const retry = await transaction.issue(authenticated(AGENT), key, command, retryDeps, T5);
+    expect(retry.outcome).toBe("REPLAYED");
+    if (retry.outcome !== "REPLAYED") {
+      throw new Error("expected REPLAYED");
+    }
+    expect(retry.result).toEqual(first.result);
+    expect(nextCapabilityIdRetry).not.toHaveBeenCalled();
+    expect(expiresAtRetry).not.toHaveBeenCalled();
+
+    const afterRetryStore = await store.getEvents();
+    expect(afterRetryStore.filter((e) => e.event_type === "CAPABILITY_ISSUED")).toHaveLength(0);
+
+    // A NEW clientIdempotencyKey at that same coherent T5 gets a genuine,
+    // fresh decision — never blocked by the first key's stale history.
+    const key2 = clientIdempotencyKey("t14-key-2");
+    const second = await transaction.issue(authenticated(AGENT), key2, command, deps, T5);
+    expect(second.outcome).toBe("EXECUTED");
+    if (second.outcome !== "EXECUTED") {
+      throw new Error("expected EXECUTED");
+    }
+    expect(second.result.ok).toBe(true);
+
+    const finalStore = await store.getEvents();
+    expect(finalStore.filter((e) => e.event_type === "CAPABILITY_ISSUED")).toHaveLength(1);
   });
 });

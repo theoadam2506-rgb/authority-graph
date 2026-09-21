@@ -65,8 +65,8 @@
  *     (e.g. a broken/forced generator) is rejected fail-closed, and no
  *     success record is ever kept for a rejected emission.
  */
-import type { AuthorityEvent, CapabilityIssuedPayload, DraftAuthorityEvent } from "../domain/events.js";
-import { CURRENT_SCHEMA_VERSION, eventId, type ClientIdempotencyKey } from "../domain/types.js";
+import type { CapabilityIssuedPayload, DraftAuthorityEvent } from "../domain/events.js";
+import { CURRENT_SCHEMA_VERSION, eventId, type ClientIdempotencyKey, type Iso8601 } from "../domain/types.js";
 import type { AuthenticatedPrincipal } from "../domain/authenticatedPrincipal.js";
 import type { IssueCapabilityCommand } from "../domain/capabilityCommand.js";
 import type { IssueCapabilityDependencies, IssueCapabilityResult, IssuedCapabilityData } from "../engine/issueCapability.js";
@@ -76,7 +76,6 @@ import {
   replaceExecutedIdempotencyResult,
   type IdempotencyState,
 } from "../engine/issueCapabilityIdempotency.js";
-import { reconstructAuthorityTimeAt } from "../engine/grantValidation.js";
 import { InMemoryEventStore } from "./eventStore.js";
 
 export type CapabilityIssuanceOutcome =
@@ -92,11 +91,20 @@ export type CapabilityIssuanceOutcome =
  * not yet serve.
  */
 export interface CapabilityIssuanceTransaction {
+  /**
+   * PR4B-5 — `authorityTime` is the caller-supplied trusted instant this
+   * call's decision (on a cache miss) is evaluated at — see
+   * `issueCapability`'s own docstring. On a cache hit (REPLAYED), it is
+   * NEVER consulted: the persisted result from the ORIGINAL execution is
+   * returned as-is, with no re-evaluation at this new instant (see
+   * `issueCapabilityIdempotently`'s own docstring for why).
+   */
   issue(
     authenticatedPrincipal: AuthenticatedPrincipal,
     clientIdempotencyKey: ClientIdempotencyKey,
     command: IssueCapabilityCommand,
     dependencies: IssueCapabilityDependencies,
+    authorityTime: Iso8601,
   ): Promise<CapabilityIssuanceOutcome>;
 }
 
@@ -111,18 +119,27 @@ export interface CapabilityIssuanceTransaction {
  * two different `event_id`s, so the capability_id check is the one that
  * actually fires.
  *
- * `occurred_at` reuses `reconstructAuthorityTimeAt` — the same already-pure,
- * already-exported helper `issueCapability` itself uses to compute
- * `expires_at` — rather than any live clock read. `principal_id` is set to
- * the authenticated requester: still the documented vestige PR4B-1 already
- * established (CapabilityIssuedPayload's own docstring — no graph
- * participant "performs" this act), just a less arbitrary placeholder than
- * a magic constant borrowed from test fixtures.
+ * PR4B-5 — `occurred_at` is now set to exactly the same explicit
+ * `authorityTime` this event's decision was evaluated at (the same value
+ * `dependencies.expiresAt` and `validateChain` both received) — never a
+ * value reconstructed from the store. `occurred_at`'s documented meaning
+ * across the codebase (EVENT_MODEL.md: "quand la source prétend que ceci
+ * s'est produit") is a claim made by whoever authored the event; for a
+ * CAPABILITY_ISSUED, the author is this exact transactional code,
+ * synthesizing the event at the same instant it just decided against — so
+ * declaring that same instant here is the honest, minimal reading of that
+ * existing contract, not a new one. `snapshot`/`reconstructAuthorityTimeAt`
+ * are no longer used here (removed with PR4B-5 — reconstructing from the
+ * log was the very bug this PR fixes; see the design report). `principal_id`
+ * is set to the authenticated requester: still the documented vestige
+ * PR4B-1 already established (CapabilityIssuedPayload's own docstring — no
+ * graph participant "performs" this act), just a less arbitrary placeholder
+ * than a magic constant borrowed from test fixtures.
  */
 /** Exported (PR4B-3B) so `postgresCapabilityIssuanceTransaction.ts` builds the exact same draft shape — nothing about this construction is InMemory-specific. */
 export function buildCapabilityIssuedDraft(
   authenticatedPrincipal: AuthenticatedPrincipal,
-  snapshot: readonly AuthorityEvent[],
+  authorityTime: Iso8601,
   data: IssuedCapabilityData,
 ): DraftAuthorityEvent {
   const payload: CapabilityIssuedPayload = {
@@ -137,7 +154,7 @@ export function buildCapabilityIssuedDraft(
   return {
     event_id: eventId(`capability-issued:${data.capability_id}:${data.action_id}`),
     schema_version: CURRENT_SCHEMA_VERSION,
-    occurred_at: reconstructAuthorityTimeAt(snapshot, data.decision_sequence),
+    occurred_at: authorityTime,
     principal_id: authenticatedPrincipal.principalId,
     event_type: "CAPABILITY_ISSUED",
     payload,
@@ -171,12 +188,13 @@ export class InMemoryCapabilityIssuanceTransaction implements CapabilityIssuance
     clientIdempotencyKey: ClientIdempotencyKey,
     command: IssueCapabilityCommand,
     dependencies: IssueCapabilityDependencies,
+    authorityTime: Iso8601,
   ): Promise<CapabilityIssuanceOutcome> {
     // The mutex: THIS call's critical section is chained onto the queue —
     // it cannot start until every previously-queued call's critical
     // section (including all of its own internal awaits) has settled.
     const runThisCall = this.queue.then(() =>
-      this.runCriticalSection(authenticatedPrincipal, clientIdempotencyKey, command, dependencies),
+      this.runCriticalSection(authenticatedPrincipal, clientIdempotencyKey, command, dependencies, authorityTime),
     );
     // Advance the queue regardless of this call's own success/failure, so
     // a rejected call never leaves the mutex permanently stuck.
@@ -197,6 +215,7 @@ export class InMemoryCapabilityIssuanceTransaction implements CapabilityIssuance
     clientIdempotencyKey: ClientIdempotencyKey,
     command: IssueCapabilityCommand,
     dependencies: IssueCapabilityDependencies,
+    authorityTime: Iso8601,
   ): Promise<CapabilityIssuanceOutcome> {
     // The snapshot this whole turn decides against and writes into — read
     // once, at the top of this exclusive turn. Nothing else can mutate
@@ -205,7 +224,7 @@ export class InMemoryCapabilityIssuanceTransaction implements CapabilityIssuance
     // never separated by any concurrent write.
     const snapshot = await this.store.getEvents();
 
-    const idempotent = issueCapabilityIdempotently(this.idempotencyState, snapshot, authenticatedPrincipal, clientIdempotencyKey, command, dependencies);
+    const idempotent = issueCapabilityIdempotently(this.idempotencyState, snapshot, authenticatedPrincipal, clientIdempotencyKey, command, dependencies, authorityTime);
 
     if (idempotent.outcome === "IDEMPOTENCY_CONFLICT") {
       this.idempotencyState = idempotent.nextState;
@@ -232,8 +251,15 @@ export class InMemoryCapabilityIssuanceTransaction implements CapabilityIssuance
     // it is corrected below before ever being committed to
     // `this.idempotencyState` — a success record is never observable
     // without its matching canonical event (T7).
-    const draft = buildCapabilityIssuedDraft(authenticatedPrincipal, snapshot, idempotent.result.capability);
-    const appended = await this.store.append([draft]);
+    const draft = buildCapabilityIssuedDraft(authenticatedPrincipal, authorityTime, idempotent.result.capability);
+    // PR4B-5 — `explicitAuthorityTime` bypasses the store's own configured
+    // IngestionClock for this one draft: the trusted instant for a
+    // CAPABILITY_ISSUED event is `authorityTime`, already decided above,
+    // never whatever this store's clock would otherwise compute (see
+    // InMemoryEventStore.append()'s own docstring). The store still owns
+    // sequence assignment, I8 dedup, and the business-id/capability_id
+    // collision check exactly as before.
+    const appended = await this.store.append([draft], authorityTime);
     const outcome = appended.outcomes[0];
 
     if (outcome !== undefined && outcome.accepted) {
@@ -249,11 +275,20 @@ export class InMemoryCapabilityIssuanceTransaction implements CapabilityIssuance
     // `replaceExecutedIdempotencyResult` owns both, and fails closed on
     // its own if the record it expects to correct is not the one it
     // finds (see its own docstring).
-    const failureResult: IssueCapabilityResult = {
-      ok: false,
-      reason: "CAPABILITY_ID_COLLISION",
-      capability_id: idempotent.result.capability.capability_id,
-    };
+    //
+    // PR4B-5A — `STALE_AUTHORITY_TIME` (InMemoryEventStore.append()'s own
+    // hidden-high-water-mark guard) is a DIFFERENT rejection from a
+    // capability_id collision — it carries no refused business
+    // identifier, and reporting it as CAPABILITY_ID_COLLISION would
+    // wrongly imply a generator/collision problem when the real one is a
+    // temporal-consistency precondition. Every other admission rejection
+    // for a freshly-built CAPABILITY_ISSUED draft remains, as before,
+    // assumed to be the one other modeled case (a forced/broken
+    // capability_id generator).
+    const failureResult: IssueCapabilityResult =
+      outcome !== undefined && !outcome.accepted && outcome.reasonCode === "STALE_AUTHORITY_TIME"
+        ? { ok: false, reason: "STALE_AUTHORITY_TIME" }
+        : { ok: false, reason: "CAPABILITY_ID_COLLISION", capability_id: idempotent.result.capability.capability_id };
     this.idempotencyState = replaceExecutedIdempotencyResult(idempotent.nextState, authenticatedPrincipal, clientIdempotencyKey, command, failureResult);
     return { outcome: "EXECUTED", result: failureResult };
   }

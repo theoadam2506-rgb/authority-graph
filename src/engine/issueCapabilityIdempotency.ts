@@ -26,7 +26,7 @@
  * `{nextState}` convention in ingest.ts) — nothing here mutates its input.
  */
 import type { CanonicalStore } from "../domain/events.js";
-import type { ClientIdempotencyKey } from "../domain/types.js";
+import type { ClientIdempotencyKey, Iso8601 } from "../domain/types.js";
 import type { IssueCapabilityCommand, ScopedIdempotencyKey } from "../domain/capabilityCommand.js";
 import type { AuthenticatedPrincipal } from "../domain/authenticatedPrincipal.js";
 import { issueCapability, type IssueCapabilityDependencies, type IssueCapabilityResult } from "./issueCapability.js";
@@ -82,6 +82,20 @@ export type IssueCapabilityIdempotentResult =
  * is not a parameter at all, since this function only ever handles
  * `"ISSUE_CAPABILITY"` — hard-coding it removes one more field a caller
  * could otherwise get wrong.
+ *
+ * PR4B-5 — `authorityTime` is used ONLY on the EXECUTED (cache-miss) path,
+ * passed straight through to `issueCapability`. On a REPLAYED cache-hit
+ * (case A above), it is deliberately never consulted: the first execution
+ * under a given scope fixes the decision for that scope, permanently — a
+ * retry that arrives at a later real instant must still see exactly the
+ * result the first call produced, never a re-evaluation against the
+ * retry's own later authorityTime. This is intentional, not an oversight:
+ * a client retrying after a lost response is asking "what was the answer
+ * to MY attempt", not "decide this again, now". A caller that genuinely
+ * wants a fresh decision at a new instant must use a new
+ * `clientIdempotencyKey` — `authorityTime` is deliberately NOT part of
+ * `commandsEqual`/the scope key, precisely so that varying it alone can
+ * never turn a retry into an `IDEMPOTENCY_CONFLICT`.
  */
 export function issueCapabilityIdempotently(
   state: IdempotencyState,
@@ -90,6 +104,7 @@ export function issueCapabilityIdempotently(
   clientIdempotencyKey: ClientIdempotencyKey,
   command: IssueCapabilityCommand,
   dependencies: IssueCapabilityDependencies,
+  authorityTime: Iso8601,
 ): IssueCapabilityIdempotentResult {
   const scope: ScopedIdempotencyKey = {
     authenticated_requester_id: authenticatedPrincipal.principalId,
@@ -100,12 +115,14 @@ export function issueCapabilityIdempotently(
   const existing = state.get(key);
   if (existing !== undefined) {
     if (commandsEqual(existing.command, command)) {
+      // REPLAYED: the persisted result from the ORIGINAL execution, as-is.
+      // No re-evaluation at this call's own authorityTime — see docstring.
       return { outcome: "REPLAYED", result: existing.result, nextState: state };
     }
     return { outcome: "IDEMPOTENCY_CONFLICT", nextState: state };
   }
 
-  const result = issueCapability(store, authenticatedPrincipal, command, dependencies);
+  const result = issueCapability(store, authenticatedPrincipal, command, dependencies, authorityTime);
   const nextState = new Map(state);
   nextState.set(key, { command, result });
   return { outcome: "EXECUTED", result, nextState };
