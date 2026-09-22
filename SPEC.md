@@ -1,117 +1,117 @@
-# SPEC — authority-graph
+# SPEC: authority-graph
 
-## Le problème
+## The problem
 
-Un agent IA exécute une action. Un humain doit pouvoir répondre, des mois plus tard,
-à la question : *quelle autorité couvrait exactement cette action, à l'instant T,
-et pourquoi ?* Aujourd'hui cette autorité est dispersée entre des logs applicatifs,
-des messages Slack, des tickets d'approbation et la mémoire des gens. Rien n'est
-rejouable, rien n'est vérifiable, et personne ne peut prouver après coup qu'une
-délégation n'a pas été étendue, backdatée, réutilisée hors de son cadre, ou émise
-par quelqu'un qui n'en avait pas le droit. authority-graph reconstruit cette chaîne
-d'autorité de façon déterministe à partir d'un flux d'événements append-only :
-ancre humaine racine → délégation → sous-délégation → approbation ponctuelle →
-action de l'agent. Le moteur ne juge jamais sur l'intention ou le contenu de
-l'action elle-même : il vérifie que la chaîne d'autorité formelle, valide à la
-séquence d'ingestion considérée, couvre exactement la capacité demandée — et que
-chaque maillon de cette chaîne a été émis par un principal qui avait effectivement
-le droit de l'émettre. Toute incertitude structurelle doit bloquer, jamais
-autoriser par défaut.
+An AI agent executes an action. A human must be able to answer, months later,
+the question: *what authority exactly covered this action, at instant T,
+and why?* Today this authority is scattered across application logs,
+Slack messages, approval tickets, and people's memory. Nothing is
+replayable, nothing is verifiable, and no one can prove after the fact that a
+delegation was not extended, backdated, reused outside its scope, or issued
+by someone who did not have the right to issue it. authority-graph reconstructs this
+authority chain deterministically from an append-only event stream:
+root human anchor to delegation to subdelegation to one-time approval to
+the agent's action. The engine never judges the intent or the content of
+the action itself: it verifies that the formal authority chain, valid at
+the ingestion sequence under consideration, covers exactly the requested capability, and that
+each link of that chain was issued by a principal who actually had
+the right to issue it. Any structural uncertainty must block, never
+authorize by default.
 
-## Les deux opérations du moteur
+## The engine's two operations
 
-Le moteur expose exactement deux opérations. Il n'existe pas d'entrée unique
-figée sur un `ACTION_REQUESTED` : une version antérieure de cette spec en
-décrivait une seule ; l'audit adverse a montré que cela rendait le moteur
-structurellement dépendant d'un événement historique pour répondre à une
-question sur l'état courant de l'autorité, et confondait deux questions de
-nature différente. Les quatre sorties de la section suivante sont produites
-par l'une ou l'autre de ces deux opérations, jamais par un troisième chemin.
+The engine exposes exactly two operations. There is no single entry point
+fixed on an `ACTION_REQUESTED`: an earlier version of this spec
+described only one; the adversarial audit showed that this made the engine
+structurally dependent on a historical event to answer a
+question about the current state of authority, and conflated two questions of
+a different nature. The four outputs in the following section are produced
+by one or the other of these two operations, never by a third path.
 
-### `authorityAt(events, query, { atSequence, authorityTime })` — question prospective
+### `authorityAt(events, query, { atSequence, authorityTime })`: prospective question
 
-Répond à : *cette action serait-elle autorisée, dans cet état ?* La requête est
+Answers: *would this action be authorized, in this state?* The request is
 
 ```
 { agentId, principalId, capability, parameters }
 ```
 
-Le troisième paramètre n'est plus un simple `atSequence` (correction PROMPT
-3b) : c'est un couple explicite `{ atSequence, authorityTime }`.
+The third parameter is no longer a simple `atSequence` (PROMPT
+3b correction): it is an explicit pair `{ atSequence, authorityTime }`.
 
-- `atSequence` répond à « quels événements sont visibles » (I4, ordre causal).
-- `authorityTime` répond à « une `expires_at` donnée est-elle déjà passée »
-  (I4, horloge). C'est l'horloge de confiance **au moment de l'appel**,
-  fournie explicitement par l'appelant — jamais dérivée d'`occurred_at`
-  (déclaratif, non fiable par construction : le dériver en horloge
-  décisionnelle, même « seulement pour le déterminisme des tests »,
-  réintroduit exactement le risque de backdating qu'I4 existe pour
-  empêcher), et jamais lue depuis une horloge murale en direct (`Date.now()`
-  est interdit dans tout le moteur, qui reste une fonction pure). Ce n'est
-  pas non plus `max(authority_time des événements visibles)` : le temps qui
-  passe ne produit pas nécessairement d'événement, et sans nouvel événement
-  pendant trois heures, cette dérivation ferait paraître valide pour
-  toujours une délégation expirée depuis trois heures. En production, la
-  couche d'admission fournit `authorityTime` à partir de sa propre horloge
-  de confiance ; dans les tests, des valeurs fixes sont injectées.
+- `atSequence` answers "which events are visible" (I4, causal order).
+- `authorityTime` answers "is a given `expires_at` already past"
+  (I4, clock). This is the trusted clock **at the moment of the call**,
+  supplied explicitly by the caller. It is never derived from `occurred_at`
+  (declarative, untrustworthy by construction: deriving it into a
+  decisional clock, even "only for test determinism,"
+  reintroduces exactly the backdating risk that I4 exists to
+  prevent), and it is never read from a live wall clock (`Date.now()`
+  is forbidden throughout the engine, which remains a pure function). It is also
+  not `max(authority_time of the visible events)`: time
+  passing does not necessarily produce an event, and without a new event
+  for three hours, this derivation would make a delegation that expired three hours
+  ago look valid forever. In production, the
+  admission layer supplies `authorityTime` from its own trusted
+  clock. In tests, fixed values are injected.
 
-- `agentId` : le principal qui exercerait la capacité — le délégataire évalué.
-- `principalId` : le `HUMAN_ROOT` que l'appelant attend comme responsable de
-  cette autorité. `authorityAt` ne répond pas seulement « `agentId` est-il
-  autorisé par *un* humain quelconque », mais « `agentId` est-il autorisé,
-  spécifiquement sous l'autorité de `principalId` ». Une chaîne par ailleurs
-  entièrement valide mais enracinée chez un `HUMAN_ROOT` *différent* de celui
-  asserté ici est `DENIED` pour cette paire précise (preuve positive que cette
-  paire n'a pas autorité) — jamais acceptée sous le mauvais humain, et jamais
-  `UNKNOWN` non plus.
+- `agentId`: the principal who would exercise the capability, the evaluated delegatee.
+- `principalId`: the `HUMAN_ROOT` that the caller expects to be responsible for
+  this authority. `authorityAt` does not answer only "is `agentId`
+  authorized by *some* human," but "is `agentId` authorized,
+  specifically under the authority of `principalId`." A chain that is otherwise
+  entirely valid but rooted in a `HUMAN_ROOT` *different* from the one
+  asserted here is `DENIED` for this specific pair (positive proof that this
+  pair does not have authority), never accepted under the wrong human, and never
+  `UNKNOWN` either.
 
-`authorityAt` **ne requiert et ne lit jamais un `ACTION_REQUESTED`
-préexistant** : le moteur ne doit pas être structurellement dépendant d'un
-événement historique pour répondre à une question sur l'état de l'autorité à
-un instant donné. Conséquence directe pour la bande d'approbation : une
-`APPROVAL_GRANTED` valide et **non consommée**, dont l'empreinte (I15)
-correspond exactement à `(capability, parameters)` de la requête, suffit à
-produire `AUTHORIZED`. Un `APPROVAL_DENIED`, à lui seul, **ne peut jamais**
-faire basculer une question prospective en `DENIED` : un refus vise une
-demande passée précise, identifiée par son `approval_id` (voir « Portée d'un
-refus » ci-dessous) — il n'a aucun pouvoir sur une question générale et
-non ancrée à cette demande. Seule une approbation *consommée* (I16) produit
-`DENIED` pour une question prospective portant sur la même empreinte ; en
-l'absence de toute approbation, valide ou non, la réponse est
-`REQUIRES_APPROVAL` — jamais `DENIED` sur la seule foi d'un refus passé et
-non lié.
+`authorityAt` **never requires and never reads a preexisting
+`ACTION_REQUESTED`**: the engine must not be structurally dependent on a
+historical event to answer a question about the state of authority at
+a given instant. Direct consequence for the approval band: a
+valid and **unconsumed** `APPROVAL_GRANTED`, whose fingerprint (I15)
+corresponds exactly to `(capability, parameters)` of the request, is sufficient to
+produce `AUTHORIZED`. An `APPROVAL_DENIED`, on its own, **can never**
+turn a prospective question into `DENIED`: a denial targets a specific past
+request, identified by its `approval_id` (see "Scope of a
+denial" below). It has no power over a general question that is
+not anchored to that request. Only a *consumed* approval (I16) produces
+`DENIED` for a prospective question bearing on the same fingerprint. In
+the absence of any approval, valid or not, the answer is
+`REQUIRES_APPROVAL`, never `DENIED` on the sole strength of an unrelated past
+denial.
 
-### `explainAction(events, { actionId }, { atSequence, authorityTime })` — question historique
+### `explainAction(events, { actionId }, { atSequence, authorityTime })`: historical question
 
-Répond à : *que s'est-il passé pour cette action précise, et pourquoi ?*
-Retrouve l'`ACTION_REQUESTED` immuable référencé par `actionId` — son
-`agentId` (`requesting_principal_id`), sa capacité et ses paramètres, donc son
-empreinte canonique (I15), ne changent jamais après coup — puis appelle la
-même évaluation qu'`authorityAt`, avec deux différences :
+Answers: *what happened for this specific action, and why?*
+Retrieves the immutable `ACTION_REQUESTED` referenced by `actionId`. Its
+`agentId` (`requesting_principal_id`), its capability, and its parameters, and therefore its
+canonical fingerprint (I15), never change afterward. It then calls the
+same evaluation as `authorityAt`, with two differences:
 
-- l'historique propre de **cette** action (sa propre `APPROVAL_REQUESTED` et
-  la décision qui la concerne, le cas échéant) est la source prioritaire pour
-  expliquer ce qui lui est arrivé, y compris un refus qui la vise directement
-  — alors qu'`authorityAt` ne peut jamais tenir compte d'un refus, faute
-  d'action à laquelle le rattacher ;
-- si une `ACTION_EXECUTED` existe pour cet `actionId`, l'autorité est *aussi*
-  résolue à son `decision_sequence` (« était-ce autorisé au moment de la
-  décision ? »), et l'empreinte réellement exécutée (`action_fingerprint`) est
-  comparée à l'empreinte immuable de la requête (I15) : toute divergence est
-  `DENIED` à ce point de décision, quoi que dise par ailleurs l'état courant.
+- **this** action's own history (its own `APPROVAL_REQUESTED` and
+  the decision concerning it, if any) is the priority source for
+  explaining what happened to it, including a denial that targets it directly,
+  whereas `authorityAt` can never take a denial into account, for lack
+  of an action to attach it to;
+- if an `ACTION_EXECUTED` exists for this `actionId`, authority is *also*
+  resolved at its `decision_sequence` ("was this authorized at the moment of the
+  decision?"), and the fingerprint actually executed (`action_fingerprint`) is
+  compared to the immutable fingerprint of the request (I15). Any divergence is
+  `DENIED` at that decision point, regardless of what the current state otherwise says.
 
-`explainAction` **n'utilise jamais l'heure courante**. Le couple `{
-atSequence, authorityTime }` de la requête n'anchore que `currentAuthority` ;
-l'autorité au `decision_sequence` de l'exécution est évaluée avec une horloge
-**reconstruite**, jamais lue en direct : le plus grand `authority_time` parmi
-les événements visibles à ce `decision_sequence` — chacun de ces
-`authority_time` ayant lui-même déjà été assigné à l'ingestion par la même
-horloge de confiance, jamais par `occurred_at`. Reconstruire ainsi un point
-**passé et figé** est légitime (il n'y a pas de risque de « temps passé sans
-événement » pour un instant déjà entièrement journalisé) là où ce serait
-insuffisant pour représenter *maintenant* dans une requête `authorityAt`.
+`explainAction` **never uses the current time**. The `{
+atSequence, authorityTime }` pair of the request only anchors `currentAuthority`.
+Authority at the `decision_sequence` of the execution is evaluated with a **reconstructed**
+clock, never read live: the greatest `authority_time` among
+the events visible at that `decision_sequence`, each of these
+`authority_time` values having itself already been assigned at ingestion by the same
+trusted clock, never by `occurred_at`. Reconstructing in this way a
+**past and fixed** point is legitimate (there is no risk of "time passing without
+an event" for an instant already fully logged), whereas this would be
+insufficient to represent *now* in an `authorityAt` request.
 
-`explainAction` produit donc une sortie composite, par exemple :
+`explainAction` therefore produces a composite output, for example:
 
 ```
 ACTION_EXECUTED at sequence 152
@@ -120,842 +120,840 @@ approval consumed by execution 152
 current authority at sequence 190: DENIED
 ```
 
-Une exécution historiquement autorisée le reste pour toujours à son
-`decision_sequence` — I3 interdit de réécrire cette conclusion — même quand
-`currentAuthority` (l'autorité pour la même empreinte, réévaluée à la
-`sequence` de la requête) lit désormais `DENIED` parce que l'approbation à
-usage unique qui la couvrait a depuis été consommée (I6, I16).
+An execution historically authorized remains so forever at its
+`decision_sequence`. I3 forbids rewriting this conclusion, even when
+`currentAuthority` (authority for the same fingerprint, reevaluated at the
+`sequence` of the request) now reads `DENIED` because the single-use
+approval that covered it has since been consumed (I6, I16).
 
-## Les 4 sorties du moteur
+## The engine's 4 outputs
 
-Qu'elle soit produite par `authorityAt` (prospective) ou par `explainAction`
-(historique, via l'`ACTION_REQUESTED` qu'elle résout), toute évaluation
-retourne exactement une des quatre valeurs suivantes :
+Whether it is produced by `authorityAt` (prospective) or by `explainAction`
+(historical, via the `ACTION_REQUESTED` it resolves), every evaluation
+returns exactly one of the following four values:
 
-1. **AUTHORIZED** — Il existe une chaîne de délégation ininterrompue, où chaque
-   maillon (délégation, sous-délégation, approbation le cas échéant) a été émis
-   par un principal ayant effectivement le droit de l'émettre (I12, I13, I14),
-   non expirée (au sens `authority_time`, voir Blocker 2), non révoquée par une
-   révocation elle-même autorisée, respectant la profondeur maximale, dont chaque
-   maillon couvre au moins la capacité et les contraintes demandées, jusqu'au
-   `HUMAN_ROOT` précis attendu (trust anchor, voir plus bas). Si l'action porte
-   un montant, celui-ci doit se situer sous `automatic_max_amount` (ou être
-   couvert par une `APPROVAL_GRANTED` valide, non consommée, et liée par
-   empreinte exacte, I15). Aucune ambiguïté n'a été rencontrée pendant la
-   résolution.
-2. **DENIED** — La chaîne d'autorité est entièrement connue et non ambiguë, et
-   elle démontre positivement l'absence d'autorité pour la demande précise :
-   révocation active et autorisée, expiration, capacité hors du périmètre exact
-   accordé, montant au-delà de `approval_max_amount`, budget agrégé épuisé, ou
-   grant d'approbation déjà consommé (I16) — ce dernier cas est le seul par
-   lequel une question **prospective** (`authorityAt`) peut être `DENIED` dans
-   la bande d'approbation. Un refus explicite et autorisé (`APPROVAL_DENIED`)
-   ou une empreinte d'action différente de celle approuvée (I15) ne peuvent
-   produire `DENIED` que dans le cadre **historique** d'`explainAction`, pour
-   l'action précise qu'ils concernent.
-3. **REQUIRES_APPROVAL** — La chaîne de délégation jusqu'au principal demandeur
-   est valide et couvre la capacité demandée, le montant se situe strictement
-   entre `automatic_max_amount` et `approval_max_amount`, et aucune
-   `APPROVAL_GRANTED` valide et non consommée, liée par empreinte exacte, n'existe
-   pour cette empreinte.
-4. **UNKNOWN** — Toute autre situation : donnée manquante, chaîne partielle,
-   événement en conflit, cycle détecté, profondeur dépassée (voir I10 pour le
-   comptage exact), chaîne remontant à un `AGENT` sans ancre humaine, champ
-   d'autorisation (`can_delegate`, seuils de montant) absent là où il est requis
-   pour trancher, `schema_version` inconnue sur un événement dont la résolution
-   dépend, ou toute condition non explicitement couverte par les trois cas
-   ci-dessus et par le tableau exhaustif ci-dessous. `UNKNOWN` est la sortie par
-   défaut du moteur : elle n'a pas besoin d'être « choisie », elle est ce qui
-   reste quand aucune preuve positive de `AUTHORIZED`, `DENIED` ou
-   `REQUIRES_APPROVAL` n'a été établie. Une `schema_version` inconnue ne
-   contamine que les résolutions qui dépendent réellement de l'événement
-   concerné (voir I1) — jamais une résolution indépendante ailleurs dans le
-   graphe.
+1. **AUTHORIZED**: An unbroken delegation chain exists, where each
+   link (delegation, subdelegation, approval where applicable) was issued
+   by a principal who actually had the right to issue it (I12, I13, I14),
+   not expired (in the `authority_time` sense, see Blocker 2), not revoked by a
+   revocation that is itself authorized, respecting the maximum depth, where each
+   link covers at least the requested capability and constraints,
+   up to the specific expected `HUMAN_ROOT` (trust anchor, see below). If the action carries
+   an amount, it must fall under `automatic_max_amount` (or be
+   covered by a valid, unconsumed `APPROVAL_GRANTED`, bound by
+   exact fingerprint, I15). No ambiguity was encountered during
+   resolution.
+2. **DENIED**: The authority chain is entirely known and unambiguous, and
+   it positively demonstrates the absence of authority for the specific request:
+   active and authorized revocation, expiration, capability outside the exact
+   granted scope, amount beyond `approval_max_amount`, aggregate budget exhausted, or
+   an already consumed approval grant (I16). This last case is the only one through
+   which a **prospective** question (`authorityAt`) can be `DENIED` within
+   the approval band. An explicit and authorized denial (`APPROVAL_DENIED`)
+   or an action fingerprint different from the approved one (I15) can
+   produce `DENIED` only within the **historical** scope of `explainAction`, for
+   the specific action they concern.
+3. **REQUIRES_APPROVAL**: The delegation chain to the requesting principal
+   is valid and covers the requested capability, the amount falls strictly
+   between `automatic_max_amount` and `approval_max_amount`, and no
+   valid and unconsumed `APPROVAL_GRANTED`, bound by exact fingerprint, exists
+   for this fingerprint.
+4. **UNKNOWN**: Any other situation: missing data, partial chain,
+   conflicting event, detected cycle, exceeded depth (see I10 for the exact
+   count), a chain going back to an `AGENT` with no human anchor, an authorization
+   field (`can_delegate`, amount thresholds) absent where it is required
+   to decide, an unknown `schema_version` on an event that the resolution
+   depends on, or any condition not explicitly covered by the three cases
+   above and by the exhaustive table below. `UNKNOWN` is the engine's default
+   output: it does not need to be "chosen." It is what
+   remains when no positive proof of `AUTHORIZED`, `DENIED`, or
+   `REQUIRES_APPROVAL` has been established. An unknown `schema_version` only
+   contaminates resolutions that actually depend on the event
+   concerned (see I1), never an independent resolution elsewhere in the
+   graph.
 
-## Invariants de sécurité
+## Security invariants
 
-Chaque invariant est formulé comme une assertion testable. Ils sont non négociables
-et ne doivent être ni affaiblis ni reformulés au fil de l'implémentation.
+Each invariant is formulated as a testable assertion. They are non-negotiable
+and must not be weakened or reworded as implementation proceeds.
 
-1. **I1 — Fail-closed.** Pour toute entrée ambiguë, incomplète ou non résolue par
-   les règles explicites du moteur, la sortie est `UNKNOWN`. Il n'existe dans le
-   code du moteur aucun chemin où l'absence de donnée ou une branche non prévue
-   aboutit à `AUTHORIZED`. Test : pour toute mutation aléatoire d'une fixture valide
-   qui retire ou corrompt un champ requis, la sortie ne doit jamais être
+1. **I1: Fail-closed.** For any input that is ambiguous, incomplete, or not resolved by
+   the engine's explicit rules, the output is `UNKNOWN`. There is no path in the
+   engine's code where the absence of data or an unforeseen branch leads to
+   `AUTHORIZED`. Test: for any random mutation of a valid fixture
+   that removes or corrupts a required field, the output must never be
    `AUTHORIZED`.
-2. **I2 — Aucun LLM dans le chemin de décision.** La fonction de décision est pure :
-   mêmes événements en entrée (même liste, même ordre de `sequence`) ⇒ même sortie,
-   à chaque exécution, sans appel réseau, sans inférence, sans composant
-   non-déterministe. Test : exécuter la même évaluation 1000 fois hors ligne doit
-   produire un résultat strictement identique.
-3. **I3 — Append-only strict.** Aucune opération du moteur ne modifie ni ne
-   supprime un événement déjà accepté dans le store canonique. Toute correction
-   d'erreur se fait par un nouvel événement compensatoire, jamais par mutation ou
-   suppression. Un événement dont l'ingestion échoue (conflit `event_id`, collision
-   d'ID métier, violation prouvée de I12/I13/I14) n'est en revanche jamais accepté
-   dans le store canonique — le refuser à la porte n'est pas une mutation, c'est
-   l'absence d'écriture (voir `EVENT_MODEL.md`, journal de sécurité). Test : le
-   store canonique n'expose aucune opération `update`/`delete` sur un événement
-   déjà persisté ; toute tentative est rejetée.
-4. **I4 — Séparation stricte ordering / clock (corrigé).** Trois notions distinctes,
-   jamais confondues :
-   - `sequence` = ordre causal uniquement, attribué par Authority à l'ingestion,
-     strictement croissant, jamais falsifiable par la source. Répond à « quel
-     événement avant lequel ». C'est le seul ordre utilisé pour déterminer l'état
-     du graphe « à l'instant T » et pour appliquer I7 (une révocation ne joue que
-     sur les évaluations de `sequence` ≥ la sienne).
-   - `authority_time` = horloge attribuée par Authority à l'ingestion, garantie
-     monotone non décroissante par rapport à `sequence`. C'est la seule horloge
-     utilisée pour comparer `expires_at` et pour évaluer si une délégation a
-     expiré. Jamais fournie par la source, et **jamais dérivée d'`occurred_at`
-     par le moteur lui-même** (correction PROMPT 3b — une première
-     implémentation dérivait `authority_time` d'`occurred_at` « pour le
-     déterminisme des tests » ; c'était une régression qui remettait un
-     timestamp attaquable dans le chemin de décision). La valeur brute
-     provient d'une **dépendance explicite** que l'appelant d'`ingestAll`
-     fournit (une horloge de confiance), qu'Authority se contente de clamper
-     pour garantir la monotonie ci-dessus — elle ne l'invente jamais à partir
-     d'un autre champ de l'événement.
-   - **Convention d'expiration (exclusive) :** `authorityTime < expires_at` ⇒
-     encore valide ; `authorityTime >= expires_at` ⇒ expiré. La borne elle-même
-     compte comme expirée.
-   - `occurred_at` = horodatage déclaré par la source, jamais décisionnel, jamais
-     utilisé pour ordonner ni pour évaluer une expiration. Conservé pour l'audit ;
-     si l'écart `|authority_time − occurred_at|` dépasse un seuil nommé et explicite
-     (`CLOCK_DRIFT_THRESHOLD`), `explain()` doit afficher
-     `LATE_OR_BACKDATED_EVENT_OBSERVED` pour cet événement — ce signal n'affecte
-     jamais `AUTHORIZED`/`DENIED`/`REQUIRES_APPROVAL`/`UNKNOWN`, il n'affecte que
-     l'explication.
-   - `recorded_at` = horloge d'infrastructure au moment où le store a physiquement
-     vu l'événement. Diagnostic opérationnel uniquement, jamais décisionnel, jamais
-     utilisé pour évaluer une expiration (ce n'est pas `authority_time`).
-   `authorityAt` et `explainAction` reçoivent ce « maintenant » comme un couple
-   explicite `{ atSequence, authorityTime }` (voir « Les deux opérations du
-   moteur ») — jamais calculé en interne comme `max(authority_time des
-   événements visibles)` : le temps qui passe ne produit pas nécessairement un
-   événement, et cette dérivation ferait paraître valide pour toujours une
-   délégation expirée depuis des heures, faute d'événement plus récent pour le
-   révéler. Test : un événement dont `occurred_at` est antérieur à tous les
-   événements déjà présents, mais qui reçoit un `sequence` et un
-   `authority_time` postérieurs, ne doit jamais changer une décision déjà
-   rendue pour une évaluation à une `sequence` antérieure à son insertion ;
-   une expiration ne doit jamais être évaluée par comparaison à `occurred_at`
-   ou `recorded_at` ; à `atSequence` et graphe identiques, deux valeurs
-   d'`authorityTime` de part et d'autre d'un `expires_at` doivent produire deux
-   décisions différentes.
-5. **I5 — Bornage strict des sous-délégations.** Pour toute `SUBDELEGATION_CREATED`,
-   sur chaque dimension indépendamment — `capabilities`, `can_delegate`,
+2. **I2: No LLM in the decision path.** The decision function is pure:
+   the same events as input (same list, same `sequence` order) always yield the same output,
+   on every execution, with no network call, no inference, no
+   non-deterministic component. Test: running the same evaluation 1000 times offline must
+   produce a strictly identical result.
+3. **I3: Strict append-only.** No engine operation modifies or
+   deletes an event already accepted into the canonical store. Any error
+   correction happens through a new compensating event, never through mutation or
+   deletion. An event whose ingestion fails (`event_id` conflict, business-ID
+   collision, proven violation of I12/I13/I14) is, by contrast, never accepted
+   into the canonical store. Refusing it at the door is not a mutation, it is
+   the absence of a write (see `EVENT_MODEL.md`, security log). Test: the
+   canonical store exposes no `update`/`delete` operation on an event
+   already persisted; any attempt is rejected.
+4. **I4: Strict separation of ordering and clock (corrected).** Three distinct notions,
+   never conflated:
+   - `sequence`: causal order only, assigned by Authority at ingestion,
+     strictly increasing, never falsifiable by the source. Answers "which
+     event before which." It is the only order used to determine the state
+     of the graph "at instant T" and to apply I7 (a revocation only affects
+     evaluations at `sequence` ≥ its own).
+   - `authority_time`: clock assigned by Authority at ingestion, guaranteed
+     non-decreasing with respect to `sequence`. It is the only clock
+     used to compare against `expires_at` and to evaluate whether a delegation has
+     expired. Never supplied by the source, and **never derived from `occurred_at`
+     by the engine itself** (PROMPT 3b correction: an earlier
+     implementation derived `authority_time` from `occurred_at` "for
+     test determinism." That was a regression that put an
+     attackable timestamp back into the decision path). The raw value
+     comes from an **explicit dependency** that the caller of `ingestAll`
+     supplies (a trusted clock), which Authority merely clamps
+     to guarantee the monotonicity above. It never invents it from
+     another field of the event.
+   - **Expiration convention (exclusive):** `authorityTime < expires_at` means
+     still valid; `authorityTime >= expires_at` means expired. The boundary itself
+     counts as expired.
+   - `occurred_at`: timestamp declared by the source, never decisional, never
+     used to order events or to evaluate expiration. Kept for audit purposes.
+     If the gap `|authority_time - occurred_at|` exceeds a named and explicit threshold
+     (`CLOCK_DRIFT_THRESHOLD`), `explain()` must display
+     `LATE_OR_BACKDATED_EVENT_OBSERVED` for that event. This signal never affects
+     `AUTHORIZED`/`DENIED`/`REQUIRES_APPROVAL`/`UNKNOWN`. It affects only
+     the explanation.
+   - `recorded_at`: infrastructure clock at the moment the store physically
+     saw the event. Operational diagnostics only, never decisional, never
+     used to evaluate expiration (it is not `authority_time`).
+   `authorityAt` and `explainAction` receive this "now" as an
+   explicit pair `{ atSequence, authorityTime }` (see "The engine's two
+   operations"), never computed internally as `max(authority_time of the
+   visible events)`: time passing does not necessarily produce an
+   event, and this derivation would make a delegation that expired hours
+   ago look valid forever, for lack of a more recent event to
+   reveal it. Test: an event whose `occurred_at` predates all
+   events already present, but which receives a later `sequence` and
+   `authority_time`, must never change a decision already
+   rendered for an evaluation at a `sequence` earlier than its insertion.
+   An expiration must never be evaluated by comparison against `occurred_at`
+   or `recorded_at`. At an identical `atSequence` and graph, two values
+   of `authorityTime` on either side of an `expires_at` must produce two
+   different decisions.
+5. **I5: Strict bounding of subdelegations.** For every `SUBDELEGATION_CREATED`,
+   on each dimension independently (`capabilities`, `can_delegate`,
    `expires_at`, `max_amount`, `automatic_max_amount`, `approval_max_amount`,
-   `total_budget` — la valeur de l'enfant est un sous-ensemble ou une restriction
-   stricte de celle du parent, en traitant toute dimension absente chez le parent
-   comme illimitée (+∞) et toute dimension absente chez l'enfant alors que le
-   parent la borne comme une tentative d'élargissement (donc invalide). Pour
-   `total_budget` spécifiquement, la borne du parent à considérer est son **reste**
-   à la `sequence` de résolution (`total_budget` déclaré moins ce qui a déjà été
-   dépensé par des `ACTION_EXECUTED` autorisées rattachées à ce parent ou à l'un de
-   ses descendants — voir `EVENT_MODEL.md`), pas sa valeur déclarée brute. Ce
-   bornage est revérifié à chaque résolution, pas seulement à la création (voir
-   note de revalidation ci-dessous). Test : toute sous-délégation qui élargit une
-   seule dimension par rapport au reste actuel du parent est traitée comme
-   invalide (jamais silencieusement tronquée) ; le résultat déterministe est
-   `DENIED` si les deux valeurs comparées sont connues, `UNKNOWN` si l'une des deux
-   ne l'est pas.
-6. **I6 — Non-élargissement du mandat par approbation.** Une `APPROVAL_GRANTED` ne
-   crée ni ne modifie de délégation permanente : elle couvre exactement l'action
-   qui l'a demandée, identifiée par son `action_id` **et** par son
-   `action_fingerprint` exact (I15), une seule fois (I16), et n'a aucun effet sur
-   une action future même identique. Test : après consommation d'une
-   `APPROVAL_GRANTED` par son `ACTION_EXECUTED`, une seconde `ACTION_REQUESTED`
-   identique ne peut pas être `AUTHORIZED` sur la base de cette même approbation.
-7. **I7 — Propagation de la révocation.** Une `DELEGATION_REVOKED` **autorisée**
-   (I13) invalide, à partir de son `sequence`, toute délégation et sous-délégation
-   qui dépend exclusivement de la délégation révoquée comme unique chaîne
-   d'autorité. Un descendant disposant d'une seconde chaîne d'autorité indépendante
-   et par ailleurs valide reste `AUTHORIZED` via cette seconde chaîne — chaque
-   chaîne retenue devant être démontrée intégralement valide sur toute sa longueur
-   (voir « règle multi-chemin » ci-dessous ; « il existe un second chemin » seul ne
-   suffit jamais). Une `DELEGATION_REVOKED` **non autorisée** est sans effet sur la
-   décision (voir I13). Test : révoquer une délégation parent via un événement
-   autorisé fait passer tous ses descendants mono-chaînés à `DENIED` (chaîne
-   connue, preuve positive d'absence d'autorité) sans affecter un descendant
-   multi-chaîné valide par ailleurs ; une révocation non autorisée ne change
-   aucune décision.
-8. **I8 — Idempotence des événements (déduplication à l'ingestion).** Deux
-   événements portant le même `event_id` et un contenu strictement identique ne
-   produisent qu'un seul effet sur l'état (le second est un no-op silencieux côté
-   état canonique). Deux événements portant le même `event_id` avec un contenu
-   différent ne sont jamais tous deux acceptés dans le store canonique :
-   l'ingestion du second échoue et retourne `UNKNOWN` **comme réponse directe à
-   cette tentative d'ingestion** ; l'événement rejeté n'entre jamais dans le store
-   canonique et ne peut donc affecter aucune évaluation `authorityAt()` future
-   (voir séparation store canonique / journal de sécurité). Test : rejouer le même
-   événement N fois ne change pas l'état ; injecter un `event_id` dupliqué avec un
-   payload différent doit produire `UNKNOWN` pour l'appel d'ingestion, jamais un
-   écrasement silencieux, et ne doit avoir aucun effet sur les résolutions
-   ultérieures portant sur d'autres event_id.
-9. **I9 — Capacités exactes uniquement (V0).** Une capacité est une paire exacte
-   `(resource, action)`. Aucun caractère générique, aucune expression régulière,
-   aucun héritage implicite de scope n'est interprété comme couvrant une capacité
-   plus spécifique. Test : une capacité demandée qui n'a pas de correspondance
-   exacte, caractère pour caractère, dans une chaîne par ailleurs entièrement
-   connue est `DENIED` ; si la chaîne elle-même est incomplète, c'est `UNKNOWN`
-   (jamais `AUTHORIZED` par correspondance floue dans les deux cas).
-10. **I10 — Protection cycles et profondeur.** Le moteur applique une limite de
-    profondeur de chaîne explicite et configurée : `MAX_CHAIN_DEPTH = 32`.
-    Cette limite est comptée en **arêtes de délégation traversées** (chaque
-    `DELEGATION_CREATED`/`SUBDELEGATION_CREATED` emprunté en remontant vers la
-    racine compte pour une arête), **jamais en nœuds ni en principals
-    distincts** : un même principal peut apparaître plusieurs fois le long
-    d'une chaîne sans changer le compte, et c'est le nombre de maillons que le
-    resolver doit parcourir et revalider (I5, I12) — pas le nombre d'identités
-    en présence — qui détermine le coût de résolution. C'est une limite de
-    résolution d'**un chemin**, jamais un motif pour faire basculer tout le
-    graphe en `UNKNOWN` : une branche qui dépasse la limite ne doit jamais
-    empoisonner une chaîne indépendante et valide vers le même agent (règle
-    multi-chemin, ci-dessous). Toute chaîne dont la résolution dépasserait 32
-    arêtes, ou dans laquelle un cycle de délégation est détecté, retourne
-    `UNKNOWN` avec le code `MAX_CHAIN_DEPTH_EXCEEDED` (profondeur) ou
-    `C18_CYCLE_DETECTED` (cycle). Test : une chaîne d'exactement 32 arêtes est
-    résolue normalement (pas de traitement spécial à la limite exacte) ; une
-    chaîne de 33 arêtes retourne `UNKNOWN`/`MAX_CHAIN_DEPTH_EXCEEDED` ; un
-    graphe construit avec un cycle explicite retourne `UNKNOWN` sans boucle
-    infinie ni dépassement de pile ; une branche de 33 arêtes coexistant avec
-    une chaîne indépendante de 3 arêtes vers le même agent ne doit dégrader
-    que la première, jamais la seconde.
-11. **I11 — Aucun secret ni PII dans le graphe.** Tous les `principal_id` sont des
-    identifiants opaques sans structure interprétable. Aucun champ d'événement ne
-    transporte de secret ni de donnée personnelle identifiante. La détection de
-    motifs interdits à l'ingestion (par exemple un `principal_id` qui prend la
-    forme reconnaissable d'une adresse email) **rejette des formes explicitement
-    prohibées** ; elle ne garantit en aucun cas l'**absence** de toute PII dans
-    le graphe — l'absence de détection n'est pas une preuve d'absence, cohérent
-    avec I17 (honnêteté du niveau d'assurance) : `explain()` ne doit jamais
-    laisser entendre que le graphe est certifié exempt de PII, seulement que les
-    formes reconnues ont été refusées à la porte. Test : un scan des schémas
-    d'événements et des fixtures ne doit trouver aucun champ correspondant à un
-    pattern d'email, de nom complet ou de secret ; un test d'ingestion doit
-    montrer qu'au moins une forme reconnue (email) est rejetée, sans jamais
-    prétendre que cette liste est exhaustive.
-12. **I12 — Droit de déléguer.** Chaque délégation (`DELEGATION_CREATED` ou
-    `SUBDELEGATION_CREATED`) porte un booléen explicite `can_delegate`, dont
-    l'absence rend toute résolution qui en dépend `UNKNOWN` (jamais interprétée
-    comme `true` ni comme `false` par défaut). Une `SUBDELEGATION_CREATED` n'est
-    valide que si (a) son `principal_id` émetteur est exactement le
-    `grantee_principal_id` de la délégation parente référencée, et (b) cette
-    délégation parente porte `can_delegate: true`. Une délégation, par
-    construction, confère toujours le droit d'exécuter les capacités qu'elle liste
-    (`can_execute` est implicite à la détention d'une délégation valide) — elle ne
-    confère le droit de sous-déléguer que si `can_delegate: true` est explicite.
-    Test : une `SUBDELEGATION_CREATED` dont l'émetteur diffère du grantee du parent,
-    ou dont le parent porte `can_delegate: false`, est `DENIED` (fait connu) ; si
-    `can_delegate` est absent du parent, c'est `UNKNOWN`.
-13. **I13 — Droit de révoquer.** Une `DELEGATION_REVOKED` n'est autorisée que si son
-    `principal_id` émetteur est soit (a) le `grantor_principal_id` de la
-    délégation ciblée, soit (b) le `grantor_principal_id` de la délégation racine
-    (`parent_delegation_id: null`) au sommet de la chaîne à laquelle appartient la
-    délégation ciblée. Toute autre émission de `DELEGATION_REVOKED` est **ignorée
-    pour la décision** (elle n'invalide rien) et journalisée comme tentative non
-    autorisée dans le journal de sécurité — ceci afin qu'un tiers ne puisse pas
-    utiliser I7 comme arme de déni de service contre une chaîne légitime. Test :
-    une révocation émise par un principal autre que le grantor direct ou la racine
-    de chaîne ne doit avoir strictement aucun effet sur `authorityAt()`.
-14. **I14 — Droit de décider une approbation.** Une `APPROVAL_GRANTED` ou une
-    `APPROVAL_DENIED` n'est autorisée que si son `principal_id` émetteur est
-    exactement le `grantor_principal_id` de la délégation dont les seuils de
-    montant ont produit `REQUIRES_APPROVAL` pour l'action concernée. Le
-    `requested_from_principal_id` porté par l'`APPROVAL_REQUESTED` correspondante
-    ne confère aucune autorité — il est purement informatif (routage) — sinon
-    l'attaquant choisirait son propre approbateur. Une décision d'approbation émise
-    par un émetteur non habilité est ignorée pour la décision et journalisée comme
-    tentative non autorisée. Test : une `APPROVAL_GRANTED` dont l'émetteur diffère
-    du grantor habilité ne doit jamais faire passer une action de
-    `REQUIRES_APPROVAL` à `AUTHORIZED`.
-15. **I15 — Binding par empreinte d'action.** Toute décision d'approbation porte
-    implicitement sur l'empreinte canonique (`action_fingerprint`, voir
-    `EVENT_MODEL.md`) de l'`ACTION_REQUESTED` qu'elle vise, calculée à partir de
+   `total_budget`), the child's value is a subset of or a strict restriction of
+   the parent's, treating any dimension absent on the parent
+   as unlimited (+∞) and any dimension absent on the child while the
+   parent bounds it as a widening attempt (therefore invalid). For
+   `total_budget` specifically, the parent bound to consider is its **remaining**
+   value at the resolution `sequence` (declared `total_budget` minus what has already been
+   spent by authorized `ACTION_EXECUTED` events attached to this parent or one of
+   its descendants, see `EVENT_MODEL.md`), not its raw declared value. This
+   bounding is rechecked at every resolution, not only at creation (see
+   revalidation note below). Test: any subdelegation that widens a
+   single dimension relative to the parent's current remainder is treated as
+   invalid (never silently truncated). The deterministic result is
+   `DENIED` if both compared values are known, `UNKNOWN` if either one
+   is not.
+6. **I6: No widening of the mandate through approval.** An `APPROVAL_GRANTED` neither
+   creates nor modifies a permanent delegation: it covers exactly the action
+   that requested it, identified by its `action_id` **and** by its exact
+   `action_fingerprint` (I15), a single time (I16), and has no effect on
+   a future action even an identical one. Test: after consumption of an
+   `APPROVAL_GRANTED` by its `ACTION_EXECUTED`, a second, identical
+   `ACTION_REQUESTED` cannot be `AUTHORIZED` on the basis of that same approval.
+7. **I7: Propagation of revocation.** An **authorized** `DELEGATION_REVOKED`
+   (I13) invalidates, from its `sequence` onward, every delegation and subdelegation
+   that depends exclusively on the revoked delegation as its sole authority
+   chain. A descendant with a second, otherwise valid, independent authority
+   chain remains `AUTHORIZED` through that second chain. Each
+   chain relied upon must be demonstrated fully valid over its entire length
+   (see "multi-path rule" below; "there exists a second path" alone never
+   suffices). An **unauthorized** `DELEGATION_REVOKED` has no effect on the
+   decision (see I13). Test: revoking a parent delegation through an
+   authorized event turns all its single-chained descendants to `DENIED` (known
+   chain, positive proof of absence of authority) without affecting an otherwise
+   valid multi-chained descendant. An unauthorized revocation changes
+   no decision.
+8. **I8: Event idempotence (deduplication at ingestion).** Two
+   events carrying the same `event_id` and strictly identical content produce
+   only one effect on the state (the second is a silent no-op on the canonical
+   state). Two events carrying the same `event_id` with different
+   content are never both accepted into the canonical store:
+   ingestion of the second fails and returns `UNKNOWN` **as the direct response to
+   this ingestion attempt**. The rejected event never enters the canonical
+   store and can therefore never affect any future `authorityAt()` evaluation
+   (see the separation between canonical store and security log). Test: replaying the same
+   event N times does not change the state. Injecting a duplicate `event_id` with a
+   different payload must produce `UNKNOWN` for the ingestion call, never a
+   silent overwrite, and must have no effect on subsequent resolutions
+   concerning other event_ids.
+9. **I9: Exact capabilities only (V0).** A capability is an exact pair
+   `(resource, action)`. No wildcard, no regular expression,
+   no implicit scope inheritance is interpreted as covering a
+   more specific capability. Test: a requested capability that has no
+   exact, character-for-character match in an otherwise fully
+   known chain is `DENIED`. If the chain itself is incomplete, it is `UNKNOWN`
+   (never `AUTHORIZED` by fuzzy matching in either case).
+10. **I10: Cycle and depth protection.** The engine applies an explicit,
+    configured chain depth limit: `MAX_CHAIN_DEPTH = 32`.
+    This limit is counted in **delegation edges traversed** (each
+    `DELEGATION_CREATED`/`SUBDELEGATION_CREATED` link taken while going back
+    toward the root counts as one edge), **never in nodes or in distinct
+    principals**: the same principal can appear multiple times along
+    a chain without changing the count. It is the number of links the
+    resolver must traverse and revalidate (I5, I12), not the number of
+    distinct identities present, that determines the resolution cost. This is a
+    resolution limit for **one path**, never a reason to turn the whole
+    graph to `UNKNOWN`: a branch that exceeds the limit must never
+    poison an independent and valid chain toward the same agent (multi-path
+    rule, below). Any chain whose resolution would exceed 32
+    edges, or in which a delegation cycle is detected, returns
+    `UNKNOWN` with the code `MAX_CHAIN_DEPTH_EXCEEDED` (depth) or
+    `C18_CYCLE_DETECTED` (cycle). Test: a chain of exactly 32 edges is
+    resolved normally (no special handling at the exact limit). A
+    chain of 33 edges returns `UNKNOWN`/`MAX_CHAIN_DEPTH_EXCEEDED`. A
+    graph built with an explicit cycle returns `UNKNOWN` with no infinite
+    loop and no stack overflow. A branch of 33 edges coexisting with
+    an independent chain of 3 edges toward the same agent must degrade
+    only the first, never the second.
+11. **I11: No secrets or PII in the graph.** All `principal_id` values are
+    opaque identifiers with no interpretable structure. No event field
+    carries a secret or identifying personal data. Detection of
+    forbidden patterns at ingestion (for example, a `principal_id` that takes
+    the recognizable form of an email address) **rejects explicitly
+    prohibited forms**. It never guarantees the **absence** of any PII in
+    the graph. Absence of detection is not proof of absence, consistent
+    with I17 (honesty of the assurance level): `explain()` must never
+    imply that the graph is certified free of PII, only that
+    recognized forms have been refused at the door. Test: a scan of event
+    schemas and fixtures must find no field matching an
+    email pattern, a full name, or a secret. An ingestion test must
+    show that at least one recognized form (email) is rejected, never
+    claiming that this list is exhaustive.
+12. **I12: Right to delegate.** Each delegation (`DELEGATION_CREATED` or
+    `SUBDELEGATION_CREATED`) carries an explicit boolean `can_delegate`, whose
+    absence makes any resolution that depends on it `UNKNOWN` (never interpreted
+    as `true` nor as `false` by default). A `SUBDELEGATION_CREATED` is
+    valid only if (a) its issuing `principal_id` is exactly the
+    `grantee_principal_id` of the referenced parent delegation, and (b) that
+    parent delegation carries `can_delegate: true`. A delegation, by
+    construction, always confers the right to execute the capabilities it lists
+    (`can_execute` is implicit to holding a valid delegation). It confers
+    the right to subdelegate only if `can_delegate: true` is explicit.
+    Test: a `SUBDELEGATION_CREATED` whose issuer differs from the parent's grantee,
+    or whose parent carries `can_delegate: false`, is `DENIED` (known fact). If
+    `can_delegate` is absent from the parent, it is `UNKNOWN`.
+13. **I13: Right to revoke.** A `DELEGATION_REVOKED` is authorized only if its
+    issuing `principal_id` is either (a) the `grantor_principal_id` of the
+    targeted delegation, or (b) the `grantor_principal_id` of the root delegation
+    (`parent_delegation_id: null`) at the top of the chain to which the
+    targeted delegation belongs. Any other issuance of `DELEGATION_REVOKED` is **ignored
+    for the decision** (it invalidates nothing) and logged as an unauthorized
+    attempt in the security log, so that a third party cannot
+    use I7 as a denial-of-service weapon against a legitimate chain. Test:
+    a revocation issued by a principal other than the direct grantor or the chain
+    root must have strictly no effect on `authorityAt()`.
+14. **I14: Right to decide an approval.** An `APPROVAL_GRANTED` or an
+    `APPROVAL_DENIED` is authorized only if its issuing `principal_id` is
+    exactly the `grantor_principal_id` of the delegation whose amount
+    thresholds produced `REQUIRES_APPROVAL` for the action concerned. The
+    `requested_from_principal_id` carried by the corresponding `APPROVAL_REQUESTED`
+    confers no authority. It is purely informational (routing), otherwise
+    an attacker would choose their own approver. An approval decision issued
+    by an unentitled issuer is ignored for the decision and logged as an
+    unauthorized attempt. Test: an `APPROVAL_GRANTED` whose issuer differs
+    from the entitled grantor must never turn an action from
+    `REQUIRES_APPROVAL` into `AUTHORIZED`.
+15. **I15: Binding by action fingerprint.** Every approval decision implicitly
+    bears on the canonical fingerprint (`action_fingerprint`, see
+    `EVENT_MODEL.md`) of the `ACTION_REQUESTED` it targets, computed from
     `capability_requested.resource`, `capability_requested.action`,
-    `parameters.amount` et `parameters.recipient`, dans cet ordre exact. Une
-    `ACTION_EXECUTED` dont l'`action_fingerprint` déclaré diffère de l'empreinte de
-    l'`ACTION_REQUESTED` de même `action_id` est `DENIED`, même si `action_id` et
-    `approval_id` correspondent par ailleurs. Test : faire varier `parameters` (le
-    montant ou le destinataire) entre l'`ACTION_REQUESTED` approuvée et
-    l'`ACTION_EXECUTED` doit produire `DENIED`, jamais `AUTHORIZED` par simple
-    correspondance d'`action_id`.
-16. **I16 — Consommation à usage unique (précisée — PROMPT 6d, finding #3).**
-    Un `approval_id` donné ne peut être consommé que par une seule
-    `ACTION_EXECUTED`, quel que soit le nombre d'événements distincts (par
-    `event_id`) qui tentent de le consommer. En cas de plusieurs
-    `ACTION_EXECUTED` référençant le même `approval_id`, seule celle de plus
-    petit `sequence` est valide ; toute autre est `DENIED`. I8 déduplique des
-    événements identiques ; I16 déduplique un effet métier, y compris entre
-    événements distincts et non conflictuels au sens I8.
+    `parameters.amount`, and `parameters.recipient`, in that exact order. An
+    `ACTION_EXECUTED` whose declared `action_fingerprint` differs from the fingerprint of
+    the `ACTION_REQUESTED` with the same `action_id` is `DENIED`, even if `action_id` and
+    `approval_id` otherwise match. Test: varying `parameters` (the
+    amount or the recipient) between the approved `ACTION_REQUESTED` and
+    the `ACTION_EXECUTED` must produce `DENIED`, never `AUTHORIZED` through mere
+    `action_id` matching.
+16. **I16: Single-use consumption (clarified: PROMPT 6d, finding #3).**
+    A given `approval_id` can be consumed by only one
+    `ACTION_EXECUTED`, regardless of the number of distinct events (by
+    `event_id`) that attempt to consume it. If several
+    `ACTION_EXECUTED` events reference the same `approval_id`, only the one with the
+    smallest `sequence` is valid. Any other is `DENIED`. I8 deduplicates
+    identical events; I16 deduplicates a business effect, including across
+    distinct events that do not conflict in the I8 sense.
 
-    **La précision manquante, révélée par l'audit.** « Référencer le même
-    `approval_id` » ne suffit pas à qualifier une `ACTION_EXECUTED` comme
-    consommatrice — I6 le dit déjà (« couvre exactement l'action qui l'a
-    demandée, identifiée par son `action_id` **et** son `action_fingerprint`
-    exact, I15 ») mais ce n'était vérifié nulle part dans le code : une
-    `ACTION_EXECUTED` d'une action B **non liée** pouvait citer l'`approval_id`
-    d'une action A dans son `authority_chain_ref` et faire compter l'approbation
-    de A comme consommée — alors que l'action A elle-même n'avait jamais été
-    exécutée. N'importe quel tiers pouvait ainsi « brûler » l'approbation
-    d'autrui sans jamais rien exécuter lui-même pour son propre compte : un
-    déni de service contre une approbation légitime, le pendant exact d'I20
-    (qui ferme la même faille pour le débit de `total_budget`) appliqué à la
-    consommation. Pas de brique nouvelle nécessaire : I6/I15 énoncent déjà la
-    condition manquante, qui n'attendait qu'à être appliquée à la
-    vérification de consommation elle-même. Formellement, une `ACTION_EXECUTED`
-    E ne consomme l'`approval_id` qu'elle cite dans `authority_chain_ref` que
-    si `E.action_id` est exactement l'`action_id` porté par l'`APPROVAL_GRANTED`
-    correspondant à cet `approval_id` — la même liaison `action_id` qu'I6
-    exige déjà pour qu'une approbation s'applique à une action. Cette
-    vérification ne compare que deux champs déjà immuables et déjà présents
-    sur des événements déjà ingérés (le `action_id` du grant, le `action_id`
-    de l'exécution candidate) : structurelle, non récursive, aucun appel au
-    resolver — les `action_id` sont uniques dans le store canonique (I8,
-    unicité des ID métier), la comparaison est donc sans ambiguïté.
+    **The missing precision, revealed by the audit.** "Referencing the same
+    `approval_id`" is not enough to qualify an `ACTION_EXECUTED` as
+    consuming it. I6 already says so ("covers exactly the action that
+    requested it, identified by its `action_id` **and** its exact
+    `action_fingerprint`, I15"), but this was verified nowhere in the code: an
+    `ACTION_EXECUTED` of an **unrelated** action B could cite the `approval_id`
+    of an action A in its `authority_chain_ref` and count A's approval
+    as consumed, even though action A itself had never been
+    executed. Anyone could thereby "burn" someone else's approval
+    without ever executing anything for their own account: a
+    denial of service against a legitimate approval, the exact counterpart of I20
+    (which closes the same gap for the debit of `total_budget`) applied to
+    consumption. No new building block is needed: I6/I15 already state the
+    missing condition, which only needed to be applied to
+    the consumption check itself. Formally, an `ACTION_EXECUTED`
+    E consumes the `approval_id` it cites in `authority_chain_ref` only
+    if `E.action_id` is exactly the `action_id` carried by the corresponding
+    `APPROVAL_GRANTED` for that `approval_id`, the same `action_id` binding I6
+    already requires for an approval to apply to an action. This
+    check compares only two already immutable fields already present
+    on already ingested events (the grant's `action_id`, the candidate
+    execution's `action_id`): structural, non-recursive, no call to the
+    resolver. `action_id` values are unique in the canonical store (I8,
+    business ID uniqueness), so the comparison is unambiguous.
 
-    Test : deux `ACTION_EXECUTED` d'`event_id` différents, référençant le même
-    `approval_id` valide et portant le **même** `action_id` que celui-ci
-    couvre, ne doivent jamais produire deux `AUTHORIZED` (le test déjà
-    existant, inchangé). Une `ACTION_EXECUTED` dont l'`action_id` **diffère**
-    de celui couvert par l'`approval_id` qu'elle cite ne consomme jamais cette
-    approbation, même si son `action_fingerprint` — ou celui de l'action
-    réellement approuvée — coïncide par ailleurs (deux actions distinctes
-    peuvent légitimement partager une même empreinte) : une question fraîche
-    portant sur l'empreinte réellement approuvée doit rester `AUTHORIZED` tant
-    qu'aucune exécution de **cette** action précise n'a consommé le grant.
-17. **I17 — Honnêteté du niveau d'assurance.** V0 ne vérifie ni signature ni
-    identité cryptographique : chaque événement porte un `assurance_level` figé à
-    `ASSERTED_UNVERIFIED`. `explain()` ne doit jamais affirmer qu'un fait a été
-    *prouvé* ; il doit formuler ses conclusions comme « le journal contient un
-    événement affirmant que X a accordé Y », jamais « X a prouvé qu'il a accordé
-    Y ». Test : un audit du texte produit par `explain()` ne doit contenir aucune
-    formulation impliquant une preuve cryptographique ou une vérification
-    d'identité forte.
-18. **I18 — `decision_sequence` ne peut jamais excéder sa propre `sequence`
-    (PROMPT 6a, finding #4).** `decision_sequence`, porté par une
-    `ACTION_EXECUTED`, est un champ auto-déclaré par l'émetteur de
-    l'événement — exactement comme `occurred_at` (I4) — et rien à l'ingestion
-    ne le contraint contre l'ordre causal réel : le moteur doit donc le
-    contraindre lui-même, à la résolution. Une `sequence` n'existe qu'une fois
-    l'événement qui la porte accepté dans le store canonique ; un point de
-    décision ne peut donc jamais se situer à une `sequence` postérieure **ou
-    égale** à celle de l'`ACTION_EXECUTED` qui le cite — un `decision_sequence`
-    égal à la `sequence` de sa propre exécution n'a pas plus de sens causal
-    qu'un `decision_sequence` strictement futur, puisqu'un événement ne peut
-    jamais servir de preuve à lui-même. Formellement, pour toute
-    `ACTION_EXECUTED` de `sequence` S : `decision_sequence < S` est requis.
-    Une violation de cette contrainte n'est jamais une preuve positive
-    d'absence d'autorité (ce n'est pas ce que le maillon *dit*, c'est que la
-    question elle-même n'a pas de sens causal) : la sortie est `UNKNOWN`,
-    jamais `DENIED` — tranché, pas « selon le contexte » — cohérent avec I1
-    (une question mal formée bloque, elle ne tranche pas sur le fond à sa
-    place). Cette règle s'applique à `execution.authorityAtDecision`
-    uniquement (`explainAction`) ; elle est sans objet pour `authorityAt`, qui
-    ne connaît aucun `decision_sequence`. Test : une `ACTION_EXECUTED` de
-    `sequence` S dont `decision_sequence >= S` doit produire `UNKNOWN` pour
-    `execution.authorityAtDecision`, même si une autorité par ailleurs valide
-    existe réellement à ce `decision_sequence` prétendu (i.e. même si
-    l'attaque, menée un peu différemment, aurait pu réussir) — le rejet porte
-    sur la forme causale de la citation, pas sur le contenu de l'autorité
-    citée.
-19. **I19 — Légitimité causale des références « revendication » par ID
-    (PROMPT 6b, racine commune — portée révisée après vérification empirique,
-    voir note ci-dessous).** I18 n'était qu'une instance d'un motif général :
-    plusieurs champs d'événement citent un autre événement par un
-    identifiant métier, et le resolver ne vérifiait jusqu'ici cette citation
-    que par correspondance d'ID, jamais par ordre causal. La règle, formulée
-    une fois : **une référence par ID n'est légitime que si l'événement cité
-    existe dans le store canonique et que sa `sequence` n'est jamais
-    strictement postérieure à celle de l'événement citant** (égalité
-    tolérée — voir « Note sur l'égalité de séquence » ci-dessous ; c'est
-    volontairement plus permissif que I18, qui interdit l'égalité pour la
-    raison inverse : I18 compare un champ d'un événement à la `sequence` de
-    ce **même** événement, ce qui rend l'égalité intrinsèquement absurde,
-    alors qu'I19 compare deux événements **distincts**).
+    Test: two `ACTION_EXECUTED` events with different `event_id` values, referencing the same
+    valid `approval_id` and carrying the **same** `action_id` that it
+    covers, must never produce two `AUTHORIZED` results (the existing test,
+    unchanged). An `ACTION_EXECUTED` whose `action_id` **differs**
+    from the one covered by the `approval_id` it cites never consumes that
+    approval, even if its `action_fingerprint`, or that of the
+    actually approved action, otherwise coincides (two distinct actions
+    can legitimately share the same fingerprint). A fresh question
+    bearing on the actually approved fingerprint must remain `AUTHORIZED` as long
+    as no execution of **that** specific action has consumed the grant.
+17. **I17: Honesty of the assurance level.** V0 verifies neither signature nor
+    cryptographic identity: every event carries an `assurance_level` fixed at
+    `ASSERTED_UNVERIFIED`. `explain()` must never assert that a fact has been
+    *proven*. It must phrase its conclusions as "the log contains an
+    event asserting that X granted Y," never "X proved that it granted
+    Y." Test: an audit of the text produced by `explain()` must contain no
+    wording implying cryptographic proof or strong identity
+    verification.
+18. **I18: `decision_sequence` can never exceed its own `sequence`
+    (PROMPT 6a, finding #4).** `decision_sequence`, carried by an
+    `ACTION_EXECUTED`, is a self-declared field from the issuer of
+    the event, exactly like `occurred_at` (I4), and nothing at ingestion
+    constrains it against real causal order: the engine must therefore
+    constrain it itself, at resolution time. A `sequence` only exists once
+    the event carrying it has been accepted into the canonical store. A decision
+    point can therefore never be located at a `sequence` later than **or
+    equal to** that of the `ACTION_EXECUTED` that cites it. A `decision_sequence`
+    equal to the `sequence` of its own execution makes no more causal sense
+    than a strictly future `decision_sequence`, since an event can
+    never serve as proof of itself. Formally, for any
+    `ACTION_EXECUTED` with `sequence` S: `decision_sequence < S` is required.
+    A violation of this constraint is never positive proof
+    of absence of authority (it is not what the link *says*, it is that the
+    question itself makes no causal sense): the output is `UNKNOWN`,
+    never `DENIED`, decided, not "depending on context," consistent with I1
+    (a malformed question blocks, it does not rule on the substance in its
+    place). This rule applies to `execution.authorityAtDecision`
+    only (`explainAction`). It is moot for `authorityAt`, which
+    knows no `decision_sequence`. Test: an `ACTION_EXECUTED` with
+    `sequence` S whose `decision_sequence >= S` must produce `UNKNOWN` for
+    `execution.authorityAtDecision`, even if an otherwise valid authority
+    actually exists at that claimed `decision_sequence` (that is, even if
+    the attack, carried out slightly differently, could have succeeded). The rejection bears
+    on the causal form of the citation, not on the content of the authority
+    cited.
+19. **I19: Causal legitimacy of "claim" references by ID
+    (PROMPT 6b, common root: scope revised after empirical verification,
+    see note below).** I18 was only one instance of a general pattern:
+    several event fields cite another event by a
+    business identifier, and until now the resolver checked this citation
+    only by ID match, never by causal order. The rule, stated
+    once: **a reference by ID is legitimate only if the cited event
+    exists in the canonical store and its `sequence` is never
+    strictly later than that of the citing event** (equality
+    tolerated, see "Note on sequence equality" below; this is
+    deliberately more permissive than I18, which forbids equality for the
+    opposite reason: I18 compares a field of an event to the `sequence` of
+    that **same** event, which makes equality inherently absurd,
+    whereas I19 compares two **distinct** events).
 
-    Champs concernés, et **portée réelle** de la règle pour chacun (toutes ne
-    reçoivent pas le même traitement — voir la distinction avec A5
-    ci-dessous, qui explique pourquoi) :
-    - `APPROVAL_GRANTED.action_id` et `APPROVAL_GRANTED.approval_id` ;
-    - `APPROVAL_DENIED.action_id` et `APPROVAL_DENIED.approval_id` ;
-      — pour ces deux événements, I19 s'applique pleinement : existence **et**
-      ordre causal.
-    - `APPROVAL_REQUESTED.action_id` — couvert par la même règle en
-      principe ; V0 n'a aujourd'hui aucun chemin de décision qui en dépend
-      (champ purement informatif — routage), donc rien à appliquer
-      concrètement pour l'instant.
-    - `ACTION_EXECUTED.authority_chain_ref` (chaque `delegation_id`/
-      `approval_id` qui y figure) — couvert en principe (un maillon cité ne
-      peut pas exister causalement après l'exécution qui prétend s'appuyer
-      dessus) ; non appliqué en code dans ce passage faute de nécessité
-      démontrée (voir « Portée restreinte » ci-dessous).
-    - `SUBDELEGATION_CREATED.parent_delegation_id` — **exclu de la moitié
-      « ordre causal » d'I19.** Voir « Distinction avec la livraison
-      hors-ordre » ci-dessous : ce champ reste gouverné uniquement par la
-      moitié « existence » (déjà en place avant I19, via C10), jamais par
-      l'ordre des `sequence` entre parent et enfant.
+    Fields concerned, and the **real scope** of the rule for each (they do not
+    all receive the same treatment, see the distinction with A5
+    below, which explains why):
+    - `APPROVAL_GRANTED.action_id` and `APPROVAL_GRANTED.approval_id`;
+    - `APPROVAL_DENIED.action_id` and `APPROVAL_DENIED.approval_id`;
+      for these two events, I19 applies in full: existence **and**
+      causal order.
+    - `APPROVAL_REQUESTED.action_id`: covered by the same rule in
+      principle. V0 today has no decision path that depends on it
+      (a purely informational field: routing), so nothing to
+      apply concretely for now.
+    - `ACTION_EXECUTED.authority_chain_ref` (each `delegation_id`/
+      `approval_id` it contains): covered in principle (a cited link cannot
+      exist causally after the execution that claims to rely
+      on it). Not applied in code in this pass, for lack of a
+      demonstrated need (see "Restricted scope" below).
+    - `SUBDELEGATION_CREATED.parent_delegation_id`: **excluded from the "causal
+      order" half of I19.** See "Distinction from out-of-order
+      delivery" below: this field remains governed solely by the
+      "existence" half (already in place before I19, via C10), never by
+      the order of `sequence` values between parent and child.
 
-    **Distinction avec la livraison hors-ordre (A5, déjà traitée) — et
-    pourquoi `parent_delegation_id` n'est pas ordonné par I19.** I19 ne porte
-    que sur la relation causale une fois les **deux** événements présents
-    dans le store — jamais sur l'absence temporaire de l'un des deux. Un
-    événement dont le prédécesseur référencé n'est pas encore arrivé au
-    moment de l'ingestion (A5) est une situation légitime, déjà couverte (le
-    store canonique l'accepte sans jugement d'autorité définitif, et la
-    résolution reste `UNKNOWN` tant que le prédécesseur manque) — ce n'est
-    **pas** une violation d'I19. Mais A5, pour les délégations
-    spécifiquement, va plus loin que « l'absence est temporaire » : une fois
-    le parent *arrivé*, peu importe l'ordre relatif de `sequence` dans
-    lequel parent et enfant ont été **ingérés** — seule compte la question
-    « les deux existent-ils à la `sequence` d'évaluation ? ». C'est un choix
-    de conception déjà spécifié et déjà testé (le parent peut porter une
-    `sequence` supérieure à celle de l'enfant qui le référence, et la chaîne
-    devient pleinement valide dès que les deux sont visibles), parce
-    qu'une chaîne de délégation est évaluée comme un **instantané** de
-    graphe à `atSequence`, jamais comme la preuve qu'une revendication
-    ponctuelle s'appuyait sur une preuve déjà là au moment précis de son
-    émission. C'est cette seconde catégorie de champ — une revendication sur
-    un instant précis (« je réponds, maintenant, à cette requête
-    d'approbation déjà déposée » ; « j'ai exécuté en m'appuyant sur cette
-    approbation déjà accordée ») — qu'I19 contraint par l'ordre causal.
-    `parent_delegation_id` n'en fait pas partie : c'est un pointeur
-    structurel dans un graphe résolu par instantané, pas une revendication
-    temporelle. Le confondre avec les deux premiers casserait A5, qui reste
-    un comportement voulu, pas une faille.
+    **Distinction from out-of-order delivery (A5, already handled), and
+    why `parent_delegation_id` is not ordered by I19.** I19 concerns
+    only the causal relationship once **both** events are present
+    in the store, never the temporary absence of one of the two. An
+    event whose referenced predecessor has not yet arrived at the
+    moment of ingestion (A5) is a legitimate situation, already covered (the
+    canonical store accepts it without a final authority judgment, and the
+    resolution remains `UNKNOWN` while the predecessor is missing). This is
+    **not** an I19 violation. But A5, for delegations
+    specifically, goes further than "the absence is temporary": once
+    the parent has *arrived*, it does not matter what relative `sequence` order
+    parent and child were **ingested** in. Only the question
+    "do both exist at the evaluation `sequence`?" matters. This is a
+    design choice already specified and already tested (the parent can carry a
+    `sequence` greater than that of the child that references it, and the chain
+    becomes fully valid as soon as both are visible), because
+    a delegation chain is evaluated as a **snapshot** of the
+    graph at `atSequence`, never as proof that a specific
+    claim relied on evidence already present at the exact instant of its
+    issuance. It is this second category of field, a claim about
+    a specific instant ("I am answering, now, this
+    already-filed approval request"; "I executed relying on
+    this already-granted approval"), that I19 constrains through causal order.
+    `parent_delegation_id` is not part of it: it is a structural pointer in a
+    graph resolved by snapshot, not a temporal claim.
+    Conflating it with the first two would break A5, which remains
+    intended behavior, not a flaw.
 
-    **Note sur l'égalité de séquence.** Le système d'ingestion réel
-    (`src/engine/ingest.ts`) attribue une `sequence` strictement croissante
-    et unique à chaque événement accepté, un par un : deux événements
-    distincts ne peuvent jamais, en pratique, partager la même `sequence`.
-    Deux événements de test construits directement comme `AuthorityEvent`
-    déjà « ingérés » (en dehors de toute ingestion réelle) peuvent en
-    revanche partager une valeur de `sequence` par convention d'écriture du
-    test (par exemple pour représenter « la même étape logique »). I19
-    tolère cette égalité (elle ne peut de toute façon jamais survenir via une
-    ingestion réelle, donc la tolérer n'ouvre aucune brèche observable) ;
-    seule une `sequence` **strictement supérieure** — un événement qui
-    n'existait, de façon démontrable, pas encore — constitue une violation.
+    **Note on sequence equality.** The real ingestion system
+    (`src/engine/ingest.ts`) assigns a strictly increasing and unique
+    `sequence` to each accepted event, one at a time: two distinct
+    events can never, in practice, share the same `sequence`.
+    Two test events built directly as an `AuthorityEvent` already
+    "ingested" (outside any real ingestion), by contrast, can share a
+    `sequence` value by test-writing convention (for example to
+    represent "the same logical step"). I19 tolerates this equality (it can never
+    occur through real ingestion anyway, so tolerating it opens no
+    observable gap). Only a **strictly greater** `sequence`, an
+    event that, demonstrably, did not yet exist, constitutes a violation.
 
-    **Sortie, tranchée.** Une référence violant I19 est traitée exactement
-    **comme si l'événement cité n'existait pas** — jamais comme s'il existait
-    avec un sens plus permissif. Ce n'est pas une nouvelle valeur de sortie
-    ad hoc par champ : c'est l'application directe de la sémantique déjà
-    spécifiée pour « cet événement n'existe pas », propre à chaque champ
-    concerné, et donc déjà déterministe : pour `APPROVAL_GRANTED`/
-    `APPROVAL_DENIED`, la décision d'approbation est ignorée, exactement
-    comme si elle n'avait jamais été émise (voir C16 pour I14, même
-    traitement) — une décision monétaire dans la bande d'approbation sans
-    aucune décision d'approbation valide et non consommée reste
-    `REQUIRES_APPROVAL` (C4) ; elle ne devient jamais `AUTHORIZED` sur la
-    foi d'une citation causalement impossible.
+    **Output, decided.** A reference violating I19 is treated exactly
+    **as if the cited event did not exist**, never as if it existed
+    with a more permissive meaning. This is not a new, ad hoc output
+    value per field: it is the direct application of the semantics already
+    specified for "this event does not exist," specific to each
+    field concerned, and therefore already deterministic: for `APPROVAL_GRANTED`/
+    `APPROVAL_DENIED`, the approval decision is ignored, exactly
+    as if it had never been issued (see C16 for I14, same
+    treatment). A monetary decision in the approval band with
+    no valid and unconsumed approval decision remains
+    `REQUIRES_APPROVAL` (C4). It never becomes `AUTHORIZED` on the
+    strength of a causally impossible citation.
 
-    Test : une `APPROVAL_GRANTED` (ou `APPROVAL_DENIED`) dont l'`approval_id`
-    ne correspond à aucune `APPROVAL_REQUESTED` présente et causalement non
-    postérieure ne doit jamais faire basculer une question en `AUTHORIZED`
-    (ou en `DENIED` pour un refus) sur la seule foi de cette citation ; une
-    `SUBDELEGATION_CREATED` dont le parent arrive, dans le store, à une
-    `sequence` supérieure à celle de l'enfant qui le référence doit rester
-    résolue normalement dès que les deux sont visibles (A5 — non concerné par
-    la moitié « ordre » d'I19).
-20. **I20 — Qui peut débiter un `total_budget` (PROMPT 6b, finding #2 ;
-    complétée PROMPT 6e, maillons intermédiaires — protection incomplète
-    tant que ce complément n'était pas écrit, pas une limitation assumée
-    comme A24).**
-    `remainingBudget` (`src/engine/evaluateConstraints.ts`) somme, pour une
-    délégation D bornée par `total_budget`, tous les `ACTION_EXECUTED`
-    visibles dont `authority_chain_ref` passe par D — mais jusqu'ici sans
-    jamais vérifier que l'exécution comptabilisée avait un rapport
-    démontrable avec l'identité qui détenait effectivement cette chaîne.
-    N'importe qui peut soumettre une `ACTION_EXECUTED` citant la délégation
-    d'un tiers dans son `authority_chain_ref` — I3 l'accepte sans jugement
-    d'autorité (l'ingestion ne valide pas l'autorité d'une exécution, voir
-    I18) — et jusqu'ici cette écriture, une fois dans le store, débitait le
-    budget de ce tiers, sans qu'aucune décision `AUTHORIZED` n'ait jamais été
-    démontrée pour elle : un déni de service par épuisement de budget contre
-    une chaîne par ailleurs parfaitement légitime.
+    Test: an `APPROVAL_GRANTED` (or `APPROVAL_DENIED`) whose `approval_id`
+    matches no `APPROVAL_REQUESTED` that is present and not causally
+    later must never turn a question into `AUTHORIZED`
+    (or into `DENIED` for a denial) on the sole strength of this citation. A
+    `SUBDELEGATION_CREATED` whose parent arrives, in the store, at a
+    `sequence` greater than that of the child that references it must remain
+    resolved normally as soon as both are visible (A5, not concerned by
+    the "order" half of I19).
+20. **I20: Who can debit a `total_budget` (PROMPT 6b, finding #2;
+    completed by PROMPT 6e, intermediate links: incomplete protection
+    while this addition was not yet written, not an accepted limitation
+    like A24).**
+    `remainingBudget` (`src/engine/evaluateConstraints.ts`) sums, for a
+    delegation D bounded by `total_budget`, every visible `ACTION_EXECUTED`
+    whose `authority_chain_ref` passes through D, but until now without
+    ever checking that the counted execution had a demonstrable relationship
+    with the identity that actually held that chain.
+    Anyone can submit an `ACTION_EXECUTED` citing a third party's delegation
+    in its `authority_chain_ref`. I3 accepts it without an authority
+    judgment (ingestion does not validate the authority of an execution, see
+    I18), and until now this write, once in the store, debited that
+    third party's budget without any `AUTHORIZED` decision ever having been
+    demonstrated for it: a denial of service through budget exhaustion against
+    an otherwise perfectly legitimate chain.
 
-    **Pourquoi pas une re-résolution complète (risque de récursion).**
-    `remainingBudget` est appelé depuis `evaluateConstraints`
-    (`budgetExceeded`) et depuis `validateChain` (`totalBudgetBoundOk`),
-    tous deux **sur le chemin de décision** de `resolveAuthority` lui-même.
-    Exiger, pour chaque `ACTION_EXECUTED` sommée, une preuve complète
-    qu'elle *aurait été* `AUTHORIZED` à son `decision_sequence` obligerait
-    `remainingBudget` à rappeler `resolveAuthority` pour chacune — et si la
-    chaîne de CETTE exécution passe elle-même par une délégation bornée par
-    `total_budget`, cet appel rappellerait `remainingBudget`, qui
-    rappellerait potentiellement `resolveAuthority`, etc. : une dépendance
-    circulaire, sans garantie de terminaison comparable à I10 (I10 borne la
-    profondeur d'**une** chaîne de délégation ; rien ne borne ici le nombre
-    d'exécutions historiques imbriquées les unes dans les autres). I20 exclut
-    délibérément cette voie : il ne redemande **jamais** au resolver si une
-    exécution passée aurait été autorisée.
+    **Why not a full re-resolution (recursion risk).**
+    `remainingBudget` is called from `evaluateConstraints`
+    (`budgetExceeded`) and from `validateChain` (`totalBudgetBoundOk`),
+    both **on the decision path** of `resolveAuthority` itself.
+    Requiring, for every `ACTION_EXECUTED` summed, complete proof
+    that it *would have been* `AUTHORIZED` at its `decision_sequence` would force
+    `remainingBudget` to call back into `resolveAuthority` for each one, and if
+    the chain of THAT execution itself passes through a delegation bounded by
+    `total_budget`, that call would call back into `remainingBudget`, which
+    would potentially call back into `resolveAuthority`, and so on: a
+    circular dependency, with no termination guarantee comparable to I10 (I10 bounds
+    the depth of **one** delegation chain. Nothing here bounds the number
+    of nested historical executions). I20 deliberately excludes
+    this path: it **never** asks the resolver again whether a
+    past execution would have been authorized.
 
-    **La règle, non récursive.** Une `ACTION_EXECUTED` ne compte contre le
-    `total_budget` d'aucune délégation de son `authority_chain_ref` — ni la
-    délégation directement invoquée, ni un ancêtre borné plus haut dans la
-    même chaîne — sauf si les trois conditions suivantes, purement
-    structurelles et déjà immuables dans le store, sont satisfaites :
-    - `executed_by_principal_id` de l'`ACTION_EXECUTED` est exactement
-      `requesting_principal_id` de l'`ACTION_REQUESTED` de même `action_id`
-      (celui qui a exécuté est celui qui avait demandé — pas un tiers qui
-      s'attribue l'exécution d'une demande d'autrui) ;
-    - le dernier maillon de type délégation dans `authority_chain_ref` (le
-      maillon terminal, celui que l'exécutant prétend avoir exercé) a pour
-      `grantee_principal_id` exactement `executed_by_principal_id` (la
-      chaîne citée se termine réellement chez l'exécutant, pas chez un
-      tiers dont l'exécutant se contente de recopier l'identifiant de
-      délégation) ;
-    - **(PROMPT 6e)** chaque maillon délégation cité dans
-      `authority_chain_ref` — pas seulement le maillon terminal — est soit
-      le maillon terminal lui-même, soit l'un de ses ancêtres **réels**,
-      atteignable en remontant `parent_delegation_id` depuis le terminal. Un
-      `delegation_id` cité qui n'est pas sur ce chemin — même s'il est réel
-      et causalement antérieur (I19 ne le rejette pas : I19 valide
-      l'existence et l'ordre causal d'une référence, jamais qu'elle
-      appartienne à la bonne chaîne) — n'est pas un maillon légitime de
-      **cette** chaîne : il est exclu du débit pour la délégation qu'il
-      désigne, exactement comme s'il n'apparaissait pas dans le tableau. Les
-      deux premières conditions vérifient *qui* a exécuté et *où* la chaîne
-      se termine ; celle-ci vérifie que le reste du tableau raconte une
-      seule chaîne cohérente jusqu'à ce terminal, pas une liste
-      d'identifiants réels mais sans rapport entre eux.
+    **The rule, non-recursive.** An `ACTION_EXECUTED` counts against the
+    `total_budget` of none of the delegations in its `authority_chain_ref`, neither the
+    directly invoked delegation, nor an ancestor bounded further up in the
+    same chain, unless the following three conditions, purely
+    structural and already immutable in the store, are satisfied:
+    - `executed_by_principal_id` of the `ACTION_EXECUTED` is exactly
+      `requesting_principal_id` of the `ACTION_REQUESTED` with the same `action_id`
+      (whoever executed is whoever requested, not a third party
+      claiming the execution of someone else's request);
+    - the last delegation-type link in `authority_chain_ref` (the
+      terminal link, the one the executor claims to have exercised) has
+      `grantee_principal_id` exactly equal to `executed_by_principal_id` (the
+      cited chain actually terminates at the executor, not at a
+      third party whose delegation identifier the executor merely
+      copies);
+    - **(PROMPT 6e)** each delegation link cited in
+      `authority_chain_ref`, not only the terminal link, is either
+      the terminal link itself, or one of its **real** ancestors,
+      reachable by walking up `parent_delegation_id` from the terminal. A
+      cited `delegation_id` that is not on this path, even if it is real
+      and causally earlier (I19 does not reject it: I19 validates
+      the existence and causal order of a reference, never
+      that it belongs to the correct chain), is not a legitimate link of
+      **this** chain: it is excluded from the debit for the delegation it
+      designates, exactly as if it did not appear in the table. The
+      first two conditions check *who* executed and *where* the chain
+      terminates. This one checks that the rest of the table describes a
+      single coherent chain up to that terminal, not a list
+      of real but unrelated identifiers.
 
-    Les deux premières vérifications ne consultent que des champs déjà
-    présents et immuables sur des événements déjà ingérés (I3) — aucun appel
-    à `resolveAuthority`/`validateChain`, aucune récursion. La troisième
-    demande de remonter `parent_delegation_id` depuis le maillon terminal :
-    une remontée structurelle existe déjà (`walkUpChain`,
-    `src/engine/validateChain.ts`), mais elle vit sur le chemin de décision
-    de `resolveAuthority` lui-même (et `validateChain.ts` importe déjà
-    `remainingBudget` depuis `evaluateConstraints.ts` pour le bornage I5 du
-    `total_budget` — importer `walkUpChain` en sens inverse créerait une
-    dépendance circulaire entre les deux modules) ; elle fait par ailleurs
-    plus que nécessaire ici (vérifications de `schema_version`, de
-    `can_delegate`, sémantique I10 pensée pour une décision d'autorisation,
-    pas pour une simple question d'appartenance structurelle). La remontée
-    utilisée ici est donc une fonction locale, minimale, distincte : elle ne
-    fait que suivre les pointeurs `parent_delegation_id` jusqu'à une racine
-    ou un maillon manquant, sans revalider quoi que ce soit d'autre, avec la
-    même protection anti-cycle que I10 (borne de profondeur, ensemble des
-    identifiants déjà visités) pour ne jamais boucler indéfiniment sur un
-    graphe construit de façon malveillante. Comme les deux premières
-    conditions, elle ne rappelle jamais `resolveAuthority` ni
-    `evaluateConstraints` : même classe de coût asymptotique que les
-    lectures déjà existantes de `remainingBudget`, aucune récursion.
+    The first two checks consult only fields already
+    present and immutable on already ingested events (I3): no call
+    to `resolveAuthority`/`validateChain`, no recursion. The third
+    requires walking up `parent_delegation_id` from the terminal link:
+    a structural walk-up already exists (`walkUpChain`,
+    `src/engine/validateChain.ts`), but it lives on the decision path
+    of `resolveAuthority` itself (and `validateChain.ts` already imports
+    `remainingBudget` from `evaluateConstraints.ts` for the I5 bounding of
+    `total_budget`. Importing `walkUpChain` in the reverse direction would create
+    a circular dependency between the two modules). It also does
+    more than necessary here (`schema_version` checks,
+    `can_delegate`, I10 semantics designed for an authorization decision,
+    not for a simple question of structural membership). The walk-up
+    used here is therefore a local, minimal, distinct function: it only
+    follows the `parent_delegation_id` pointers up to a root
+    or a missing link, without revalidating anything else, with the
+    same anti-cycle protection as I10 (depth bound, set of
+    already visited identifiers) so as never to loop indefinitely on a
+    maliciously constructed graph. Like the first two
+    conditions, it never calls back into `resolveAuthority` or
+    `evaluateConstraints`: the same asymptotic cost class as the
+    already existing `remainingBudget` reads, no recursion.
 
-    **Cohérence avec A5 (livraison hors-ordre) — ne pas réintroduire un ordre
-    de `sequence`.** Cette remontée locale ne compare **aucune** `sequence`
-    entre un maillon et son parent : elle ne fait que suivre
-    `parent_delegation_id` par correspondance d'identifiant, exactement comme
-    `walkUpChain` le fait déjà pour la résolution normale (voir I19,
-    « Distinction avec la livraison hors-ordre » — un parent peut porter une
-    `sequence` supérieure à celle de son enfant, et cela reste parfaitement
-    valide). Ajouter ici une contrainte d'ordre que le reste du moteur
-    n'impose nulle part ailleurs romprait cette cohérence sans raison : la
-    question posée est uniquement « ce `delegation_id` est-il structurellement
-    sur le chemin vers le terminal ? », jamais « dans quel ordre ces
-    événements sont-ils arrivés ? ».
+    **Consistency with A5 (out-of-order delivery): do not reintroduce a
+    `sequence` order.** This local walk-up compares **no** `sequence`
+    between a link and its parent: it only follows
+    `parent_delegation_id` by identifier match, exactly as
+    `walkUpChain` already does for normal resolution (see I19,
+    "Distinction from out-of-order delivery": a parent can carry a
+    `sequence` greater than that of its child, and this remains perfectly
+    valid). Adding an order constraint here that the rest of the engine
+    imposes nowhere else would break this consistency for no reason: the
+    question asked is only "is this `delegation_id` structurally
+    on the path to the terminal," never "in what order did these
+    events arrive."
 
-    **Ce que I20 ne garantit pas.** Ces trois conditions sont nécessaires,
-    pas suffisantes : elles ne revalident ni l'expiration, ni la révocation,
-    ni la couverture de capacité, ni les seuils de montant de la chaîne
-    citée — seule une résolution complète le ferait, et c'est précisément
-    ce qu'I20 refuse de redemander pour éviter la récursion ci-dessus. I20
-    ferme le vecteur « un tiers sans aucun rapport avec la chaîne cite le
-    `delegation_id` d'autrui » — que ce tiers soit le maillon terminal
-    revendiqué (PROMPT 6b) ou un maillon intermédiaire glissé dans un
-    tableau par ailleurs légitime (PROMPT 6e) ; une exécution qui échoue
-    l'une de ces trois vérifications est exclue du débit **pour la
-    délégation concernée**, exactement comme si le maillon en cause
-    n'apparaissait pas dans `authority_chain_ref` — ce n'est pas une
-    nouvelle valeur de sortie, c'est un décompte corrigé qui alimente C1–C9
-    normalement.
+    **What I20 does not guarantee.** These three conditions are necessary,
+    not sufficient: they do not revalidate expiration, revocation,
+    capability coverage, or the amount thresholds of the cited chain.
+    Only a full resolution would do that, and that is precisely
+    what I20 refuses to ask for again to avoid the recursion above. I20
+    closes the vector "a third party wholly unrelated to the chain cites
+    someone else's `delegation_id`," whether that third party is the claimed
+    terminal link (PROMPT 6b) or an intermediate link slipped into an
+    otherwise legitimate table (PROMPT 6e). An execution that fails
+    one of these three checks is excluded from the debit **for the
+    delegation concerned**, exactly as if the link at issue
+    did not appear in `authority_chain_ref`. This is not a
+    new output value, it is a corrected count that feeds C1 through C9
+    normally.
 
-    **Cohérence avec A24 (TOCTOU budgétaire) — I20 ne change rien à A24.**
-    A24 documente que deux décisions individuellement `AUTHORIZED`, prises
-    par le même titulaire légitime, peuvent ensemble dépasser `total_budget`
-    faute de réservation : c'est une question de **moment** (deux décisions
-    honnêtes, jamais réconciliées avant exécution). I20 est une question
-    d'**identité** (une exécution malhonnête, jamais légitimement rattachée
-    à la chaîne qu'elle cite). Les deux conditions d'I20 sont trivialement
-    satisfaites dans le scénario A24 (le même principal légitime demande et
-    exécute, via sa propre délégation) : I20 ne bloque, ne détecte, ni ne
-    corrige le dépassement A24, qui reste un dépassement honnête entre deux
-    exécutions par ailleurs chacune conformes à I20. Les deux invariants
-    portent sur des axes indépendants et ne se contredisent pas.
+    **Consistency with A24 (budget TOCTOU): I20 changes nothing about A24.**
+    A24 documents that two individually `AUTHORIZED` decisions, made
+    by the same legitimate holder, can together exceed `total_budget`
+    for lack of reservation: this is a question of **timing** (two honest
+    decisions, never reconciled before execution). I20 is a question
+    of **identity** (a dishonest execution, never legitimately attached
+    to the chain it cites). I20's two conditions are trivially
+    satisfied in the A24 scenario (the same legitimate principal requests and
+    executes, through their own delegation): I20 does not block, detect, or
+    correct the A24 overrun, which remains an honest overrun between two
+    executions that are each otherwise compliant with I20. The two invariants
+    concern independent axes and do not contradict each other.
 
-    Test : une `ACTION_EXECUTED` dont l'`executed_by_principal_id` diffère
-    du `requesting_principal_id` de l'`ACTION_REQUESTED` qu'elle cite, ou
-    dont le maillon terminal de `authority_chain_ref` a un
-    `grantee_principal_id` différent de son propre `executed_by_principal_id`,
-    ne doit jamais réduire le `total_budget` restant d'aucune délégation de
-    cette chaîne — une requête par ailleurs légitime et dans la bande
-    automatique de son titulaire réel reste `AUTHORIZED`. Une `ACTION_EXECUTED`
-    par ailleurs entièrement légitime (exécutant = demandeur, chaîne se
-    terminant correctement chez lui), mais dont `authority_chain_ref` cite en
-    plus le `delegation_id` d'un tiers réel, causalement antérieur, mais
-    **sans lien d'ascendance réel** avec le maillon terminal, ne doit jamais
-    réduire le `total_budget` de ce tiers : une requête légitime de ce tiers,
-    dans sa propre bande, reste `AUTHORIZED`.
+    Test: an `ACTION_EXECUTED` whose `executed_by_principal_id` differs
+    from the `requesting_principal_id` of the `ACTION_REQUESTED` it cites, or
+    whose terminal link in `authority_chain_ref` has a
+    `grantee_principal_id` different from its own `executed_by_principal_id`,
+    must never reduce the remaining `total_budget` of any delegation in
+    this chain: an otherwise legitimate request within its actual holder's
+    automatic band remains `AUTHORIZED`. An otherwise entirely
+    legitimate `ACTION_EXECUTED` (executor equals requester, chain
+    terminating correctly at them), but whose `authority_chain_ref` additionally
+    cites the `delegation_id` of a real, causally earlier third party but
+    **with no real ancestry link** to the terminal link, must never
+    reduce that third party's `total_budget`: a legitimate request from that
+    third party, within their own band, remains `AUTHORIZED`.
 
-Les quatre invariants suivants (I21–I24) portent sur une surface distincte :
-la **capability issuance** (`issueCapability`/`issueCapabilityIdempotently`,
-PR3 à PR4B-5A), une commande explicite — COMMAND -> DÉCISION -> DONNÉES
-D'ÉVÉNEMENT — plutôt qu'une question posée sur l'état courant. Elle
-n'introduit pas une troisième opération de lecture : `authorityAt` et
-`explainAction` restent les deux seules opérations qui répondent à une
-question ; `issueCapability` est un chemin d'écriture séparé, qui réutilise
-la même résolution de délégation invoquée et le même modèle de capacité,
-mais qui, en cas de succès, écrit un événement `CAPABILITY_ISSUED` fixant
-cette décision de façon permanente.
+The following four invariants (I21 through I24) concern a distinct surface:
+**capability issuance** (`issueCapability`/`issueCapabilityIdempotently`,
+PR3 through PR4B-5A), an explicit command, COMMAND -> DECISION -> EVENT
+DATA, rather than a question asked about the current state. It does
+not introduce a third read operation: `authorityAt` and
+`explainAction` remain the only two operations that answer a
+question. `issueCapability` is a separate write path, which reuses
+the same invoked-delegation resolution and the same capability model,
+but which, on success, writes a `CAPABILITY_ISSUED` event fixing
+this decision permanently.
 
-21. **I21 — L'instant d'évaluation d'une commande d'émission est explicite,
-    jamais reconstruit.** `issueCapability` reçoit `authorityTime` comme
-    paramètre séparé et obligatoire — jamais un champ d'`IssueCapabilityCommand`,
-    jamais une valeur dérivée du dernier `authority_time` visible dans le
-    store. Reconstruire cet instant depuis le journal était un défaut réel :
-    le temps peut passer sans qu'aucun nouvel événement soit journalisé, et
-    cette reconstruction laissait paraître valide indéfiniment une
-    délégation expirée depuis longtemps, faute d'événement postérieur pour
-    le révéler. `authorityTime` (l'instant de confiance explicite) et
-    `snapshotSequence` (la causalité : quels événements sont visibles)
-    restent deux axes indépendants, jamais confondus — sur le même modèle
-    que le couple `{atSequence, authorityTime}` d'`authorityAt`.
-    Sur une émission acceptée : `decision_sequence = snapshotSequence` (
-    jamais dérivé du temps) ; `authority_time = authorityTime` ; et,
-    l'événement `CAPABILITY_ISSUED` étant auto-produit par Authority elle-même
-    (la source de cet événement est le code de la transaction, pas un
-    système externe), `occurred_at = authorityTime` également — cette valeur
-    représente l'instant logique où Authority a pris la décision et construit
-    la capability, jamais l'instant où l'écriture a été physiquement rendue
-    durable. `recorded_at` reste l'horloge d'infrastructure, lue séparément,
-    au moment où le store voit effectivement passer l'événement ; aucune
-    relation d'ordre absolue entre `recorded_at` et `occurred_at` n'est
-    garantie — ce sont deux horloges de nature différente, jamais comparées
-    entre elles par le moteur.
+21. **I21: The evaluation instant of an issuance command is explicit,
+    never reconstructed.** `issueCapability` receives `authorityTime` as a
+    separate, mandatory parameter, never a field of `IssueCapabilityCommand`,
+    never a value derived from the last `authority_time` visible in the
+    store. Reconstructing this instant from the log was a real defect:
+    time can pass without any new event being logged, and
+    this reconstruction made a delegation expired long ago
+    look valid indefinitely, for lack of a later event to
+    reveal it. `authorityTime` (the explicit trust instant) and
+    `snapshotSequence` (causality: which events are visible)
+    remain two independent axes, never conflated, on the same model
+    as the `{atSequence, authorityTime}` pair of `authorityAt`.
+    On an accepted issuance: `decision_sequence = snapshotSequence` (
+    never derived from time); `authority_time = authorityTime`; and,
+    since the `CAPABILITY_ISSUED` event is self-produced by Authority itself
+    (the source of this event is the transaction's code, not an
+    external system), `occurred_at = authorityTime` as well. This value
+    represents the logical instant at which Authority made the decision and constructed
+    the capability, never the instant at which the write was physically made
+    durable. `recorded_at` remains the infrastructure clock, read separately,
+    at the moment the store actually sees the event go by. No
+    absolute ordering relationship between `recorded_at` and `occurred_at` is
+    guaranteed. These are two clocks of a different nature, never compared
+    against each other by the engine.
 
-22. **I22 — Une commande d'émission refuse un instant explicite antérieur à
-    la borne de confiance que la transaction doit préserver.** Ce n'est
-    **pas** un verdict d'autorité : l'agent peut détenir une autorité
-    parfaitement valide à cet instant précis. C'est une précondition de
-    cohérence temporelle de la commande elle-même, distincte du diagnostic
-    `LATE_OR_BACKDATED_EVENT_OBSERVED` (I4) qui ne bloque jamais aucune
-    décision — celle-ci bloque, déterministiquement, chaque fois qu'elle
-    s'applique. La règle publique :
-    - une émission est refusée avec `STALE_AUTHORITY_TIME` lorsque
-      `authorityTime` est antérieur à la borne temporelle de confiance que
-      la transaction d'émission (InMemory ou PostgreSQL) doit préserver pour
-      ce store ;
-    - **au minimum**, cette borne ne peut jamais être inférieure au maximum
-      des `authority_time` déjà canoniquement visibles dans le store — mais
-      ce plancher n'est pas une définition exhaustive : la transaction reste
-      libre de préserver une borne de confiance plus stricte que ce seul
-      maximum canonique (une transaction ne doit jamais accepter une valeur
-      qu'elle sait, par un moyen quelconque à sa disposition, être déjà
-      dépassée) ;
-    - une valeur égale à la borne applicable est acceptée, jamais refusée ;
-    - un store sans aucun événement canonique n'a pas de maximum, donc rien
-      n'y est jamais `STALE_AUTHORITY_TIME` ;
-    - aucune émission acceptée ne peut résulter d'un clamp silencieux de
-      `authorityTime` : soit la valeur explicite fournie est utilisée
-      telle quelle pour `authority_time`/`occurred_at`/l'évaluation
-      d'expiration, soit l'émission est refusée — jamais une troisième
-      voie qui substituerait silencieusement une autre valeur ;
-    - aucun `CAPABILITY_ISSUED` n'est jamais écrit pour une commande refusée
-      `STALE_AUTHORITY_TIME`, exactement comme pour tout autre refus (I24).
-    Les deux backends (InMemory et PostgreSQL) appliquent cette garantie à
-    leur propre frontière transactionnelle ; voir `THREAT_MODEL.md` pour la
-    défense correspondante.
+22. **I22: An issuance command refuses an explicit instant earlier than
+    the trust boundary the transaction must preserve.** This is
+    **not** an authority verdict: the agent may hold perfectly valid
+    authority at that exact instant. It is a temporal consistency precondition
+    of the command itself, distinct from the `LATE_OR_BACKDATED_EVENT_OBSERVED`
+    diagnostic (I4), which never blocks any decision. This one
+    blocks, deterministically, every time it applies. The public rule:
+    - an issuance is refused with `STALE_AUTHORITY_TIME` when
+      `authorityTime` is earlier than the trust time boundary that
+      the issuance transaction (InMemory or PostgreSQL) must preserve for
+      that store;
+    - **at minimum**, this boundary can never be lower than the maximum
+      of the `authority_time` values already canonically visible in the store,
+      but this floor is not an exhaustive definition: the transaction remains
+      free to preserve a stricter trust boundary than this sole
+      canonical maximum (a transaction must never accept a value
+      that it knows, by whatever means available to it, to already be
+      exceeded);
+    - a value equal to the applicable boundary is accepted, never refused;
+    - a store with no canonical event has no maximum, so nothing
+      in it is ever `STALE_AUTHORITY_TIME`;
+    - no accepted issuance can result from a silent clamp of
+      `authorityTime`: either the explicit value supplied is used
+      as-is for `authority_time`/`occurred_at`/the expiration
+      evaluation, or the issuance is refused. There is never a third
+      path that would silently substitute another value;
+    - no `CAPABILITY_ISSUED` is ever written for a command refused with
+      `STALE_AUTHORITY_TIME`, exactly as for any other refusal (I24).
+    Both backends (InMemory and PostgreSQL) enforce this guarantee at
+    their own transactional boundary. See `THREAT_MODEL.md` for the
+    corresponding defense.
 
-23. **I23 — Portée et permanence de l'idempotence d'une commande d'émission.**
-    La clé d'idempotence est le triplet `(authenticated_requester_id,
-    operation, client_idempotency_key)` — jamais la clé brute fournie par
-    l'appelant seule, puisque deux appelants authentifiés différents
-    pourraient sinon présenter la même clé brute et entrer en collision.
-    La première exécution sous une clé donnée fixe le résultat de façon
-    permanente pour cette clé, **y compris un refus** (`STALE_AUTHORITY_TIME`
-    ou tout autre) : ce résultat est celui que toute relecture ultérieure
-    sous la même clé doit reproduire à l'identique. Une nouvelle tentative
-    sous la même clé, à un `authorityTime` différent, ne réévalue jamais rien
-    : elle rejoue le résultat original — `authorityTime` n'entre ni dans la
-    comparaison des commandes, ni dans la clé de portée elle-même,
-    précisément pour qu'un `authorityTime` différent seul ne puisse jamais
-    transformer une relecture légitime en conflit. Un appelant qui veut
-    réellement une nouvelle décision doit utiliser une nouvelle clé. Une
-    même clé réutilisée avec une commande différente (`action_id` et/ou
-    `enforcement_point_id` différents) est un `IDEMPOTENCY_CONFLICT` : ni
-    l'ancien ni le nouveau résultat n'est retourné comme s'il convenait,
-    l'appelant doit résoudre le conflit lui-même.
+23. **I23: Scope and permanence of an issuance command's idempotence.**
+    The idempotency key is the triple `(authenticated_requester_id,
+    operation, client_idempotency_key)`, never the raw key supplied by
+    the caller alone, since two different authenticated callers
+    could otherwise present the same raw key and collide.
+    The first execution under a given key fixes the result of that key
+    permanently, **including a refusal** (`STALE_AUTHORITY_TIME`
+    or any other): this is the result that any later replay
+    under the same key must reproduce identically. A new attempt
+    under the same key, at a different `authorityTime`, never reevaluates anything.
+    It replays the original result. `authorityTime` enters neither
+    the comparison of commands, nor the scoping key itself,
+    precisely so that a different `authorityTime` alone can never
+    turn a legitimate replay into a conflict. A caller who genuinely wants
+    a new decision must use a new key. The same
+    key reused with a different command (a different `action_id` and/or
+    `enforcement_point_id`) is an `IDEMPOTENCY_CONFLICT`: neither
+    the old nor the new result is returned as if it were fine.
+    The caller must resolve the conflict itself.
 
-24. **I24 — Une émission de capacité n'est visible qu'entière, jamais
-    partielle.** Un succès (`CAPABILITY_ISSUED` canonique) et son
-    enregistrement d'idempotence associé deviennent visibles ensemble, ou
-    aucun des deux ; un refus, quelle qu'en soit la raison, n'écrit jamais
-    de `CAPABILITY_ISSUED`. `capability_id` est un identifiant métier
-    protégé : une collision (générateur forcé ou défectueux) est rejetée de
-    façon fail-closed, et aucun enregistrement de succès n'est jamais
-    conservé pour une émission ainsi rejetée. Cette garantie de visibilité
-    conjointe est qualifiée différemment selon le backend : PostgreSQL
-    l'obtient par une vraie transaction ACID (`BEGIN`/`COMMIT`/`ROLLBACK`) ;
-    l'implémentation InMemory l'obtient par sérialisation stricte des appels
-    sur une seule instance (un mutex à file de promesses), sans garantie de
-    crash-atomicité au-delà de ce que le modèle en mémoire implique déjà —
-    les deux backends ne doivent jamais être présentés comme offrant la même
-    force de garantie au repos, seulement la même séquence observable de
-    résultats en l'absence de panne.
+24. **I24: A capability issuance is visible only whole, never
+    partial.** A success (canonical `CAPABILITY_ISSUED`) and its
+    associated idempotency record become visible together, or
+    neither does. A refusal, whatever the reason, never writes a
+    `CAPABILITY_ISSUED`. `capability_id` is a protected business
+    identifier: a collision (a forced or defective generator) is rejected
+    fail-closed, and no success record is ever kept for an
+    issuance thus rejected. This joint-visibility guarantee is qualified
+    differently depending on the backend: PostgreSQL obtains it through a real
+    ACID transaction (`BEGIN`/`COMMIT`/`ROLLBACK`). The InMemory
+    implementation obtains it through strict serialization of calls
+    on a single instance (a promise-queued mutex), with no
+    crash-atomicity guarantee beyond what the in-memory model already implies.
+    The two backends must never be presented as offering the same
+    strength of guarantee at rest, only the same observable sequence of
+    results in the absence of a crash.
 
-## Règles d'application complémentaires
+## Additional application rules
 
-Ces règles ne sont pas des invariants numérotés supplémentaires : elles précisent
-comment les invariants ci-dessus s'appliquent concrètement, pour éliminer toute
-zone grise.
+These rules are not additional numbered invariants. They clarify
+how the invariants above apply concretely, to eliminate any
+gray area.
 
-- **Trust anchor (ancre racine).** Chaque `DELEGATION_CREATED` racine
-  (`parent_delegation_id: null`) porte un champ `grantor_type` valant
-  `HUMAN_ROOT` ou `AGENT`. `AUTHORIZED` exige que la chaîne remonte à une racine
-  dont `grantor_type = HUMAN_ROOT`. Une chaîne dont la racine est `AGENT` ne peut
-  pas être complétée plus haut (`parent_delegation_id` racine est toujours `null`
-  par construction) : c'est une chaîne dont la provenance humaine ne peut jamais
-  être établie ⇒ `UNKNOWN`, jamais `DENIED` (on ne prouve pas l'absence
-  d'autorité, on constate l'absence de preuve de sa présence — cf. I1). Pour
-  `authorityAt`, ce `HUMAN_ROOT` doit en outre être exactement celui asserté par
-  `principalId` dans la requête : une racine `HUMAN_ROOT` valide mais différente
-  de `principalId` est `DENIED` pour cette requête précise (preuve positive que
-  cette paire `(agentId, principalId)` n'a pas autorité), pas `UNKNOWN`.
-- **Revalidation systématique (I5, I12, I13, I14).** Le resolver ne suppose
-  jamais que l'ingestion a correctement validé un événement : à chaque
-  `authorityAt()`, il réévalue lui-même I5, I12, I13 et I14 à partir du seul
-  contenu du store canonique jusqu'à la `sequence` d'évaluation. L'ingestion peut
-  rejeter un événement dont la violation est prouvable avec l'état canonique
-  connu au moment de l'ingestion (il n'entre alors jamais dans le store
-  canonique — voir séparation ci-dessous) ; mais un événement structurellement
-  valide qui référence un maillon pas encore connu à l'ingestion (livraison
-  hors-ordre, A5) entre dans le store canonique sans jugement d'autorité définitif,
-  et c'est la résolution qui tranche, avec toute l'information disponible à sa
-  propre `sequence`.
-- **Séparation store canonique / journal de sécurité (précise I3 et I8).**
-  `authorityAt()` ne lit jamais que le store canonique. Un événement dont
-  l'ingestion échoue de façon prouvée (conflit `event_id` — I8 ; collision d'ID
-  métier ; violation prouvée de I12/I13/I14 avec l'état canonique déjà connu)
-  n'est **jamais** écrit dans le store canonique : il est écrit uniquement dans le
-  journal de sécurité (voir `EVENT_MODEL.md`), qui n'est jamais consulté par
-  `authorityAt()`. Ceci retire la promesse antérieure et incohérente selon
-  laquelle « toute évaluation impliquant cet `event_id` retourne `UNKNOWN` » de
-  façon persistante : seule la réponse synchrone à la tentative d'ingestion en
-  conflit est `UNKNOWN` ; les résolutions futures, qui ne voient jamais l'événement
-  rejeté, n'ont aucune raison d'être `UNKNOWN` à cause de lui.
-- **`ingestAll` est un helper de test sans état, pas le store d'événements**
-  (PROMPT 3b). Il démontre le comportement des frontières d'ingestion (I8,
-  unicité des ID métier, I12/I13/I14, rejet de schéma/PII) un lot à la fois,
-  en repartant toujours de `sequence = 1` — ce n'est pas la persistance
-  visée par l'architecture. L'`EventStore` d'un prompt futur possédera : le
-  compteur de `sequence` suivant, en continu à travers les appends
-  successifs (un store ayant déjà accepté les séquences 1..50 numérote un
-  nouvel append 51..80, jamais un redémarrage à 1) ; `recorded_at` à partir
-  de sa propre horloge d'infrastructure ; `authority_time` à partir de la
-  même dépendance d'horloge de confiance, appliquée sur toute la durée de
-  vie du store plutôt qu'un seul lot ; l'unicité d'`event_id` et des ID
-  métier vérifiée contre l'historique complet, pas seulement le lot courant.
-  Voir `src/engine/ingest.ts` pour le contrat détaillé de cette dépendance
-  d'horloge.
-- **Règle multi-chemin.** Si plusieurs chaînes de délégation distinctes mènent au
-  même principal demandeur, il suffit qu'**une seule** d'entre elles soit
-  intégralement valide (chaque maillon autorisé, non expiré, non révoqué, capacité
-  couverte, profondeur respectée) pour que la décision soit `AUTHORIZED` — la
-  présence d'autres chaînes corrompues, révoquées, cycliques ou trop profondes
-  n'affecte pas ce résultat. Ceci empêche qu'un attaquant neutralise une autorité
-  légitime en injectant une chaîne parasite pour déclencher `UNKNOWN` par
-  fail-closed. En contrepartie, aucune chaîne n'est jamais retenue sur la base de
-  « il existe probablement un autre chemin » : la chaîne retenue doit être
-  démontrée valide sur toute sa longueur, avec les mêmes règles que si elle était
+- **Trust anchor.** Every root `DELEGATION_CREATED`
+  (`parent_delegation_id: null`) carries a `grantor_type` field valued
+  `HUMAN_ROOT` or `AGENT`. `AUTHORIZED` requires the chain to go back to a root
+  whose `grantor_type = HUMAN_ROOT`. A chain whose root is `AGENT` cannot
+  be completed further up (a root's `parent_delegation_id` is always `null`
+  by construction): it is a chain whose human provenance can never
+  be established, so `UNKNOWN`, never `DENIED` (absence of authority is not
+  proven, absence of proof of its presence is observed, cf. I1). For
+  `authorityAt`, this `HUMAN_ROOT` must in addition be exactly the one asserted by
+  `principalId` in the request: a valid `HUMAN_ROOT` root but different
+  from `principalId` is `DENIED` for this specific request (positive proof that
+  this `(agentId, principalId)` pair does not have authority), not `UNKNOWN`.
+- **Systematic revalidation (I5, I12, I13, I14).** The resolver never
+  assumes that ingestion correctly validated an event: at every
+  `authorityAt()` call, it reevaluates I5, I12, I13, and I14 itself from
+  the sole content of the canonical store up to the evaluation `sequence`. Ingestion may
+  reject an event whose violation is provable with the canonical state
+  known at the time of ingestion (it then never enters the canonical
+  store, see the separation below). But an event that is structurally
+  valid but references a link not yet known at ingestion time (out-of-order
+  delivery, A5) enters the canonical store with no final authority judgment,
+  and it is resolution that decides, with all information available at its
+  own `sequence`.
+- **Separation of canonical store and security log (refines I3 and I8).**
+  `authorityAt()` never reads anything but the canonical store. An event whose
+  ingestion provably fails (`event_id` conflict: I8; business-ID
+  collision; proven violation of I12/I13/I14 with the canonical state already
+  known) is **never** written to the canonical store: it is written only to the
+  security log (see `EVENT_MODEL.md`), which is never consulted by
+  `authorityAt()`. This withdraws the earlier, inconsistent promise that
+  "any evaluation involving this `event_id` returns `UNKNOWN`" persistently:
+  only the synchronous response to the conflicting ingestion attempt is `UNKNOWN`.
+  Future resolutions, which never see the rejected event, have no reason
+  to be `UNKNOWN` because of it.
+- **`ingestAll` is a stateless test helper, not the event store**
+  (PROMPT 3b). It demonstrates the behavior of ingestion boundaries (I8,
+  business ID uniqueness, I12/I13/I14, schema/PII rejection) one batch at a time,
+  always restarting from `sequence = 1`. This is not the persistence
+  the architecture targets. A future prompt's `EventStore` will have: the
+  next `sequence` counter, continuous across successive
+  appends (a store that has already accepted sequences 1..50 numbers a
+  new append 51..80, never restarting at 1); `recorded_at` from
+  its own infrastructure clock; `authority_time` from the
+  same trusted-clock dependency, applied over the store's entire
+  lifetime rather than a single batch; `event_id` and business ID
+  uniqueness checked against the full history, not just the current batch.
+  See `src/engine/ingest.ts` for the detailed contract of this clock
+  dependency.
+- **Multi-path rule.** If several distinct delegation chains lead to the
+  same requesting principal, it suffices that **only one** of them be
+  fully valid (every link authorized, not expired, not revoked, capability
+  covered, depth respected) for the decision to be `AUTHORIZED`. The
+  presence of other corrupted, revoked, cyclic, or too-deep chains
+  does not affect this result. This prevents an attacker from neutralizing legitimate
+  authority by injecting a parasitic chain to trigger `UNKNOWN` through
+  fail-closed. In exchange, no chain is ever relied upon on the basis of
+  "there probably exists another path": the chain relied upon must be
+  demonstrated valid over its entire length, under the same rules as if it were
   unique.
-- **Sémantique de `total_budget` (non-dépassement, pas réservation).** Propriété
-  visée : à aucune `sequence` S, la somme des `parameters.amount` de toutes les
-  `ACTION_EXECUTED` imputables à une délégation D et à tous ses descendants
-  (celles dont `authority_chain_ref` passe par D) ne dépasse `D.total_budget`,
-  quand `D.total_budget` est déclaré. Chaque exécution est comptabilisée contre
-  **tous** les ancêtres bornés de sa chaîne qui déclarent un `total_budget` — pas
-  seulement la délégation terminale directement invoquée par l'`ACTION_REQUESTED`.
-  V0 ne fournit **aucune garantie de réservation de capacité** : deux évaluations
-  concurrentes portant sur le même état canonique, avant qu'aucune des deux
-  exécutions ne soit enregistrée, peuvent chacune être individuellement
-  `AUTHORIZED` et dépasser `total_budget` une fois combinées (TOCTOU budgétaire,
-  voir A24 dans `THREAT_MODEL.md`). Ce que V0 garantit, c'est que `reste(D, S)`
-  reste toujours calculable de façon déterministe et honnête à partir du seul
-  store canonique — y compris négatif (dépassement constaté) — et que ce
-  dépassement, une fois constaté, est rapporté par `explain()` sans être
-  dissimulé ni les décisions passées réécrites (I3) : V0 identifie l'incohérence
-  après ingestion des exécutions, il ne l'empêche pas avant.
-- **Débit budgétaire et fixité de `authority_chain_ref`.** Le resolver peut
-  découvrir plusieurs chaînes valides vers le même principal (règle multi-chemin,
-  ci-dessus), mais une `ACTION_EXECUTED` référence une chaîne concrète et unique
-  dans `authority_chain_ref`, entièrement valide à `decision_sequence`. C'est
-  exclusivement cette chaîne, et les ancêtres bornés qu'elle contient, qui sont
-  débités pour `total_budget`. `authority_chain_ref` est fixé au moment de
-  l'exécution et n'est jamais recalculé ni réattribué après coup (I3) : un agent
-  ne peut pas invoquer une autre chaîne valide vers le même principal au seul
-  motif qu'elle disposerait de plus de budget restant.
-- **Portée d'un refus (`APPROVAL_DENIED`).** Un refus vise une `APPROVAL_REQUESTED`
-  précise, identifiée par son `approval_id` — jamais un `action_fingerprint` de
-  façon permanente. Une nouvelle `APPROVAL_REQUESTED` portant un `approval_id`
-  différent, même pour une action de `action_fingerprint` identique (même
-  capacité, même montant, même destinataire), est recevable et s'évalue
-  indépendamment (nouvelle instance de C4). `action_fingerprint` n'est jamais une
-  liste noire permanente : en faire une reviendrait à inventer une politique
-  métier (durée de blocage, portée, exceptions) que V0 ne spécifie pas. C'est
-  précisément pour cette raison qu'`authorityAt` (prospective, sans
-  `actionId`) ne consulte jamais `APPROVAL_DENIED` : un refus n'a de sens que
-  rattaché à l'action précise qu'il concerne, et seule `explainAction` a cette
-  action en main.
-- **Révocation ≠ invalidation.** `DELEGATION_REVOKED` signifie « cette délégation
-  était valide et cesse de l'être à partir de cette `sequence` ». Elle ne signifie
-  jamais « cette délégation n'aurait jamais dû exister » (erreur d'émission,
-  compromission au moment de la création). Ce second cas — invalidation
-  rétroactive d'un événement erroné dès l'origine — n'est **pas implémenté en V0**
-  et nécessiterait un type d'événement distinct (`EVENT_INVALIDATED`, extension
-  future non spécifiée ici). V0 ne prétend traiter que la révocation.
+- **Semantics of `total_budget` (non-exceedance, not reservation).** Targeted
+  property: at no `sequence` S does the sum of `parameters.amount` across all
+  `ACTION_EXECUTED` events attributable to a delegation D and all its descendants
+  (those whose `authority_chain_ref` passes through D) exceed `D.total_budget`,
+  when `D.total_budget` is declared. Each execution is counted against
+  **all** bounded ancestors of its chain that declare a `total_budget`, not
+  only the terminal delegation directly invoked by the `ACTION_REQUESTED`.
+  V0 provides **no capacity reservation guarantee**: two concurrent
+  evaluations bearing on the same canonical state, before either
+  execution is recorded, can each be individually
+  `AUTHORIZED` and exceed `total_budget` once combined (budget TOCTOU,
+  see A24 in `THREAT_MODEL.md`). What V0 guarantees is that `remaining(D, S)`
+  remains always computable deterministically and honestly from the sole
+  canonical store, including negative (observed overrun), and that this
+  overrun, once observed, is reported by `explain()` without being
+  concealed or past decisions rewritten (I3): V0 identifies the inconsistency
+  after ingestion of the executions, it does not prevent it beforehand.
+- **Budget debiting and fixedness of `authority_chain_ref`.** The resolver can
+  discover several valid chains toward the same principal (multi-path rule,
+  above), but an `ACTION_EXECUTED` references one concrete and unique chain
+  in `authority_chain_ref`, fully valid at `decision_sequence`. It is
+  exclusively that chain, and the bounded ancestors it contains, that are
+  debited for `total_budget`. `authority_chain_ref` is fixed at the moment of
+  execution and is never recomputed or reassigned afterward (I3): an agent
+  cannot invoke a different valid chain toward the same principal on the sole
+  grounds that it would have more budget remaining.
+- **Scope of a denial (`APPROVAL_DENIED`).** A denial targets a specific
+  `APPROVAL_REQUESTED`, identified by its `approval_id`, never an
+  `action_fingerprint` on a permanent basis. A new `APPROVAL_REQUESTED` carrying a
+  different `approval_id`, even for an action with an identical
+  `action_fingerprint` (same capability, same amount, same recipient), is
+  admissible and is evaluated independently (a new instance of C4).
+  `action_fingerprint` is never a permanent blacklist: making it one would
+  amount to inventing a business policy (block duration, scope, exceptions) that V0
+  does not specify. It is precisely for this reason that `authorityAt`
+  (prospective, with no `actionId`) never consults `APPROVAL_DENIED`: a
+  denial only makes sense attached to the specific action it concerns, and
+  only `explainAction` has that action in hand.
+- **Revocation is not invalidation.** `DELEGATION_REVOKED` means "this delegation
+  was valid and ceases to be so from this `sequence` onward." It never
+  means "this delegation should never have existed" (issuance error,
+  compromise at the moment of creation). This second case, retroactive
+  invalidation of an event erroneous from the start, is **not implemented in V0**
+  and would require a distinct event type (`EVENT_INVALIDATED`, an unspecified
+  future extension). V0 claims to handle only revocation.
 
-## Tableau exhaustif condition → sortie
+## Exhaustive condition to output table
 
-Aucune condition ci-dessous ne produit « DENIED ou UNKNOWN selon le contexte » :
-chaque ligne a une sortie déterministe unique. Sauf mention contraire, chaque
-ligne s'applique à `authorityAt` (question prospective sur une empreinte). C5
-et C6 sont par nature des questions sur une action précise déjà demandée et
-relèvent d'`explainAction` — leur `DENIED` s'entend comme `currentAuthority`
-ou `execution.authorityAtDecision` de cette action, jamais comme une réponse
-qu'`authorityAt` pourrait produire à partir de la seule empreinte (un
-`APPROVAL_DENIED` ne fait jamais basculer une question prospective en
-`DENIED` : voir « `authorityAt` — question prospective » ci-dessus).
+No condition below produces "DENIED or UNKNOWN depending on context":
+each row has a single deterministic output. Unless stated otherwise, each
+row applies to `authorityAt` (a prospective question on a fingerprint). C5
+and C6 are by nature questions about a specific, already requested action and
+belong to `explainAction`. Their `DENIED` is to be read as `currentAuthority`
+or `execution.authorityAtDecision` for that action, never as a response
+that `authorityAt` could produce from the fingerprint alone (an
+`APPROVAL_DENIED` never turns a prospective question into
+`DENIED`: see "`authorityAt`: prospective question" above).
 
-| # | Condition | Sortie |
+| # | Condition | Output |
 |---|---|---|
-| C1 | Chaîne complète, tous maillons autorisés (I12/I13/I14), non expirée (`authority_time`), non révoquée par une révocation autorisée, capacité couverte exactement, racine `HUMAN_ROOT` précise attendue, pas de montant impliqué | `AUTHORIZED` |
-| C2 | Comme C1, avec montant ≤ `automatic_max_amount` du maillon invoqué | `AUTHORIZED` |
-| C3 | Comme C1, montant entre `automatic_max_amount` (exclu) et `approval_max_amount` (inclus), il existe une `APPROVAL_GRANTED` valide (I14) dont l'empreinte correspond exactement (I15) à `(capability, parameters)` et qui n'est pas déjà consommée (I16) | `AUTHORIZED` |
-| C4 | Comme C3, mais aucune `APPROVAL_GRANTED` valide et non consommée n'existe pour cette empreinte (qu'il y ait eu ou non, par ailleurs, un `APPROVAL_DENIED` pour une action différente portant la même empreinte — voir « eternal blacklist ») | `REQUIRES_APPROVAL` |
-| C5 *(explainAction)* | L'action précise expliquée a reçu, pour sa propre `APPROVAL_REQUESTED`, un `APPROVAL_DENIED` valide (I14) et aucune `APPROVAL_GRANTED` valide et non consommée ne couvre par ailleurs son empreinte | `DENIED` (pour `currentAuthority` de cette action) |
-| C6 *(explainAction)* | L'`ACTION_EXECUTED` de l'action expliquée porte un `action_fingerprint` différent de l'empreinte immuable de son `ACTION_REQUESTED` (I15) | `DENIED` (pour `execution.authorityAtDecision`, quelle que soit par ailleurs l'autorité pour l'empreinte réellement exécutée) |
-| C7 | Une `APPROVAL_GRANTED` valide et d'empreinte correcte existe pour `(capability, parameters)`, mais elle est déjà consommée par une `ACTION_EXECUTED` de `sequence` inférieure ou égale (I16) — et aucune autre approbation valide et non consommée ne couvre la même empreinte | `DENIED` |
-| C8 | Montant > `approval_max_amount` du maillon invoqué | `DENIED` |
-| C9 | `total_budget` déclaré sur un ou plusieurs ancêtres bornés de la chaîne invoquée (pas seulement la délégation terminale) et montant demandé > reste disponible d'au moins un de ces ancêtres, calculé indépendamment pour chacun, à la `sequence` d'évaluation | `DENIED` |
-| C10 | Un maillon de la chaîne référence un `delegation_id` absent du store canonique à la `sequence` d'évaluation | `UNKNOWN` |
-| C11 | Chaîne complète et connue, mais aucune capacité de la chaîne ne correspond exactement à la capacité demandée | `DENIED` |
-| C12 | `DELEGATION_REVOKED` autorisée (I13) avec `sequence` ≤ celle de l'évaluation, ciblant un maillon dont dépend exclusivement la chaîne | `DENIED` |
-| C13 | `DELEGATION_REVOKED` dont l'émetteur n'est ni le grantor direct ni la racine de chaîne (I13 non satisfait) | Sans effet — la chaîne est évaluée comme si cette révocation n'existait pas |
-| C14 | `SUBDELEGATION_CREATED` dont l'émetteur ≠ grantee du parent, ou parent avec `can_delegate: false` connu (I12) | `DENIED` |
-| C15 | `SUBDELEGATION_CREATED` dont le parent ne porte pas de champ `can_delegate` (absent) | `UNKNOWN` |
-| C16 | `APPROVAL_GRANTED`/`APPROVAL_DENIED` dont l'émetteur ≠ grantor habilité (I14) | Sans effet — traité comme si aucune décision d'approbation n'existait |
-| C17 | Racine de chaîne (`parent_delegation_id: null`) avec `grantor_type: AGENT` | `UNKNOWN` |
-| C18 | Cycle détecté dans la chaîne de `delegation_id` | `UNKNOWN` (`C18_CYCLE_DETECTED`) |
-| C19 | Profondeur de chaîne > `MAX_CHAIN_DEPTH` (32 arêtes de délégation, voir I10) | `UNKNOWN` (`MAX_CHAIN_DEPTH_EXCEEDED`) — une chaîne d'exactement 32 arêtes n'est **pas** concernée par cette ligne et se résout normalement |
-| C20 | Conflit d'`event_id` détecté à l'ingestion (I8) | `UNKNOWN` en réponse directe à cette tentative d'ingestion ; sans effet sur les résolutions ultérieures |
-| C21 | Collision d'ID métier (`delegation_id`/`action_id`/`approval_id` déjà utilisé par un contenu différent) | L'événement en collision est rejeté à l'ingestion ; `UNKNOWN` en réponse à cette tentative, sans effet sur les résolutions ultérieures |
-| C22 | Type de contrainte inconnu ou non reconnu présent dans un payload de délégation, ou `schema_version` inconnue portée par un événement | `UNKNOWN`, mais **seulement** pour toute résolution qui dépend réellement de cet événement précis — un événement étranger à `schema_version` inconnue ailleurs dans le store n'affecte aucune résolution indépendante |
-| C23 | Plusieurs chaînes distinctes vers le même principal, dont au moins une intégralement valide selon C1–C9 | La sortie de la chaîne valide s'applique (les autres chaînes, même corrompues ou cycliques, n'abaissent jamais ce résultat) |
-| C24 | Aucune des chaînes menant au principal n'est intégralement valide et connue | `UNKNOWN` (ou `DENIED` si au moins une chaîne est intégralement connue et prouve positivement l'absence d'autorité, selon C11/C12) |
-| C25 *(explainAction, I18)* | `ACTION_EXECUTED` de `sequence` S portant `decision_sequence >= S` (citation causalement impossible d'un point de décision futur ou simultané) | `UNKNOWN` (pour `execution.authorityAtDecision` ; `C25_FUTURE_DECISION_SEQUENCE`), quelle que soit par ailleurs l'autorité disponible au `decision_sequence` prétendu |
-| C26 *(I19)* | `APPROVAL_GRANTED`/`APPROVAL_DENIED` dont l'`action_id` ou l'`approval_id` référencé n'existe pas dans le store canonique, ou y existe avec une `sequence` strictement supérieure à celle de la décision d'approbation elle-même (égalité tolérée — ne peut de toute façon jamais survenir via une ingestion réelle ; voir I19, « Note sur l'égalité de séquence ») | Traité comme si l'événement cité n'existait pas : la décision d'approbation est ignorée (comme C16) — `REQUIRES_APPROVAL` (C4) reste la sortie en l'absence de toute autre décision d'approbation valide. **Ne s'applique pas** à `SUBDELEGATION_CREATED.parent_delegation_id` : ce champ reste gouverné par C10 seul (A5 — voir I19 pour la distinction) |
-| C27 *(I20)* | `ACTION_EXECUTED` dont l'`executed_by_principal_id` diffère du `requesting_principal_id` de l'`ACTION_REQUESTED` de même `action_id` ; ou dont le maillon délégation terminal d'`authority_chain_ref` a un `grantee_principal_id` différent de son propre `executed_by_principal_id` ; ou dont un maillon délégation D cité dans `authority_chain_ref` n'est ni le maillon terminal ni l'un de ses ancêtres réels atteignables en remontant `parent_delegation_id` depuis le terminal (PROMPT 6e) | Pour la première et la deuxième condition : l'exécution entière est exclue du calcul de `reste(D', S)` pour toute délégation D' de sa chaîne. Pour la troisième : seul le maillon D en cause est exclu du calcul de `reste(D, S)` — comptée comme si ce maillon précis n'apparaissait pas dans `authority_chain_ref`, sans affecter le débit des autres maillons de la même chaîne qui sont, eux, de véritables ancêtres du terminal. N'affecte aucune autre sortie que le montant du budget restant, qui alimente ensuite C9 normalement |
-| C28 *(I16, précisée)* | `ACTION_EXECUTED` référençant un `approval_id` valide dans `authority_chain_ref`, mais dont l'`action_id` propre diffère de celui porté par l'`APPROVAL_GRANTED` correspondant | Ne consomme jamais cet `approval_id` — traitée comme si elle ne le référençait pas dans sa chaîne. Une question fraîche sur l'empreinte réellement approuvée reste `AUTHORIZED` (C3) tant qu'aucune exécution de l'action effectivement couverte n'a consommé le grant |
+| C1 | Complete chain, all links authorized (I12/I13/I14), not expired (`authority_time`), not revoked by an authorized revocation, capability covered exactly, precise expected `HUMAN_ROOT` root, no amount involved | `AUTHORIZED` |
+| C2 | Same as C1, with amount ≤ `automatic_max_amount` of the invoked link | `AUTHORIZED` |
+| C3 | Same as C1, amount between `automatic_max_amount` (excluded) and `approval_max_amount` (included), a valid `APPROVAL_GRANTED` (I14) exists whose fingerprint corresponds exactly (I15) to `(capability, parameters)` and which is not already consumed (I16) | `AUTHORIZED` |
+| C4 | Same as C3, but no valid, unconsumed `APPROVAL_GRANTED` exists for this fingerprint (whether or not there was, separately, an `APPROVAL_DENIED` for a different action carrying the same fingerprint, see "eternal blacklist") | `REQUIRES_APPROVAL` |
+| C5 *(explainAction)* | The specific action being explained received, for its own `APPROVAL_REQUESTED`, a valid `APPROVAL_DENIED` (I14), and no valid, unconsumed `APPROVAL_GRANTED` otherwise covers its fingerprint | `DENIED` (for `currentAuthority` of this action) |
+| C6 *(explainAction)* | The `ACTION_EXECUTED` of the explained action carries an `action_fingerprint` different from the immutable fingerprint of its `ACTION_REQUESTED` (I15) | `DENIED` (for `execution.authorityAtDecision`, regardless of authority for the actually executed fingerprint otherwise) |
+| C7 | A valid `APPROVAL_GRANTED` with the correct fingerprint exists for `(capability, parameters)`, but it is already consumed by an `ACTION_EXECUTED` with an equal or lower `sequence` (I16), and no other valid, unconsumed approval covers the same fingerprint | `DENIED` |
+| C8 | Amount > `approval_max_amount` of the invoked link | `DENIED` |
+| C9 | `total_budget` declared on one or more bounded ancestors of the invoked chain (not only the terminal delegation), and requested amount > available remainder of at least one of these ancestors, computed independently for each, at the evaluation `sequence` | `DENIED` |
+| C10 | A link in the chain references a `delegation_id` absent from the canonical store at the evaluation `sequence` | `UNKNOWN` |
+| C11 | Complete and known chain, but no capability in the chain matches the requested capability exactly | `DENIED` |
+| C12 | Authorized `DELEGATION_REVOKED` (I13) with `sequence` ≤ that of the evaluation, targeting a link on which the chain depends exclusively | `DENIED` |
+| C13 | `DELEGATION_REVOKED` whose issuer is neither the direct grantor nor the chain root (I13 not satisfied) | No effect: the chain is evaluated as if this revocation did not exist |
+| C14 | `SUBDELEGATION_CREATED` whose issuer != the parent's grantee, or whose parent has a known `can_delegate: false` (I12) | `DENIED` |
+| C15 | `SUBDELEGATION_CREATED` whose parent carries no `can_delegate` field (absent) | `UNKNOWN` |
+| C16 | `APPROVAL_GRANTED`/`APPROVAL_DENIED` whose issuer != entitled grantor (I14) | No effect: treated as if no approval decision existed |
+| C17 | Chain root (`parent_delegation_id: null`) with `grantor_type: AGENT` | `UNKNOWN` |
+| C18 | Cycle detected in the `delegation_id` chain | `UNKNOWN` (`C18_CYCLE_DETECTED`) |
+| C19 | Chain depth > `MAX_CHAIN_DEPTH` (32 delegation edges, see I10) | `UNKNOWN` (`MAX_CHAIN_DEPTH_EXCEEDED`); a chain of exactly 32 edges is **not** concerned by this row and resolves normally |
+| C20 | `event_id` conflict detected at ingestion (I8) | `UNKNOWN` as a direct response to this ingestion attempt; no effect on later resolutions |
+| C21 | Business ID collision (`delegation_id`/`action_id`/`approval_id` already used by different content) | The colliding event is rejected at ingestion; `UNKNOWN` in response to this attempt, with no effect on later resolutions |
+| C22 | Unknown or unrecognized constraint type present in a delegation payload, or unknown `schema_version` carried by an event | `UNKNOWN`, but **only** for any resolution that actually depends on this specific event; an unrelated event with an unknown `schema_version` elsewhere in the store does not affect any independent resolution |
+| C23 | Several distinct chains toward the same principal, at least one fully valid under C1 through C9 | The output of the valid chain applies (the other chains, even corrupted or cyclic, never lower this result) |
+| C24 | None of the chains leading to the principal is fully valid and known | `UNKNOWN` (or `DENIED` if at least one chain is fully known and positively proves the absence of authority, per C11/C12) |
+| C25 *(explainAction, I18)* | `ACTION_EXECUTED` with `sequence` S carrying `decision_sequence >= S` (causally impossible citation of a future or simultaneous decision point) | `UNKNOWN` (for `execution.authorityAtDecision`; `C25_FUTURE_DECISION_SEQUENCE`), regardless of authority otherwise available at the claimed `decision_sequence` |
+| C26 *(I19)* | `APPROVAL_GRANTED`/`APPROVAL_DENIED` whose referenced `action_id` or `approval_id` does not exist in the canonical store, or exists there with a `sequence` strictly greater than that of the approval decision itself (equality tolerated: this can never occur through real ingestion anyway, see I19, "Note on sequence equality") | Treated as if the cited event did not exist: the approval decision is ignored (as with C16). `REQUIRES_APPROVAL` (C4) remains the output in the absence of any other valid approval decision. **Does not apply** to `SUBDELEGATION_CREATED.parent_delegation_id`: this field remains governed by C10 alone (A5, see I19 for the distinction) |
+| C27 *(I20)* | `ACTION_EXECUTED` whose `executed_by_principal_id` differs from the `requesting_principal_id` of the `ACTION_REQUESTED` with the same `action_id`; or whose terminal delegation link in `authority_chain_ref` has a `grantee_principal_id` different from its own `executed_by_principal_id`; or citing a delegation link D in `authority_chain_ref` that is neither the terminal link nor one of its real ancestors reachable by walking up `parent_delegation_id` from the terminal (PROMPT 6e) | For the first and second conditions: the entire execution is excluded from the computation of `remaining(D', S)` for every delegation D' in its chain. For the third: only the link D at issue is excluded from the computation of `remaining(D, S)`, counted as if this specific link did not appear in `authority_chain_ref`, without affecting the debit of the other links of the same chain that are, themselves, real ancestors of the terminal. Affects no output other than the amount of remaining budget, which then feeds C9 normally |
+| C28 *(I16, clarified)* | `ACTION_EXECUTED` referencing a valid `approval_id` in `authority_chain_ref`, but whose own `action_id` differs from the one carried by the corresponding `APPROVAL_GRANTED` | Never consumes this `approval_id`: treated as if it did not reference it in its chain. A fresh question on the actually approved fingerprint remains `AUTHORIZED` (C3) as long as no execution of the action actually covered has consumed the grant |
