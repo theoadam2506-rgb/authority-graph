@@ -160,7 +160,7 @@ const PO_CREATE = capability("purchase_order", "create");
 
 async function main(): Promise<void> {
   // -------------------------------------------------------------------------
-  section("Root delegation — User → Agent A");
+  section("Root delegation: User → Agent A");
   // -------------------------------------------------------------------------
   currentHour = 0;
   const rootDraft = rootDelegationDraft({
@@ -183,7 +183,7 @@ async function main(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  section("Valid sub-delegation — A → B, ≤ 2000");
+  section("Valid sub-delegation: A → B, ≤ 2000");
   // -------------------------------------------------------------------------
   currentHour = 1;
   const subDraft = subDelegationDraft({
@@ -199,7 +199,7 @@ async function main(): Promise<void> {
   expectAccepted((await store.append([subDraft])).outcomes[0], "Sub-delegation A -> B (<=2000, bounded within user -> A per I5)");
 
   // -------------------------------------------------------------------------
-  section("Laundering rejected — Mallory (never granted anything) attempts an invalid chain");
+  section("Laundering rejected: Mallory (never granted anything) attempts an invalid chain");
   // -------------------------------------------------------------------------
   const beforeMallory = await store.getEvents();
   const malloryDraft = subDelegationDraft({
@@ -224,7 +224,7 @@ async function main(): Promise<void> {
 
   const afterMallory = await store.getEvents();
   assertEqual(afterMallory.length, beforeMallory.length, "Canonical store length must be unchanged by a rejected append");
-  ok(`Canonical store still has ${afterMallory.length} events — the rejected draft never entered it`);
+  ok(`Canonical store still has ${afterMallory.length} events. The rejected draft never entered it`);
 
   {
     const at: AuthorityInstant = { atSequence: sequenceNumber(afterMallory.length), authorityTime: iso8601(hour(1)) };
@@ -233,7 +233,7 @@ async function main(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  section("Normal action — B attempts 1800 → AUTHORIZED");
+  section("Normal action: B attempts 1800 → AUTHORIZED");
   // -------------------------------------------------------------------------
   currentHour = 2;
   const paramsNormal = monetaryParameters(money(1800, "EUR"), VENDOR);
@@ -262,7 +262,7 @@ async function main(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  section("Escalation — 4800 exceeds B, goes through A via the root delegation");
+  section("Escalation: 4800 exceeds B, goes through A via the root delegation");
   // -------------------------------------------------------------------------
   currentHour = 3;
   const paramsEsc = monetaryParameters(money(4800, "EUR"), VENDOR);
@@ -271,7 +271,7 @@ async function main(): Promise<void> {
     const events = await store.getEvents();
     const at: AuthorityInstant = { atSequence: sequenceNumber(events.length), authorityTime: iso8601(hour(3)) };
     const forB = authorityAt(events, { agentId: AGENT_B, principalId: USER, capability: PO_CREATE, parameters: paramsEsc }, at);
-    expectDenied(forB, "C8_AMOUNT_EXCEEDS_APPROVAL_CEILING", "B cannot reach 4800 EUR — its own delegation caps it at 2000");
+    expectDenied(forB, "C8_AMOUNT_EXCEEDS_APPROVAL_CEILING", "B cannot reach 4800 EUR (its own delegation caps it at 2000)");
 
     const forA = authorityAt(events, { agentId: AGENT_A, principalId: USER, capability: PO_CREATE, parameters: paramsEsc }, at);
     expectOutcome(forA, "REQUIRES_APPROVAL", "A can reach 4800 EUR via the root delegation, but it falls in the approval band (2500 < 4800 <= 5000)");
@@ -281,7 +281,7 @@ async function main(): Promise<void> {
   expectAccepted((await store.append([reqADraft])).outcomes[0], "A requests purchase_order.create for 4800 EUR");
 
   // -------------------------------------------------------------------------
-  section("Approval binding — User approves exactly the 4800 action");
+  section("Approval binding: User approves exactly the 4800 action");
   // -------------------------------------------------------------------------
   currentHour = 4;
   const apprReqDraft = approvalRequestDraft({ id: "appr-4800", actionId: "a-a-4800", requestedFrom: USER, requester: AGENT_A, occurredAt: hour(4) });
@@ -318,7 +318,7 @@ async function main(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  section("Single use — valid execution, then a second consumption attempt → denied");
+  section("Single use: valid execution, then a second consumption attempt → denied");
   // -------------------------------------------------------------------------
   currentHour = 6;
   const fpEsc = computeActionFingerprint(PO_CREATE, paramsEsc);
@@ -374,7 +374,7 @@ async function main(): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  section("Revocation — User revokes d-user-a; descendants that depend on it exclusively fall too");
+  section("Revocation: User revokes d-user-a; descendants that depend on it exclusively fall too");
   // -------------------------------------------------------------------------
   currentHour = 8;
   const revokeDraft = revokeDelegationDraft({ targetId: "d-user-a", issuedBy: USER, reason: "POLICY_REVIEW", occurredAt: hour(8) });
@@ -387,11 +387,11 @@ async function main(): Promise<void> {
     expectDenied(forA, "C12_DELEGATION_REVOKED", "A's own authority is gone immediately");
 
     const forB = authorityAt(events, { agentId: AGENT_B, principalId: USER, capability: PO_CREATE, parameters: monetaryParameters(money(500, "EUR"), VENDOR) }, at);
-    expectDenied(forB, "C12_DELEGATION_REVOKED", "B's authority — which only ever existed through d-user-a — falls too, even though d-a-b itself was never touched");
+    expectDenied(forB, "C12_DELEGATION_REVOKED", "B's authority (which only ever existed through d-user-a) falls too, even though d-a-b itself was never touched");
   }
 
   // -------------------------------------------------------------------------
-  section("Backdating — an earlier occurred_at is injected; authority is not restored");
+  section("Backdating: an earlier occurred_at is injected; authority is not restored");
   // -------------------------------------------------------------------------
   currentHour = 9;
   const paramsBackdated = monetaryParameters(money(100, "EUR"), VENDOR);
@@ -412,18 +412,18 @@ async function main(): Promise<void> {
     const events = await store.getEvents();
     const at: AuthorityInstant = { atSequence: sequenceNumber(events.length), authorityTime: iso8601(hour(9)) };
     const decision = authorityAt(events, { agentId: AGENT_A, principalId: USER, capability: PO_CREATE, parameters: paramsBackdated }, at);
-    expectDenied(decision, "C12_DELEGATION_REVOKED", "The backdated occurred_at does not resurrect a revoked delegation — sequence and authority_time are unmoved");
+    expectDenied(decision, "C12_DELEGATION_REVOKED", "The backdated occurred_at does not resurrect a revoked delegation: sequence and authority_time are unmoved");
 
     const drift = findLateOrBackdatedEvents(events);
     const flagged = drift.find((d) => d.eventId === backdatedDraft.event_id);
     if (flagged === undefined) {
       throw new Error("explain()'s diagnostic must flag the backdated event as LATE_OR_BACKDATED_EVENT_OBSERVED");
     }
-    ok(`explain() flags LATE_OR_BACKDATED_EVENT_OBSERVED for this event (drift: ${flagged.driftMs}ms) — diagnostic only, and it changed no decision above`);
+    ok(`explain() flags LATE_OR_BACKDATED_EVENT_OBSERVED for this event (drift: ${flagged.driftMs}ms), diagnostic only, and it changed no decision above`);
   }
 
   // -------------------------------------------------------------------------
-  section("Historical explain — yesterday's authority, explained today");
+  section("Historical explain: yesterday's authority, explained today");
   // -------------------------------------------------------------------------
   const finalEvents = await store.getEvents();
   const farFuture = hour(50); // well past both the revocation (hour 8) and d-user-a's own expiry (hour 10)
@@ -439,7 +439,7 @@ async function main(): Promise<void> {
   }
   ok("execution.authorityAtDecision is identical whether asked right after execution or 44 hours later");
   expectOutcome(reportLater.currentAuthority, "DENIED", "...while currentAuthority, asked today, reflects that this authority no longer exists");
-  note(`(the chain is both revoked — sequence ${revokeSeq} — and, independently, expired past ${hour(10)}: either fact alone would deny it today)`);
+  note(`(the chain is both revoked, at sequence ${revokeSeq}, and, independently, expired past ${hour(10)}: either fact alone would deny it today)`);
 
   // Now the real CLI, end to end, against an exported JSON file — exactly
   // the artifact a human operator would have on hand.
@@ -450,7 +450,7 @@ async function main(): Promise<void> {
 
     const textResult = await runExplain(["explain", "a-a-4800", "--events", eventsFile, "--at-sequence", String(finalEvents.length), "--authority-time", farFuture]);
     console.log("\n  --- authority explain a-a-4800 (real CLI output) ---\n");
-    console.log(textResult.output.replace(/^/gm, "  "));
+    console.log(textResult.output.replace(/^(?=.)/gm, "  "));
 
     const jsonResult = await runExplain(["explain", "a-a-4800", "--json", "--events", eventsFile, "--at-sequence", String(finalEvents.length), "--authority-time", farFuture]);
     const parsed: { readonly execution?: { readonly authorityAtDecision: AuthorityDecision }; readonly currentAuthority: AuthorityDecision; readonly source: string } = JSON.parse(

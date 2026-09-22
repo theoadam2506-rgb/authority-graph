@@ -3,13 +3,13 @@
 An AI agent executes an action. Six months later, nobody can say exactly what
 human authority covered it at that moment, or why. This engine answers that
 question deterministically, from an append-only log of events: delegation,
-approval, execution — nothing else.
+approval, execution, nothing else.
 
 **In:** an append-only log of events (who delegated what to whom, under what
 limits, plus whatever approvals and executions actually happened) and a
 question (*could/did this agent do this?*, at a specific point in causal time
-and a specific trusted instant). **Out:** one of exactly four outcomes —
-`AUTHORIZED`, `DENIED`, `REQUIRES_APPROVAL`, `UNKNOWN` — each with a
+and a specific trusted instant). **Out:** one of exactly four outcomes:
+`AUTHORIZED`, `DENIED`, `REQUIRES_APPROVAL`, `UNKNOWN`, each with a
 machine-checkable reason, never a bare yes/no.
 
 ## 30-second example
@@ -37,7 +37,7 @@ const { canonicalStore } = ingestAll(
       thresholds: thresholds(2000, 2000), parent_delegation_id: null,
     },
   }, {
-    // Used later by the capability-issuance example below — harmless here:
+    // Used later by the capability-issuance example below (harmless here):
     // authorityAt() never reads ACTION_REQUESTED, so it doesn't change the
     // two outcomes shown right after this block.
     event_id: eventId("evt-action-request-1"), schema_version: CURRENT_SCHEMA_VERSION,
@@ -61,7 +61,7 @@ authorityAt(canonicalStore, { ...query, parameters: monetaryParameters(money(480
 // -> { outcome: "DENIED", reasonCode: "C8_AMOUNT_EXCEEDS_APPROVAL_CEILING" }
 ```
 
-Every function and type above is real, public production API — nothing here
+Every function and type above is real, public production API. Nothing here
 is a test-only shortcut. The full runnable version, including a historical
 `explainAction()` call, is [`examples/quickstart.ts`](./examples/quickstart.ts):
 
@@ -79,7 +79,7 @@ npm run quickstart   # the short story above, runnable and self-checking
 ```
 
 This repository is not published to npm. `npm install` here installs this
-repo's own development dependencies from a local clone — it does not install
+repo's own development dependencies from a local clone. It does not install
 a package named `authority-graph` from any registry (see
 [Status](#status) below). No database, no network, and no API key are needed
 for either command above.
@@ -88,12 +88,12 @@ for either command above.
 
 The engine exposes exactly two operations, never a third path:
 
-- **`authorityAt(events, query, at)`** — prospective. *Would this be
+- **`authorityAt(events, query, at)`**: prospective. *Would this be
   authorized right now, given everything logged so far?* It never requires
   the action to have already been requested; it answers a question about
   the current state of authority, not about one specific past event.
 - **`explainAction(events, { actionId }, at)`** (and its formatted
-  counterpart, `explain()`) — historical. *What happened to this specific
+  counterpart, `explain()`): historical. *What happened to this specific
   action, and why?* It resolves authority both at the moment of any recorded
   execution and at the query's own instant. An action that was authorized
   when it ran stays authorized at that point forever: I3 (append-only)
@@ -103,38 +103,38 @@ The engine exposes exactly two operations, never a third path:
 They stay separate on purpose. A question about the current state of
 authority must never be structurally dependent on some past action having
 been requested, and a question about what actually happened to one action
-needs that action's own history (its approvals, its denials) — history a
+needs that action's own history (its approvals, its denials): history a
 fresh, unrelated prospective query has no business consulting.
 
 ## Capability issuance
 
 Alongside the two read-side operations above, the engine also exposes a
 separate **write-side capability**: capability issuance. This does not add a
-third way to *ask* about authority — `authorityAt`/`explainAction` remain
+third way to *ask* about authority. `authorityAt`/`explainAction` remain
 the only two query operations. Capability issuance is a distinct kind of
 call that, on success, *writes* a new `CAPABILITY_ISSUED` event recording a
-decision already made — but two layers are involved, and only one of them
+decision already made, but two layers are involved, and only one of them
 ever touches storage:
 
-- **`issueCapability`** — the pure **capability decision kernel**. It
+- **`issueCapability`**: the pure **capability decision kernel**. It
   resolves the same INVOKED delegation chain and the same capacity
   accounting a prospective question would, and returns an
-  `IssueCapabilityResult` — nothing more. Calling it directly persists
+  `IssueCapabilityResult`, nothing more. Calling it directly persists
   **nothing**: no event is written, no store is touched, and it does not
   even take an idempotency key as a parameter.
-- **Transactional capability issuance** — `CapabilityIssuanceTransaction`
+- **Transactional capability issuance**: `CapabilityIssuanceTransaction`
   (in-memory) or `PostgresCapabilityIssuanceTransaction` (PostgreSQL, see
-  [PostgreSQL deployment](#postgresql-deployment) below) — is what actually
+  [PostgreSQL deployment](#postgresql-deployment) below), is what actually
   calls the kernel, decides whether the result becomes canonical, and, on
   success, writes `CAPABILITY_ISSUED` under an idempotency key so that a
   retry never produces a second one. This transactional boundary is the
   only supported way to make a capability-issuance decision durable.
 
 The example below continues the [30-second example](#30-second-example)
-above, reusing its `AGENT_A` and `canonicalStore` — including the
+above, reusing its `AGENT_A` and `canonicalStore`, including the
 `ACTION_REQUESTED` (`act-1`, 1800 EUR) that example's own store now carries
 for exactly this purpose. It calls `issueCapability` directly to show the
-decision kernel's own shape — this call by itself persists nothing; see
+decision kernel's own shape: this call by itself persists nothing; see
 [PostgreSQL deployment](#postgresql-deployment) below for the transactional
 call that actually writes the event.
 
@@ -145,7 +145,7 @@ import { actionId, capabilityId, enforcementPointId, iso8601 } from "./src/domai
 import type { IssueCapabilityCommand } from "./src/domain/capabilityCommand.js";
 
 // AuthenticatedPrincipal is a caller-supplied ASSERTION, not something this
-// call verifies: authentication (JWT/mTLS/API key — whatever the deployment
+// call verifies: authentication (JWT/mTLS/API key, whatever the deployment
 // uses) is assumed to have already happened at the deployment boundary,
 // before this identity is constructed. AGENT_A is the same principal
 // declared in the 30-second example above.
@@ -156,14 +156,14 @@ const command: IssueCapabilityCommand = {
   enforcement_point_id: enforcementPointId("ep-gateway-1"),
 };
 
-// expiresAt is injected by the caller, not a constant of the engine itself
-// — 5 minutes here is only this example's own deployment policy.
+// expiresAt is injected by the caller, not a constant of the engine itself.
+// 5 minutes here is only this example's own deployment policy.
 const dependencies: IssueCapabilityDependencies = {
   nextCapabilityId: () => capabilityId("cap-1"),
   expiresAt: (authorityTime) => iso8601(new Date(Date.parse(authorityTime) + 5 * 60_000).toISOString()),
 };
 
-// authorityTime is explicit and caller-supplied — never Date.now(), never
+// authorityTime is explicit and caller-supplied, never Date.now(), never
 // reconstructed from the log's own last event.
 const authorityTime = iso8601("2025-01-01T00:20:00.000Z");
 
@@ -171,30 +171,30 @@ const authorityTime = iso8601("2025-01-01T00:20:00.000Z");
 // 30-second example above.
 const result = issueCapability(canonicalStore, authenticatedPrincipal, command, dependencies, authorityTime);
 // -> { ok: true, capability: { capability_id: "cap-1", action_id: "act-1",
-//      expires_at: "2025-01-01T00:25:00.000Z", ... } } — this is the actual
+//      expires_at: "2025-01-01T00:25:00.000Z", ... } }. This is the actual
 //    result of running this exact call; it is still only a DECISION, not a
 //    written event: nothing has been persisted by this call alone (see
 //    below). A mismatched requester, an over-capacity or expired
 //    delegation, or a stale `authorityTime` would instead return
-//    `{ ok: false, reason: ... }` — see `SPEC.md` I21–I24 for the exact
+//    `{ ok: false, reason: ... }`: see `SPEC.md` I21 through I24 for the exact
 //    reasons.
 ```
 
 To actually record this decision as a canonical `CAPABILITY_ISSUED` event,
 call `issue(...)` on `InMemoryCapabilityIssuanceTransaction` or
 `PostgresCapabilityIssuanceTransaction` instead of calling `issueCapability`
-directly — see [PostgreSQL deployment](#postgresql-deployment) below.
+directly. See [PostgreSQL deployment](#postgresql-deployment) below.
 
 Idempotence goes through `issueCapabilityIdempotently`, keyed on
 `(authenticated requester, operation, a caller-supplied `ClientIdempotencyKey`)`:
-the first call under a given key fixes the outcome — including a refusal —
+the first call under a given key fixes the outcome (including a refusal)
 permanently for that key. A retry under the same key later `REPLAYS` the
 exact original result, without re-evaluating anything (a new `authorityTime`
 on the retry changes nothing); a different command under the same key is
 `IDEMPOTENCY_CONFLICT`, never silently resolved one way or the other. A
 caller wanting a genuinely new decision must use a new key. A retry never
-produces a second `CAPABILITY_ISSUED` event, and a refused attempt — for any
-reason, including a stale `authorityTime` — never produces one at all;
+produces a second `CAPABILITY_ISSUED` event, and a refused attempt (for any
+reason, including a stale `authorityTime`) never produces one at all;
 see [`SPEC.md`](./SPEC.md) for the exact invariants and
 [`EVENT_MODEL.md`](./EVENT_MODEL.md) for the event's field-by-field
 definition.
@@ -205,26 +205,26 @@ through as-is on success and never checked against anything.
 
 ### PostgreSQL deployment
 
-Getting the full transactional guarantee — exactly one canonical
+Getting the full transactional guarantee (exactly one canonical
 `CAPABILITY_ISSUED` per idempotency key, the event and its idempotency
-record always becoming visible together — requires going through
+record always becoming visible together) requires going through
 `PostgresCapabilityIssuanceTransaction`, not calling the pure
 `issueCapability` function directly against your own storage. It runs one
 real ACID transaction per call (`BEGIN`/`COMMIT`/`ROLLBACK` on one
 connection) and acquires the *same* Postgres advisory lock that
-`PostgresEventStore.append()` already uses for ordinary event ingestion —
-the two writers are serialized against each other by construction, never
+`PostgresEventStore.append()` already uses for ordinary event ingestion.
+The two writers are serialized against each other by construction, never
 by convention.
 
 This is **not** a claim that the underlying Postgres journal is
 cryptographically append-only: the advisory lock is a cooperative mutex
 between writers that go through this API, not a database-level permission
-barrier (see [What it doesn't do](#what-it-doesnt-do) above — the same
+barrier (see [What it doesn't do](#what-it-doesnt-do) above, the same
 caveat that already applies to `PostgresEventStore`).
 
 The in-memory equivalent, `InMemoryCapabilityIssuanceTransaction`, gives the
 same *observable* sequencing guarantees but only within one process and one
-instance — it is a promise-chain mutex, not a crash-atomic transaction; see
+instance: it is a promise-chain mutex, not a crash-atomic transaction; see
 `SPEC.md` for exactly which guarantees are, and are not, backend-independent.
 
 ## Using the CLI
@@ -242,7 +242,7 @@ live Postgres store (`--db`, or `DATABASE_URL`).
 
 **On `--events`:** the CLI never implies that a local JSON file has been
 validated by Authority. Every event keeps whatever `assurance_level` it was
-ingested with (`ASSERTED_UNVERIFIED` in V0 — see below), and the CLI's own
+ingested with (`ASSERTED_UNVERIFIED` in V0, see below), and the CLI's own
 output additionally labels where the data came from: `source: imported
 canonical event export` in the text output, and a top-level `"source"` field
 in `--json`. Reading a file is not re-running the ingestion-time checks
@@ -253,7 +253,7 @@ against it, and the CLI does not pretend otherwise.
 One command, no database, no network, no API key. It plays a full scenario:
 delegation, sub-delegation, a rejected forgery attempt, an approval-gated
 escalation, single-use consumption, revocation, backdating, and a historical
-`authority explain` on a now-defunct authority — entirely in memory, and
+`authority explain` on a now-defunct authority, entirely in memory, and
 **asserts** the property each step claims to demonstrate. If any assumption
 stops holding, the script throws and exits non-zero; it is a narrative
 integration test, not a slideshow. Its actual output is reproduced byte for
@@ -267,40 +267,40 @@ $ npm run demo
 
 
 ==============================================================================
-1. Root delegation - User → Agent A
+1. Root delegation: User → Agent A
 ==============================================================================
   ✓ Root delegation user -> A -> accepted at sequence 1
   ✓ A holds purchase_order.create directly from the user -> AUTHORIZED (chain: d-user-a)
 
 ==============================================================================
-2. Valid sub-delegation - A → B, ≤ 2000
+2. Valid sub-delegation: A → B, ≤ 2000
 ==============================================================================
   ✓ Sub-delegation A -> B (<=2000, bounded within user -> A per I5) -> accepted at sequence 2
 
 ==============================================================================
-3. Laundering rejected - Mallory (never granted anything) attempts an invalid chain
+3. Laundering rejected: Mallory (never granted anything) attempts an invalid chain
 ==============================================================================
   ✓ Mallory's forged sub-delegation off user -> A -> rejected at ingestion (UNAUTHORIZED_SUBDELEGATION), no canonical sequence assigned
   ✓ Rejected draft appears in the security log (reasonCode: UNAUTHORIZED_SUBDELEGATION), event_id evt-subdelegation-3
-  ✓ Canonical store still has 2 events — the rejected draft never entered it
+  ✓ Canonical store still has 2 events. The rejected draft never entered it
   ✓ Mallory holds no authority whatsoever (her fabricated delegation never existed canonically) -> UNKNOWN (C24_NO_VALID_CHAIN)
 
 ==============================================================================
-4. Normal action - B attempts 1800 → AUTHORIZED
+4. Normal action: B attempts 1800 → AUTHORIZED
 ==============================================================================
   ✓ B requests purchase_order.create for 1800 EUR -> accepted at sequence 3
   ✓ B executes the 1800 EUR action -> accepted at sequence 4
   ✓ B's 1800 EUR action is authorized, automatically, within its own band -> AUTHORIZED (chain: d-user-a -> d-a-b)
 
 ==============================================================================
-5. Escalation — 4800 exceeds B, goes through A via the root delegation
+5. Escalation: 4800 exceeds B, goes through A via the root delegation
 ==============================================================================
-  ✓ B cannot reach 4800 EUR its own delegation caps it at 2000 -> DENIED (C8_AMOUNT_EXCEEDS_APPROVAL_CEILING)
+  ✓ B cannot reach 4800 EUR (its own delegation caps it at 2000) -> DENIED (C8_AMOUNT_EXCEEDS_APPROVAL_CEILING)
   ✓ A can reach 4800 EUR via the root delegation, but it falls in the approval band (2500 < 4800 <= 5000) -> REQUIRES_APPROVAL (via d-user-a)
   ✓ A requests purchase_order.create for 4800 EUR -> accepted at sequence 5
 
 ==============================================================================
-6. Approval binding — User approves exactly the 4800 action
+6. Approval binding: User approves exactly the 4800 action
 ==============================================================================
   ✓ A requests the user's approval for the 4800 EUR action -> accepted at sequence 6
   ✓ The user grants approval appr-4800 -> accepted at sequence 7
@@ -309,7 +309,7 @@ $ npm run demo
   ✓ Changing the recipient makes the same approval unusable -> REQUIRES_APPROVAL (via d-user-a)
 
 ==============================================================================
-7. Single use — valid execution, then a second consumption attempt → denied
+7. Single use: valid execution, then a second consumption attempt → denied
 ==============================================================================
   ✓ A executes the 4800 EUR action, consuming appr-4800 -> accepted at sequence 8
   ✓ a-a-4800's execution was authorized at its own decision sequence -> AUTHORIZED (chain: d-user-a, approval: appr-4800)
@@ -319,25 +319,25 @@ $ npm run demo
   ✓ But resolution denies it: the log recording it does not grant it authority -> DENIED (C7_APPROVAL_ALREADY_CONSUMED)
 
 ==============================================================================
-8. Revocation — User revokes d-user-a; descendants that depend on it exclusively fall too
+8. Revocation: User revokes d-user-a; descendants that depend on it exclusively fall too
 ==============================================================================
   ✓ The user revokes d-user-a -> accepted at sequence 11
   ✓ A's own authority is gone immediately -> DENIED (C12_DELEGATION_REVOKED)
-  ✓ B's authority — which only ever existed through d-user-a — falls too, even though d-a-b itself was never touched -> DENIED (C12_DELEGATION_REVOKED)
+  ✓ B's authority (which only ever existed through d-user-a) falls too, even though d-a-b itself was never touched -> DENIED (C12_DELEGATION_REVOKED)
 
 ==============================================================================
-9. Backdating — an earlier occurred_at is injected; authority is not restored
+9. Backdating: an earlier occurred_at is injected; authority is not restored
 ==============================================================================
   ✓ Ingestion accepts the structurally valid request regardless of its occurred_at claim (I4: occurred_at is never decisional) -> accepted at sequence 12
-  ✓ The backdated occurred_at does not resurrect a revoked delegation — sequence and authority_time are unmoved -> DENIED (C12_DELEGATION_REVOKED)
-  ✓ explain() flags LATE_OR_BACKDATED_EVENT_OBSERVED for this event (drift: 157885200000ms) — diagnostic only, and it changed no decision above
+  ✓ The backdated occurred_at does not resurrect a revoked delegation: sequence and authority_time are unmoved -> DENIED (C12_DELEGATION_REVOKED)
+  ✓ explain() flags LATE_OR_BACKDATED_EVENT_OBSERVED for this event (drift: 157885200000ms), diagnostic only, and it changed no decision above
 
 ==============================================================================
-10. Historical explain — yesterday's authority, explained today
+10. Historical explain: yesterday's authority, explained today
 ==============================================================================
   ✓ execution.authorityAtDecision is identical whether asked right after execution or 44 hours later
   ✓ ...while currentAuthority, asked today, reflects that this authority no longer exists -> DENIED (C11_CAPABILITY_NOT_COVERED)
-  (the chain is both revoked — sequence 11 and, independently, expired past 2025-01-01T10:00:00.000Z: either fact alone would deny it today)
+  (the chain is both revoked, at sequence 11, and, independently, expired past 2025-01-01T10:00:00.000Z: either fact alone would deny it today)
 
   --- authority explain a-a-4800 (real CLI output) ---
 
@@ -346,7 +346,7 @@ $ npm run demo
   authority at decision sequence 7: AUTHORIZED
   approval consumed by execution 8
   current authority at sequence 12: DENIED
-    reason: C11_CAPABILITY_NOT_COVERED — no valid delegation chain covers the requested capability
+    reason: C11_CAPABILITY_NOT_COVERED: no valid delegation chain covers the requested capability
 
   Authority chain (root to leaf, as declared when each delegation was created):
     - delegation d-user-a: user (HUMAN_ROOT) -> agent-a (granted at sequence 1)
@@ -361,9 +361,9 @@ $ npm run demo
         the log contains an event asserting that user granted this approval at sequence 7
 
   Clock drift diagnostics:
-    LATE_OR_BACKDATED_EVENT_OBSERVED: ACTION_REQUESTED (evt-action-request-13) — |authority_time - occurred_at| = 157885200000ms (authority_time: 2025-01-01T09:00:00.000Z, occurred_at: 2020-01-01T00:00:00.000Z)
+    LATE_OR_BACKDATED_EVENT_OBSERVED: ACTION_REQUESTED (evt-action-request-13): |authority_time - occurred_at| = 157885200000ms (authority_time: 2025-01-01T09:00:00.000Z, occurred_at: 2020-01-01T00:00:00.000Z)
 
-  assurance_level: ASSERTED_UNVERIFIED  no cryptographic signature or verified identity backs any event in this log (I17); every claim above is "the log contains an event asserting", never a proof.
+  assurance_level: ASSERTED_UNVERIFIED: no cryptographic signature or verified identity backs any event in this log (I17); every claim above is "the log contains an event asserting", never a proof.
 
   ✓ CLI confirms: authorized at its own decision sequence -> AUTHORIZED (chain: d-user-a, approval: appr-4800)
   ✓ CLI confirms: not authorized today -> DENIED (C11_CAPABILITY_NOT_COVERED)
@@ -375,7 +375,7 @@ All properties held. Demo complete.
 ```
 
 The last section is the point of the whole exercise: `d-user-a` is revoked
-*and* expired — today, nothing authorizes A to spend 4800 EUR. And yet the
+*and* expired. Today, nothing authorizes A to spend 4800 EUR. And yet the
 log still lets us reconstruct, precisely and mechanically, why that same
 action was legitimate at sequence 8, back when it ran.
 
@@ -397,7 +397,7 @@ action was legitimate at sequence 8, back when it ran.
   guessed one would be worse than none.
 - **The `EventSource` API is append-only; the Postgres journal itself is
   not, against a privileged writer.** `pg_advisory_xact_lock` only protects
-  writers that go through this API and cooperate with it — it is a mutex
+  writers that go through this API and cooperate with it. It is a mutex
   between well-behaved callers, not a database-level permission barrier.
   Nothing in `schema.sql` revokes `UPDATE`/`DELETE` grants or otherwise
   stops a writer with raw SQL access (or a different, non-cooperating
@@ -417,13 +417,13 @@ action was legitimate at sequence 8, back when it ran.
 
 ## Further reading
 
-- [`SPEC.md`](./SPEC.md) — the problem statement, the two operations, the
-  four possible outcomes, and every numbered invariant (I1–I20) as a
+- [`SPEC.md`](./SPEC.md): the problem statement, the two operations, the
+  four possible outcomes, and every numbered invariant (I1 through I24) as a
   testable assertion, plus the exhaustive condition → outcome table.
-- [`THREAT_MODEL.md`](./THREAT_MODEL.md) — the attack table: for each
+- [`THREAT_MODEL.md`](./THREAT_MODEL.md): the attack table: for each
   attack, which invariant is supposed to stop it, the defense mechanism, and
   the deterministic expected result.
-- [`EVENT_MODEL.md`](./EVENT_MODEL.md) — the wire-level event schema (all 9
+- [`EVENT_MODEL.md`](./EVENT_MODEL.md): the wire-level event schema (all 9
   event types, including `CAPABILITY_ISSUED`) and the canonical/security-log
   ingestion split.
 
@@ -437,7 +437,7 @@ unmodified.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
+Apache License 2.0: see [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
 
 ## Status
 
