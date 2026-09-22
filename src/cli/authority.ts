@@ -184,7 +184,7 @@ function reasonGloss(reasonCode: string): string {
 
 function renderDecisionDetail(decision: AuthorityDecision): string[] {
   if (decision.outcome === "DENIED" || decision.outcome === "UNKNOWN") {
-    return [`  reason: ${decision.reasonCode} — ${reasonGloss(decision.reasonCode)}`];
+    return [`  reason: ${decision.reasonCode}: ${reasonGloss(decision.reasonCode)}`];
   }
   if (decision.outcome === "REQUIRES_APPROVAL") {
     return [`  pending approval via delegation ${decision.viaDelegation}`];
@@ -194,7 +194,7 @@ function renderDecisionDetail(decision: AuthorityDecision): string[] {
 
 function renderChain(chain: readonly ChainLinkDetail[]): string[] {
   if (chain.length === 0) {
-    return ["Authority chain: (none — no AUTHORIZED decision to trace)"];
+    return ["Authority chain: none. No AUTHORIZED decision to trace."];
   }
   const lines = ["Authority chain (root to leaf, as declared when each delegation was created):"];
   for (const link of chain) {
@@ -248,7 +248,7 @@ function renderClockDrift(observations: readonly LateOrBackdatedObservation[]): 
   }
   const lines = ["Clock drift diagnostics:"];
   for (const o of observations) {
-    lines.push(`  LATE_OR_BACKDATED_EVENT_OBSERVED: ${o.eventType} (${o.eventId}) — |authority_time - occurred_at| = ${o.driftMs}ms (authority_time: ${o.authorityTime}, occurred_at: ${o.occurredAt})`);
+    lines.push(`  LATE_OR_BACKDATED_EVENT_OBSERVED: ${o.eventType} (${o.eventId}): |authority_time - occurred_at| = ${o.driftMs}ms (authority_time: ${o.authorityTime}, occurred_at: ${o.occurredAt})`);
   }
   return lines;
 }
@@ -276,7 +276,7 @@ function renderText(report: ExplanationReport, current: AuthorityInstant, source
   lines.push("");
   lines.push(...renderClockDrift(report.lateOrBackdatedEvents));
   lines.push("");
-  lines.push(`assurance_level: ${report.assuranceLevel} — no cryptographic signature or verified identity backs any event in this log (I17); every claim above is "the log contains an event asserting", never a proof.`);
+  lines.push(`assurance_level: ${report.assuranceLevel}: no cryptographic signature or verified identity backs any event in this log (I17); every claim above is "the log contains an event asserting", never a proof.`);
 
   return lines.join("\n");
 }
