@@ -32,6 +32,7 @@ import {
   approvalRequest,
   delegationLink,
   instant,
+  revokeDelegation,
   rootDelegation,
 } from "../fixtures/scenarios.js";
 
@@ -181,5 +182,192 @@ describe("Principal binding — approval stays chain-bound for the same agent (P
     );
     expect(freshViaD1.outcome).toBe("AUTHORIZED");
     expect(freshViaD1.outcome === "AUTHORIZED" ? freshViaD1.approvalId : undefined).toBe("pb2-approval");
+  });
+});
+
+describe("Principal binding — INVOKED validation is a third, independent axis (M1)", () => {
+  it("M1: AVAILABLE, INVOKED, and RECORDED reach three distinct conclusions on the same report", () => {
+    const P = THEO;
+    const Pprime = principal("m1-root-pprime");
+    const Pdoubleprime = principal("m1-root-pdoubleprime");
+    const AGENT_X = principal("m1-agent-x");
+    const amount = monetaryParameters(EUR(500));
+
+    // D1, rooted at P: too tight — 500 requires approval alone. Named by
+    // ACTION_REQUESTED.delegation_id — this is INVOKED.
+    const d1 = rootDelegation({
+      sequence: 1,
+      id: "m1-d1",
+      grantor: P,
+      grantorType: "HUMAN_ROOT",
+      grantee: AGENT_X,
+      capabilities: [PURCHASE_ORDER_CREATE],
+      canDelegate: false,
+      amountThresholds: thresholds(100, 1_000),
+    });
+    // D2, rooted at an unrelated P': wide enough to auto-authorize 500 on its
+    // own. Not invoked, not recorded — only reachable by the root-agnostic
+    // AVAILABLE search (authorityAtDecision/currentAuthority).
+    const d2 = rootDelegation({
+      sequence: 2,
+      id: "m1-d2",
+      grantor: Pprime,
+      grantorType: "HUMAN_ROOT",
+      grantee: AGENT_X,
+      capabilities: [PURCHASE_ORDER_CREATE],
+      canDelegate: false,
+      amountThresholds: thresholds(1_000, 1_000),
+    });
+    // D3, rooted at yet another unrelated P'': structurally valid, but
+    // revoked before decision_sequence. Cited alone in authority_chain_ref —
+    // this is RECORDED's own claimed terminal, and diverges from INVOKED
+    // (D1): invokedRecordedAlignment DIVERGENT.
+    const d3 = rootDelegation({
+      sequence: 3,
+      id: "m1-d3",
+      grantor: Pdoubleprime,
+      grantorType: "HUMAN_ROOT",
+      grantee: AGENT_X,
+      capabilities: [PURCHASE_ORDER_CREATE],
+      canDelegate: false,
+      amountThresholds: thresholds(1_000, 1_000),
+    });
+    const d3Revoked = revokeDelegation({ sequence: 4, targetId: "m1-d3", issuedBy: Pdoubleprime });
+    // Request nominally invokes D1.
+    const request = actionRequest({
+      sequence: 5,
+      id: "m1-action",
+      requester: AGENT_X,
+      delegationId: "m1-d1",
+      parameters: amount,
+    });
+    // The execution actually records D3 alone, not D1.
+    const execution = actionExecution({
+      sequence: 6,
+      actionId: "m1-action",
+      executor: AGENT_X,
+      decisionSequence: 5,
+      chain: [delegationLink("m1-d3")],
+      parameters: amount,
+    });
+
+    const store = [d1, d2, d3, d3Revoked, request, execution];
+    const report = explainAction(store, { actionId: action("m1-action") }, instant(6));
+
+    // AVAILABLE: root-agnostic search finds D2, wide enough — AUTHORIZED.
+    expect(report.execution?.authorityAtDecision).toMatchObject({ outcome: "AUTHORIZED", chain: ["m1-d2"] });
+
+    // INVOKED: D1 alone, the delegation the request actually named — too tight, REQUIRES_APPROVAL.
+    expect(report.execution?.invokedAuthorityAtDecision).toMatchObject({ outcome: "REQUIRES_APPROVAL", viaDelegation: "m1-d1" });
+
+    // RECORDED: D3 alone, the delegation the execution actually cited — revoked before decision_sequence, DENIED.
+    expect(report.execution?.recordedValidation).toMatchObject({ outcome: "DENIED", reasonCode: "C12_DELEGATION_REVOKED" });
+
+    // Three distinct outcomes (AUTHORIZED / REQUIRES_APPROVAL / DENIED) on one report, from one execution.
+    const outcomes = new Set([
+      report.execution?.authorityAtDecision.outcome,
+      report.execution?.invokedAuthorityAtDecision === "UNRESOLVABLE" ? "UNRESOLVABLE" : report.execution?.invokedAuthorityAtDecision.outcome,
+      report.execution?.recordedValidation === "UNRESOLVABLE" ? "UNRESOLVABLE" : report.execution?.recordedValidation.outcome,
+    ]);
+    expect(outcomes.size).toBe(3);
+
+    // The divergence is not a symptom of a malformed or ambiguous recorded chain:
+    // D3 alone is exactly, structurally what got recorded (EXACT), it is simply
+    // not what was invoked (DIVERGENT from D1).
+    expect(report.execution?.recordedChainIntegrity).toBe("EXACT");
+    expect(report.execution?.invokedRecordedAlignment).toBe("DIVERGENT");
+  });
+});
+
+describe("INVOKED validation requires the requester to actually hold the invoked delegation (M9)", () => {
+  it("M9: D1 exists and is structurally valid, but is granted to B while ACTION_REQUESTED.requesting_principal_id = A — never AUTHORIZED via D1", () => {
+    const P = THEO;
+    const AGENT_A = principal("m9-agent-a");
+    const AGENT_B = principal("m9-agent-b");
+    const amount = monetaryParameters(EUR(400));
+
+    // D1: structurally valid, wide enough to auto-authorize — but granted to B, not A.
+    const d1 = rootDelegation({
+      sequence: 1,
+      id: "m9-d1",
+      grantor: P,
+      grantorType: "HUMAN_ROOT",
+      grantee: AGENT_B,
+      capabilities: [PURCHASE_ORDER_CREATE],
+      canDelegate: false,
+      amountThresholds: thresholds(1_000, 1_000),
+    });
+    // A requests, naming D1 (B's delegation, not A's) as the invoked delegation.
+    const request = actionRequest({
+      sequence: 2,
+      id: "m9-action",
+      requester: AGENT_A,
+      delegationId: "m9-d1",
+      parameters: amount,
+    });
+    const execution = actionExecution({
+      sequence: 3,
+      actionId: "m9-action",
+      executor: AGENT_A,
+      decisionSequence: 2,
+      chain: [delegationLink("m9-d1")],
+      parameters: amount,
+    });
+
+    const store = [d1, request, execution];
+    const report = explainAction(store, { actionId: action("m9-action") }, instant(3));
+
+    // Neither the "at decision" nor the "now" INVOKED view may ever be AUTHORIZED through B's delegation.
+    expect(report.execution?.invokedAuthorityAtDecision).toEqual({ outcome: "UNKNOWN", reasonCode: "C24_NO_VALID_CHAIN" });
+    expect(report.invokedAuthorityNow).toEqual({ outcome: "UNKNOWN", reasonCode: "C24_NO_VALID_CHAIN" });
+  });
+});
+
+describe("Invoked canonical chain is verdict-independent (M6)", () => {
+  it("M6: invokedCanonicalChainAtDecision resolves structurally even when the decision is REQUIRES_APPROVAL, not only when AUTHORIZED", async () => {
+    const { explain } = await import("../../src/engine/authority.js");
+    const P = THEO;
+    const AGENT_X = principal("m6-agent-x");
+    const amount = monetaryParameters(EUR(500));
+
+    // D1: too tight to auto-authorize 500 — REQUIRES_APPROVAL, so AuthorityDecision.chain does not exist.
+    const d1 = rootDelegation({
+      sequence: 1,
+      id: "m6-d1",
+      grantor: P,
+      grantorType: "HUMAN_ROOT",
+      grantee: AGENT_X,
+      capabilities: [PURCHASE_ORDER_CREATE],
+      canDelegate: false,
+      amountThresholds: thresholds(100, 1_000),
+    });
+    const request = actionRequest({
+      sequence: 2,
+      id: "m6-action",
+      requester: AGENT_X,
+      delegationId: "m6-d1",
+      parameters: amount,
+    });
+    const execution = actionExecution({
+      sequence: 3,
+      actionId: "m6-action",
+      executor: AGENT_X,
+      decisionSequence: 2,
+      chain: [delegationLink("m6-d1")],
+      parameters: amount,
+    });
+
+    const store = [d1, request, execution];
+    const report = explain(store, { actionId: action("m6-action") }, instant(3));
+
+    // The verdict itself carries no chain (REQUIRES_APPROVAL never does).
+    expect(report.execution?.authorityAtDecision).toMatchObject({ outcome: "REQUIRES_APPROVAL" });
+    expect(report.execution?.invokedAuthorityAtDecision).toMatchObject({ outcome: "REQUIRES_APPROVAL" });
+
+    // Yet the structural reconstruction still resolves — it never depends on the verdict.
+    expect(report.execution?.invokedCanonicalChainAtDecision).toMatchObject({
+      kind: "resolved",
+      chain: [{ delegationId: "m6-d1" }],
+    });
   });
 });

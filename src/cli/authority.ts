@@ -23,7 +23,17 @@ import { pathToFileURL } from "node:url";
 import { Pool } from "pg";
 import type { CanonicalStore } from "../domain/events.js";
 import { actionId as toActionId, iso8601, sequenceNumber, type AuthorityDecision, type AuthorityInstant } from "../domain/types.js";
-import { explain, type ApprovalDetail, type ChainLinkDetail, type ExplanationReport, type LateOrBackdatedObservation } from "../engine/explainAction.js";
+import {
+  asAvailableChainResult,
+  explain,
+  type ApprovalDetail,
+  type AvailableAuthorityChain,
+  type ChainLinkDetail,
+  type ExplanationReport,
+  type InvokedCanonicalChain,
+  type LateOrBackdatedObservation,
+  type RecordedDelegationReference,
+} from "../engine/explainAction.js";
 import { PostgresEventStore } from "../storage/postgresEventStore.js";
 
 // ---------------------------------------------------------------------------
@@ -192,11 +202,8 @@ function renderDecisionDetail(decision: AuthorityDecision): string[] {
   return [];
 }
 
-function renderChain(chain: readonly ChainLinkDetail[]): string[] {
-  if (chain.length === 0) {
-    return ["Authority chain: none. No AUTHORIZED decision to trace."];
-  }
-  const lines = ["Authority chain (root to leaf, as declared when each delegation was created):"];
+function renderChainLinkLines(chain: readonly ChainLinkDetail[]): string[] {
+  const lines: string[] = [];
   for (const link of chain) {
     lines.push(
       `  - delegation ${link.delegationId}: ${link.grantorPrincipalId}${link.grantorType !== undefined ? ` (${link.grantorType})` : ""} -> ${link.granteePrincipalId} (granted at sequence ${link.grantedAtSequence})`,
@@ -220,6 +227,53 @@ function renderChain(chain: readonly ChainLinkDetail[]): string[] {
         lines.push(`      revocation: the log contains a DELEGATION_REVOKED event asserting that ${r.byPrincipalId} revoked this delegation at sequence ${r.bySequence} (reason: ${r.reasonCode})`);
       }
     }
+  }
+  return lines;
+}
+
+function renderNonAuthorizedOutcome(decision: Exclude<AuthorityDecision, { readonly outcome: "AUTHORIZED" }>): string {
+  if (decision.outcome === "REQUIRES_APPROVAL") {
+    return `REQUIRES_APPROVAL: pending approval via delegation ${decision.viaDelegation}`;
+  }
+  return `${decision.outcome}: ${decision.reasonCode}: ${reasonGloss(decision.reasonCode)}`;
+}
+
+/** Renders one of the two AVAILABLE-chain sections ("... at decision" / "... now"). Never a blank body: "none"/"unresolvable" always print the actual decision, not an empty section. */
+function renderAvailableChainSection(title: string, result: AvailableAuthorityChain): string[] {
+  const lines = [`${title}:`];
+  if (result.kind === "resolved") {
+    lines.push(...renderChainLinkLines(result.chain));
+  } else if (result.kind === "none") {
+    lines.push(`  none — ${renderNonAuthorizedOutcome(result.decision)}`);
+  } else {
+    lines.push("  unresolvable — the decision is AUTHORIZED but a delegation in its chain has no resolvable detail in the visible events");
+  }
+  return lines;
+}
+
+/** Renders one of the two INVOKED-canonical-chain sections. Structural, verdict-independent: resolves even under REQUIRES_APPROVAL/DENIED/UNKNOWN. */
+function renderInvokedChainSection(title: string, result: InvokedCanonicalChain): string[] {
+  const lines = [`${title}:`];
+  if (result.kind === "resolved") {
+    lines.push(...renderChainLinkLines(result.chain));
+  } else {
+    lines.push("  unresolvable — the invoked delegation's canonical ancestry could not be reconstructed from the visible events");
+  }
+  return lines;
+}
+
+function renderRecordedReferences(refs: readonly RecordedDelegationReference[]): string[] {
+  const lines = ["Recorded delegation references:"];
+  if (refs.length === 0) {
+    lines.push("  none");
+    return lines;
+  }
+  for (const ref of refs) {
+    lines.push(
+      ref.detail !== undefined
+        ? `  - delegation ${ref.delegationId}: ${ref.detail.grantorPrincipalId} -> ${ref.detail.granteePrincipalId}`
+        : `  - delegation ${ref.delegationId}: (no resolvable detail in the visible events)`,
+    );
   }
   return lines;
 }
@@ -270,7 +324,18 @@ function renderText(report: ExplanationReport, current: AuthorityInstant, source
   lines.push(...renderDecisionDetail(report.currentAuthority));
 
   lines.push("");
-  lines.push(...renderChain(report.chain));
+  if (report.execution !== undefined) {
+    lines.push(...renderAvailableChainSection("Available chain at decision", asAvailableChainResult(report.execution.authorityAtDecision, report.chain)));
+    lines.push("");
+    lines.push(...renderInvokedChainSection("Invoked canonical chain at decision", report.execution.invokedCanonicalChainAtDecision));
+    lines.push("");
+    lines.push(...renderRecordedReferences(report.recordedDelegationReferences ?? []));
+    lines.push("");
+  }
+  lines.push(...renderAvailableChainSection("Available chain now", report.availableChainNow));
+  lines.push("");
+  lines.push(...renderInvokedChainSection("Invoked canonical chain now", report.invokedCanonicalChainNow));
+
   lines.push("");
   lines.push(...renderApprovals(report.approvals));
   lines.push("");
