@@ -401,6 +401,17 @@ export type InvokedRecordedAlignment = "ALIGNED" | "DIVERGENT" | "UNRESOLVABLE";
 /** A read-only authority result for RECORDED's own claimed terminal, or an unresolvable recorded reference. */
 export type RecordedValidation = AuthorityDecision | "UNRESOLVABLE";
 
+/**
+ * A read-only authority result for the delegation specifically INVOKED by
+ * ACTION_REQUESTED.delegation_id, alone — a third axis, independent of both
+ * AVAILABLE (authorityAtDecision/currentAuthority, root-agnostic) and
+ * RECORDED (recordedValidation, anchored to the execution's own claimed
+ * terminal). "UNRESOLVABLE" when the invoked delegation cannot be found in
+ * the events visible at the instant being evaluated (e.g. not yet created —
+ * a causal impossibility, not proof of missing authority).
+ */
+export type InvokedValidation = AuthorityDecision | "UNRESOLVABLE";
+
 export interface ActionExplanation {
   readonly actionId: ActionId;
   readonly requestedAtSequence: SequenceNumber;
@@ -409,6 +420,8 @@ export interface ActionExplanation {
     readonly decisionSequence: SequenceNumber;
     /** Authority for this action's immutable, as-requested fingerprint, resolved AT decisionSequence. */
     readonly authorityAtDecision: AuthorityDecision;
+    /** Would the delegation specifically named by ACTION_REQUESTED.delegation_id, alone, have authorized this at decisionSequence? Read-only; no authority, budget, or approval effect. */
+    readonly invokedAuthorityAtDecision: InvokedValidation;
     /** Structural self-consistency of the recorded chain against its own claimed terminal's canonical ancestry. Read-only; no authority, budget, or approval effect. */
     readonly recordedChainIntegrity: RecordedChainIntegrity;
     /** Does the recorded chain's own claimed terminal equal the invoked delegation? Read-only; no authority, budget, or approval effect. */
@@ -419,6 +432,8 @@ export interface ActionExplanation {
   };
   /** Authority for this action's immutable, as-requested fingerprint, resolved at the query's own sequence. */
   readonly currentAuthority: AuthorityDecision;
+  /** Would the delegation specifically named by ACTION_REQUESTED.delegation_id, alone, authorize this right now? Present even before any ACTION_EXECUTED exists. Read-only; no authority, budget, or approval effect. */
+  readonly invokedAuthorityNow: InvokedValidation;
 }
 
 // ---------------------------------------------------------------------------
