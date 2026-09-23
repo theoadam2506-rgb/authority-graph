@@ -11,6 +11,7 @@ import { computeActionFingerprint } from "../domain/events.js";
 import type { AuthorityEvent, CanonicalStore, ChainLink } from "../domain/events.js";
 import { MAX_CHAIN_DEPTH, type ActionParameters, type ApprovalId, type AuthorityDecision, type Capability, type DelegationId, type Money, type PrincipalId } from "../domain/types.js";
 import { isNotCausallyAfter } from "./causality.js";
+import { recordedChainIntegrity, recordedTerminalId } from "./provenance.js";
 import type { DelegationEvent } from "./validateChain.js";
 
 type ActionRequestedEvent = Extract<AuthorityEvent, { readonly event_type: "ACTION_REQUESTED" }>;
@@ -43,15 +44,28 @@ function findDelegation(delegationId: DelegationId, visibleStore: CanonicalStore
   return undefined;
 }
 
-/** The last delegation-kind link in a chain — the one the executor claims to have actually exercised. */
-function terminalDelegationOf(chain: readonly ChainLink[]): DelegationId | undefined {
-  let terminal: DelegationId | undefined;
-  for (const link of chain) {
-    if (link.kind === "delegation") {
-      terminal = link.delegation_id;
-    }
+/**
+ * I20 (extended, PROMPT 6f): the delegation actually invoked by this
+ * execution's own ACTION_REQUESTED, if and only if authority_chain_ref
+ * cites it and its own grantee is the claimed executor. Deliberately
+ * ignores everything else the array contains, and deliberately ignores
+ * array order/position: I20's job is to decide whether a debit is
+ * demonstrably tied to the invoked delegation, not to certify that the rest
+ * of the array is trustworthy — recordedChainIntegrity (provenance.ts)
+ * answers that separate, stricter, audit-only question.
+ */
+function terminalDelegationOf(
+  chain: readonly ChainLink[],
+  invokedDelegationId: DelegationId,
+  executor: PrincipalId,
+  visibleStore: CanonicalStore,
+): DelegationId | undefined {
+  const citesInvokedDelegation = chain.some((link) => link.kind === "delegation" && link.delegation_id === invokedDelegationId);
+  if (!citesInvokedDelegation) {
+    return undefined;
   }
-  return terminal;
+  const delegation = findDelegation(invokedDelegationId, visibleStore);
+  return delegation?.payload.grantee_principal_id === executor ? invokedDelegationId : undefined;
 }
 
 /**
@@ -111,7 +125,12 @@ function isDemonstrablyTiedToItsExecutor(execution: Extract<AuthorityEvent, { re
   if (request.payload.requesting_principal_id !== execution.payload.executed_by_principal_id) {
     return false; // someone other than the requester claims to have executed it
   }
-  const terminalDelegationId = terminalDelegationOf(execution.payload.authority_chain_ref);
+  const terminalDelegationId = terminalDelegationOf(
+    execution.payload.authority_chain_ref,
+    request.payload.delegation_id,
+    execution.payload.executed_by_principal_id,
+    visibleStore,
+  );
   const terminalDelegation = terminalDelegationId === undefined ? undefined : findDelegation(terminalDelegationId, visibleStore);
   if (terminalDelegation === undefined || terminalDelegation.payload.grantee_principal_id !== execution.payload.executed_by_principal_id) {
     return false; // the cited chain does not even terminate at the executor
@@ -130,6 +149,7 @@ function isDemonstrablyTiedToItsExecutor(execution: Extract<AuthorityEvent, { re
  */
 export function remainingBudget(delegationId: DelegationId, totalBudget: Money, visibleStore: CanonicalStore): number {
   let spent = 0;
+  const chargedActionIds = new Set<ActionRequestedEvent["payload"]["action_id"]>();
   for (const event of visibleStore) {
     if (event.event_type !== "ACTION_EXECUTED") {
       continue;
@@ -140,27 +160,35 @@ export function remainingBudget(delegationId: DelegationId, totalBudget: Money, 
     if (!citesDelegation) {
       continue;
     }
-    // I20 (extended, PROMPT 6e): citing D somewhere in the array is not
-    // enough — D must also be the chain's own terminal delegation, or a
-    // real ancestor of it, reached by walking parent_delegation_id. An
-    // otherwise entirely honest execution (its own executor/terminal both
-    // check out below) could otherwise pad its authority_chain_ref with a
-    // real, causally-prior, but structurally unrelated stranger's
-    // delegation_id, debiting a budget it has no genuine connection to.
-    const terminalDelegationId = terminalDelegationOf(event.payload.authority_chain_ref);
+    const request = findActionRequested(event.payload.action_id, visibleStore);
+    if (request === undefined) {
+      continue;
+    }
+    // I20 (extended, PROMPT 6f): citing D somewhere in the array is not
+    // enough — the debit must be demonstrably tied to the delegation
+    // actually INVOKED by this execution's own ACTION_REQUESTED, cited in
+    // the array and held by the claimed executor (terminalDelegationOf).
+    // Array order/position no longer participates in this decision: only
+    // membership and ownership do.
+    const terminalDelegationId = terminalDelegationOf(
+      event.payload.authority_chain_ref,
+      request.payload.delegation_id,
+      event.payload.executed_by_principal_id,
+      visibleStore,
+    );
     const ancestry = terminalDelegationId === undefined ? undefined : ancestorDelegationIds(terminalDelegationId, visibleStore);
     if (ancestry === undefined || !ancestry.has(delegationId)) {
       continue;
     }
-    const request = findActionRequested(event.payload.action_id, visibleStore);
-    if (request === undefined) {
-      continue;
+    if (chargedActionIds.has(request.payload.action_id)) {
+      continue; // I20: multiple ACTION_EXECUTED for the same action_id (retry/replay under a new event_id) debit exactly once
     }
     if (!isDemonstrablyTiedToItsExecutor(event, request, visibleStore)) {
       continue; // I20: not a legitimate debit against this chain — PROMPT 6b finding #2
     }
     if (request.payload.parameters.kind === "monetary") {
       spent += request.payload.parameters.amount.value;
+      chargedActionIds.add(request.payload.action_id);
     }
   }
   return totalBudget.value - spent;
@@ -177,25 +205,45 @@ function budgetExceeded(chain: readonly DelegationEvent[], amount: number, visib
 }
 
 /**
- * I16 (précisée, PROMPT 6d finding #3): referencing `approvalId` in
- * authority_chain_ref is not enough to count as consuming it — I6 already
- * requires an approval to cover "exactement l'action qui l'a demandée,
- * identifiée par son action_id" (I15's fingerprint binds parameters, but
- * two distinct action_id can legitimately share a fingerprint, so
- * action_id is the identity that must match). `boundActionId` is the
- * action_id already carried by the APPROVAL_GRANTED itself — a field
- * already immutable and already-ingested, so this comparison is
- * structural and non-recursive, exactly like I20's executor/grantee
- * checks for total_budget (the same root cause, applied to consumption
- * instead of budget debiting).
+ * I16 (précisée, PROMPT 6d finding #3, further precised for DoS-resistance):
+ * referencing `approvalId` under the right `action_id` in
+ * authority_chain_ref is still not enough to count as consuming it. An
+ * execution whose recorded chain is not demonstrably the one this approval
+ * was actually granted under — same requester/executor, its own recorded
+ * terminal (provenance.ts's recordedTerminalId) equal to the invoked
+ * delegation, and its recorded chain canonically exact
+ * (recordedChainIntegrity) — must not consume an approval it never validly
+ * drew on. Without this, an execution that fails findGrantOutcome's own
+ * delegation-match check for every candidate chain could still deny the
+ * legitimate holder their own approval merely by mentioning its
+ * approval_id once, under the correct action_id, alongside an unrelated
+ * chain — a denial-of-service on a single-use approval that costs the
+ * attacker nothing, since findGrantOutcome would never have authorized
+ * anything through that unrelated chain anyway.
  */
 function isApprovalConsumed(approvalId: ApprovalId, boundActionId: ActionRequestedEvent["payload"]["action_id"], visibleStore: CanonicalStore): boolean {
-  return visibleStore.some(
-    (event) =>
-      event.event_type === "ACTION_EXECUTED" &&
-      event.payload.action_id === boundActionId &&
-      event.payload.authority_chain_ref.some((link) => link.kind === "approval" && link.approval_id === approvalId),
-  );
+  const boundRequest = findActionRequested(boundActionId, visibleStore);
+  if (boundRequest === undefined) {
+    return false;
+  }
+  return visibleStore.some((event) => {
+    if (event.event_type !== "ACTION_EXECUTED") {
+      return false;
+    }
+    if (event.payload.action_id !== boundActionId) {
+      return false;
+    }
+    if (!event.payload.authority_chain_ref.some((link) => link.kind === "approval" && link.approval_id === approvalId)) {
+      return false;
+    }
+    if (event.payload.executed_by_principal_id !== boundRequest.payload.requesting_principal_id) {
+      return false;
+    }
+    if (recordedTerminalId(event, visibleStore) !== boundRequest.payload.delegation_id) {
+      return false;
+    }
+    return recordedChainIntegrity(event, visibleStore) === "EXACT";
+  });
 }
 
 /**

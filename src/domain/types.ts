@@ -367,6 +367,40 @@ export interface AuthorityInstant {
  * though currentAuthority may read DENIED for the exact same fingerprint at
  * a later sequence.
  */
+/**
+ * Historical provenance diagnostics (debates/provenance/QUESTION.md in the
+ * private research lab). Three deliberately separate, read-only questions
+ * about a recorded execution's authority_chain_ref — none of them
+ * participates in any AUTHORIZED/DENIED/REQUIRES_APPROVAL/UNKNOWN decision,
+ * any total_budget attribution (I20), or any approval-consumption decision
+ * beyond the narrow, itself non-authorizing, chain-coherence check described
+ * in evaluateConstraints.ts's isApprovalConsumed:
+ *
+ * - recordedChainIntegrity: is the recorded chain, in itself, a faithful,
+ *   exactly-ordered record of *some* real ancestry (its own claimed
+ *   terminal's)? Purely structural.
+ * - invokedRecordedAlignment: does that same claimed terminal equal the
+ *   delegation actually named by ACTION_REQUESTED.delegation_id (INVOKED)?
+ *   Independent of whether the recorded chain is itself exact.
+ * - recordedValidation (ActionExplanation.execution below): would that
+ *   recorded terminal, taken on its own, have authorized the exact
+ *   requested action at the historical decision point? Independent of both
+ *   of the above — a structurally EXACT, perfectly ALIGNED recorded chain
+ *   can still have been DENIED (e.g. revoked); a MISMATCH/DIVERGENT one can
+ *   still resolve to a canonical ancestry that was itself AUTHORIZED.
+ *
+ * These three axes must never be collapsed into one verdict, and must never
+ * be read as proof that RECORDED describes what actually happened in the
+ * external world (I17: authority_chain_ref remains ASSERTED_UNVERIFIED
+ * evidence regardless of what these diagnostics report).
+ */
+export type RecordedChainIntegrity = "EXACT" | "MISMATCH" | "UNRESOLVABLE";
+
+export type InvokedRecordedAlignment = "ALIGNED" | "DIVERGENT" | "UNRESOLVABLE";
+
+/** A read-only authority result for RECORDED's own claimed terminal, or an unresolvable recorded reference. */
+export type RecordedValidation = AuthorityDecision | "UNRESOLVABLE";
+
 export interface ActionExplanation {
   readonly actionId: ActionId;
   readonly requestedAtSequence: SequenceNumber;
@@ -375,6 +409,12 @@ export interface ActionExplanation {
     readonly decisionSequence: SequenceNumber;
     /** Authority for this action's immutable, as-requested fingerprint, resolved AT decisionSequence. */
     readonly authorityAtDecision: AuthorityDecision;
+    /** Structural self-consistency of the recorded chain against its own claimed terminal's canonical ancestry. Read-only; no authority, budget, or approval effect. */
+    readonly recordedChainIntegrity: RecordedChainIntegrity;
+    /** Does the recorded chain's own claimed terminal equal the invoked delegation? Read-only; no authority, budget, or approval effect. */
+    readonly invokedRecordedAlignment: InvokedRecordedAlignment;
+    /** Authority reconstructed from the recorded terminal alone, at the historical decision point. Read-only; no authority, budget, or approval effect. */
+    readonly recordedValidation: RecordedValidation;
     readonly consumedApprovalId?: ApprovalId;
   };
   /** Authority for this action's immutable, as-requested fingerprint, resolved at the query's own sequence. */

@@ -30,16 +30,27 @@ import type {
   DelegationId,
   EventId,
   ExpiresAt,
+  InvokedRecordedAlignment,
   Iso8601,
   Money,
   PrincipalId,
   PrincipalType,
   ReasonCode,
+  RecordedChainIntegrity,
+  RecordedValidation,
   SequenceNumber,
 } from "../domain/types.js";
 import { CLOCK_DRIFT_THRESHOLD_MS } from "../domain/types.js";
 import { resolveAuthority } from "./authorityAt.js";
 import { isNotCausallyAfter } from "./causality.js";
+import { evaluateConstraints } from "./evaluateConstraints.js";
+import {
+  findDelegation,
+  invokedRecordedAlignment as computeInvokedRecordedAlignment,
+  recordedChainIntegrity as computeRecordedChainIntegrity,
+  recordedTerminalId,
+} from "./provenance.js";
+import { validateChain } from "./validateChain.js";
 
 type ActionRequestedEvent = Extract<AuthorityEvent, { readonly event_type: "ACTION_REQUESTED" }>;
 type ActionExecutedEvent = Extract<AuthorityEvent, { readonly event_type: "ACTION_EXECUTED" }>;
@@ -174,6 +185,41 @@ function resolveActionAuthority(request: ActionRequestedEvent, events: Canonical
   return base;
 }
 
+/**
+ * RECORDED VALIDATION (debates/provenance/QUESTION.md): would the delegation
+ * actually claimed by the recorded authority_chain_ref (recordedTerminalId,
+ * provenance.ts — RECORDED's own terminal, independent of what was invoked)
+ * have authorized the exact, immutable requested action at the historical
+ * decision point? Independent of recordedChainIntegrity/invokedRecordedAlignment:
+ * a structurally EXACT, perfectly ALIGNED recorded chain can still be DENIED
+ * (e.g. revoked); a MISMATCH/DIVERGENT one can still resolve to a canonical
+ * ancestry that was itself AUTHORIZED.
+ *
+ * Anchored to `execution.payload.decision_sequence` exactly like
+ * resolveActionAuthority above: `events` is filtered to what was visible at
+ * that point *before* any of recordedTerminalId/validateChain/evaluateConstraints
+ * run, so a revocation or a later ACTION_EXECUTED that only arrives afterward
+ * can never leak backward into this historical answer. Never re-invoked with
+ * the caller's own `current` instant — that would silently turn a historical
+ * question into a live one.
+ */
+function recordedValidation(request: ActionRequestedEvent, execution: ActionExecutedEvent, events: CanonicalStore): RecordedValidation {
+  const visible = events.filter((event) => event.sequence <= execution.payload.decision_sequence);
+  const terminalId = recordedTerminalId(execution, visible);
+  const terminal = terminalId === undefined ? undefined : findDelegation(terminalId, visible);
+  if (terminal === undefined) {
+    return "UNRESOLVABLE";
+  }
+  const authorityTime = reconstructAuthorityTime(visible, execution.payload.decision_sequence);
+  const validation = validateChain(terminal, request.payload.capability_requested, visible, undefined, authorityTime);
+  if (validation.kind === "valid") {
+    return evaluateConstraints(validation.chain, request.payload.capability_requested, request.payload.parameters, visible, execution.payload.executed_by_principal_id);
+  }
+  return validation.kind === "denied"
+    ? { outcome: "DENIED", reasonCode: validation.reasonCode }
+    : { outcome: "UNKNOWN", reasonCode: validation.reasonCode };
+}
+
 export function explainAction(events: CanonicalStore, query: ActionExplanationQuery, current: AuthorityInstant): ActionExplanation {
   const request = findActionRequested(query.actionId, events);
   if (request === undefined) {
@@ -220,6 +266,9 @@ export function explainAction(events: CanonicalStore, query: ActionExplanationQu
       executedAtSequence: execution.sequence,
       decisionSequence: execution.payload.decision_sequence,
       authorityAtDecision,
+      recordedChainIntegrity: computeRecordedChainIntegrity(execution, events),
+      invokedRecordedAlignment: computeInvokedRecordedAlignment(request, execution, events),
+      recordedValidation: recordedValidation(request, execution, events),
       ...(consumedApprovalId !== undefined ? { consumedApprovalId } : {}),
     },
     currentAuthority,
