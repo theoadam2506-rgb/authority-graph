@@ -1,0 +1,294 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.authority-graph.local/audit/evidence-schema.json",
+  "title": "Schéma de preuve — constat d'audit « autorisation → exécution »",
+  "description": "Schéma minimal et obligatoire d'un constat, tel que défini par audit-methodology.md. Un objet de ce schéma correspond à un constat unique dans un rapport client. Vocabulaire aligné sur le journal Authority Tools/Authority Graph : `flux` correspond à `intention`, `verification` regroupe `preuve` et `vérification`, `attributsProteges` correspond à `comparaison`, `verification.consommation` correspond à `consommation`. `test` et `resultat` sont ajoutés spécifiquement pour l'usage client : sans eux, un constat ne peut jamais dépasser le statut « Probable — non confirmé ».",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "constatId",
+    "statut",
+    "flux",
+    "autorisation",
+    "attributsProteges",
+    "pointEffet",
+    "verification",
+    "test",
+    "resultat",
+    "limite"
+  ],
+  "properties": {
+    "constatId": {
+      "type": "string",
+      "description": "Identifiant unique et stable du constat au sein du rapport (ex. \"C-2026-014-03\"). Sert de référence croisée entre le rapport et toute preuve annexe.",
+      "minLength": 1
+    },
+    "statut": {
+      "type": "string",
+      "description": "Un des quatre statuts définis par audit-methodology.md. Ne jamais utiliser un autre vocabulaire.",
+      "enum": ["Signal à examiner", "Probable — non confirmé", "Confirmé", "Non vérifiable"]
+    },
+
+    "flux": {
+      "type": "object",
+      "description": "Le flux métier concerné (champ `intention` du journal Authority Tools/Authority Graph). Une seule action par constat, jamais un flux composite.",
+      "additionalProperties": false,
+      "required": ["description"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Description courte et univoque du flux (ex. \"Transfert de fonds via POST /transfer\").",
+          "minLength": 1
+        },
+        "acteurInitiateur": {
+          "type": "string",
+          "description": "Rôle ou type de compte à l'origine du flux (ex. \"utilisateur authentifié, rôle standard\")."
+        },
+        "origineSignal": {
+          "type": "string",
+          "description": "Référence au signal automatisé d'origine si applicable (ex. identifiant de règle ATG-00x et fichier/ligne concernés). Absent si le constat provient d'une revue manuelle sans outil."
+        }
+      }
+    },
+
+    "autorisation": {
+      "type": "object",
+      "description": "Le mécanisme d'autorisation précisément examiné.",
+      "additionalProperties": false,
+      "required": ["mecanisme", "reference"],
+      "properties": {
+        "mecanisme": {
+          "type": "string",
+          "description": "Type et version du mécanisme (ex. \"jeton JWT signé, schéma v2\")."
+        },
+        "emetteur": {
+          "type": "string",
+          "description": "Composant ou service qui émet la preuve d'autorisation."
+        },
+        "reference": {
+          "type": "string",
+          "description": "Référence exacte et vérifiable dans le code ou la configuration (chemin de fichier, ligne, nom de règle de configuration). Jamais \"il y a un contrôle quelque part\"."
+        }
+      }
+    },
+
+    "attributsProteges": {
+      "type": "array",
+      "description": "Les attributs que l'autorisation est censée figer, et leur comparaison entre valeur autorisée et valeur exécutée (correspond au champ `comparaison` du journal). Au moins un attribut est requis.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["nom", "comparaisonDocumentee"],
+        "properties": {
+          "nom": {
+            "type": "string",
+            "description": "Nom de l'attribut protégé (ex. \"montant\", \"destinataire\", \"portée/role\")."
+          },
+          "sourceAutorisee": {
+            "type": "string",
+            "description": "D'où provient la valeur autorisée de cet attribut (ex. \"approval.amount, décodé du jeton\")."
+          },
+          "sourceExecutee": {
+            "type": "string",
+            "description": "D'où provient la valeur effectivement utilisée à l'exécution (ex. \"req.body.amount, non comparé\")."
+          },
+          "comparaisonDocumentee": {
+            "type": "boolean",
+            "description": "true si une comparaison entre les deux valeurs a été observée dans le code ou le test ; false si son absence est précisément ce que le constat documente."
+          }
+        }
+      }
+    },
+
+    "pointEffet": {
+      "type": "object",
+      "description": "L'endroit exact où l'effet se produit réellement.",
+      "additionalProperties": false,
+      "required": ["reference", "environnementObserve"],
+      "properties": {
+        "reference": {
+          "type": "string",
+          "description": "Fichier:ligne, endpoint ou fonction où l'effet s'exécute."
+        },
+        "environnementObserve": {
+          "type": "string",
+          "description": "Environnement où ce point d'effet a été observé/testé (ex. \"environnement de recette dédié\"). Ne doit jamais être la production sans autorisation écrite séparée (voir `test.environnementAutorisePar`)."
+        }
+      }
+    },
+
+    "verification": {
+      "type": "object",
+      "description": "Ce qui a été vérifié et par qui — regroupe les champs `preuve`, `vérification` et `consommation` du journal.",
+      "additionalProperties": false,
+      "required": ["preuveExaminee", "verificationHumaine", "consommation"],
+      "properties": {
+        "preuveExaminee": {
+          "type": "string",
+          "description": "La preuve d'autorisation (jeton, approbation) réellement examinée pour ce constat (champ `preuve` du journal)."
+        },
+        "verificationHumaine": {
+          "type": "boolean",
+          "description": "true si une personne a relu le chemin complet entre l'autorisation et le point d'effet et peut expliquer, dans ses propres mots, la divergence. Obligatoirement true pour le statut \"Confirmé\"."
+        },
+        "consommation": {
+          "type": "string",
+          "description": "État de la consommation/anti-rejeu de la preuve (champ `consommation` du journal) : \"controlee\", \"absente\" ou \"sans_objet\" si non pertinent pour ce constat.",
+          "enum": ["controlee", "absente", "sans_objet"]
+        }
+      }
+    },
+
+    "test": {
+      "type": "object",
+      "description": "Le test réellement exécuté pour ce constat. Élément ajouté spécifiquement pour l'usage client : sans lui, le statut ne peut jamais dépasser \"Probable — non confirmé\".",
+      "additionalProperties": false,
+      "required": ["type", "environnement"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["automatise", "manuel_documente", "non_execute"],
+          "description": "\"non_execute\" est la seule valeur licite quand statut vaut \"Signal à examiner\", \"Probable — non confirmé\" ou \"Non vérifiable\"."
+        },
+        "environnement": {
+          "type": "string",
+          "description": "Environnement dans lequel le test a eu lieu, ou aurait lieu."
+        },
+        "environnementAutorisePar": {
+          "type": "string",
+          "description": "Référence à l'autorisation écrite couvrant ce test dans cet environnement (ex. \"lettre de mission, annexe B, §2\"). Obligatoire pour le statut \"Confirmé\"."
+        },
+        "etapesOuScript": {
+          "type": "string",
+          "description": "Procédure pas à pas ou script exécuté, suffisamment précis pour être rejoué par un tiers. Obligatoire pour le statut \"Confirmé\"."
+        },
+        "entreeObservee": {
+          "type": "string",
+          "description": "Entrée effectivement soumise lors du test (secrets et données réelles du client expurgés)."
+        },
+        "sortieObservee": {
+          "type": "string",
+          "description": "Sortie/effet effectivement observé lors du test (secrets et données réelles du client expurgés)."
+        }
+      }
+    },
+
+    "resultat": {
+      "type": "object",
+      "description": "Le résultat observé du test — une observation, jamais une inférence. Élément ajouté spécifiquement pour l'usage client.",
+      "additionalProperties": false,
+      "required": ["observation"],
+      "properties": {
+        "observation": {
+          "type": "string",
+          "description": "Ce qui s'est produit, formulé comme une observation directe (ex. \"le transfert s'est exécuté avec le destinataire substitué\"), jamais comme une généralisation."
+        },
+        "reproductible": {
+          "type": "boolean",
+          "description": "true si le résultat a été obtenu de façon stable sur plusieurs exécutions. Obligatoire (et devant valoir true, ou son instabilité documentée dans `limite`) pour le statut \"Confirmé\"."
+        },
+        "nombreDeReproductions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Nombre de fois où le test a été rejoué avec un résultat identique."
+        }
+      }
+    },
+
+    "controlesCompensatoires": {
+      "type": "object",
+      "description": "Recherche et, le cas échéant, exclusion documentée de contrôles compensatoires. Obligatoire pour le statut \"Confirmé\" (voir la propriété conditionnelle plus bas).",
+      "additionalProperties": false,
+      "required": ["recherches"],
+      "properties": {
+        "recherches": {
+          "type": "boolean",
+          "description": "true si une recherche de contrôle compensatoire (passerelle, WAF, contrôle applicatif distinct, processus métier) a été menée."
+        },
+        "trouves": {
+          "type": "boolean",
+          "description": "true si un contrôle compensatoire potentiel a été identifié."
+        },
+        "description": {
+          "type": "string",
+          "description": "Description du ou des contrôles compensatoires envisagés, et de la façon dont leur absence ou inefficacité a été établie ou confirmée avec le client."
+        },
+        "exclusionDocumenteeAvecClient": {
+          "type": "boolean",
+          "description": "true si un doute résiduel a été posé explicitement au client et sa réponse consignée, plutôt que supposé."
+        }
+      }
+    },
+
+    "secondeRelecture": {
+      "type": "object",
+      "description": "La seconde relecture humaine, distincte de la personne ayant exécuté le test. Obligatoire pour le statut \"Confirmé\".",
+      "additionalProperties": false,
+      "required": ["relecteur", "date", "conclusion"],
+      "properties": {
+        "relecteur": {
+          "type": "string",
+          "description": "Nom ou identifiant de la personne ayant relu, distinct de l'exécutant du test."
+        },
+        "date": {
+          "type": "string",
+          "format": "date",
+          "description": "Date de la seconde relecture (AAAA-MM-JJ)."
+        },
+        "conclusion": {
+          "type": "string",
+          "description": "Conclusion de la seconde relecture, dans les mots du relecteur."
+        }
+      }
+    },
+
+    "limite": {
+      "type": "string",
+      "description": "Ce qui n'a pas été testé, ce qui reste supposé, les bornes de l'environnement de test. Toujours obligatoire et non vide, quel que soit le statut : un champ Limite vide ou générique invalide un constat.",
+      "minLength": 1
+    }
+  },
+
+  "allOf": [
+    {
+      "if": {
+        "properties": { "statut": { "const": "Confirmé" } }
+      },
+      "then": {
+        "required": [
+          "flux",
+          "autorisation",
+          "attributsProteges",
+          "pointEffet",
+          "verification",
+          "test",
+          "resultat",
+          "controlesCompensatoires",
+          "secondeRelecture",
+          "limite"
+        ],
+        "properties": {
+          "test": {
+            "required": ["type", "environnement", "environnementAutorisePar", "etapesOuScript"],
+            "properties": {
+              "type": { "enum": ["automatise", "manuel_documente"] }
+            }
+          },
+          "resultat": {
+            "required": ["observation", "reproductible"],
+            "properties": {
+              "reproductible": { "const": true }
+            }
+          },
+          "verification": {
+            "required": ["preuveExaminee", "verificationHumaine", "consommation"],
+            "properties": {
+              "verificationHumaine": { "const": true }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
