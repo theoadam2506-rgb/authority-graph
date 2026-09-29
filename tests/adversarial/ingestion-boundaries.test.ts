@@ -190,7 +190,7 @@ describe("Ingestion boundaries — I12/I13/I14 (PROMPT 3b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000),
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)),
       });
       const request = actionRequest({
         sequence: 2,

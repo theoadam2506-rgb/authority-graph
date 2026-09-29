@@ -69,7 +69,7 @@ describe("validateAndSelectGrant — happy path", () => {
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1000),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({ sequence: 2, id: "act-1", requester: AGENT, delegationId: "d-root", parameters: SEVEN_HUNDRED });
     if (!isEventType(root, "DELEGATION_CREATED") || !isEventType(request, "ACTION_REQUESTED")) {
@@ -110,7 +110,7 @@ describe("validateAndSelectGrant — B: action_id does not reference any ACTION_
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const capabilityEvent = capabilityIssuedEvent(2, {
       capability_id: capabilityId("cap-1"),
@@ -141,7 +141,7 @@ describe("validateAndSelectGrant — C: action_fingerprint does not match the im
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({ sequence: 2, id: "act-1", requester: AGENT, delegationId: "d-root", parameters: SEVEN_HUNDRED });
     if (!isEventType(root, "DELEGATION_CREATED") || !isEventType(request, "ACTION_REQUESTED")) {
@@ -177,7 +177,7 @@ describe("validateAndSelectGrant — D: granted_chain_ref names a delegation tha
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({ sequence: 2, id: "act-1", requester: AGENT, delegationId: "d-root", parameters: SEVEN_HUNDRED });
     if (!isEventType(root, "DELEGATION_CREATED") || !isEventType(request, "ACTION_REQUESTED")) {
@@ -241,7 +241,7 @@ describe("validateAndSelectGrant — F/J: the invoked delegation resolves, but i
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({ sequence: 2, id: "act-1", requester: AGENT, delegationId: "d-root", parameters: SEVEN_HUNDRED });
     const revocation = revokeDelegation({ sequence: 3, targetId: "d-root", issuedBy: THEO });
@@ -282,7 +282,7 @@ describe("validateAndSelectGrant — G: the invoked delegation resolves to REQUI
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100, 1000), // 700 falls in the approval band
+      amountThresholds: thresholds(EUR(100), EUR(1000)), // 700 falls in the approval band
     });
     const request = actionRequest({ sequence: 2, id: "act-1", requester: AGENT, delegationId: "d-root", parameters: SEVEN_HUNDRED });
     if (!isEventType(root, "DELEGATION_CREATED") || !isEventType(request, "ACTION_REQUESTED")) {
@@ -322,7 +322,7 @@ describe("validateAndSelectGrant — H: INVOKED names delegation A, the capabili
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const dB = rootDelegation({
       sequence: 2,
@@ -332,7 +332,7 @@ describe("validateAndSelectGrant — H: INVOKED names delegation A, the capabili
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({ sequence: 3, id: "act-1", requester: AGENT, delegationId: "d-a", parameters: SEVEN_HUNDRED });
     if (!isEventType(dA, "DELEGATION_CREATED") || !isEventType(dB, "DELEGATION_CREATED") || !isEventType(request, "ACTION_REQUESTED")) {
@@ -368,7 +368,7 @@ describe("validateAndSelectGrant — I: an alternative AUTHORIZED delegation the
         grantee: AGENT,
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
-        amountThresholds: thresholds(100000, 100000),
+        amountThresholds: thresholds(EUR(100000), EUR(100000)),
       });
       const alternative = rootDelegation({
         sequence: order === "invoked-first" ? 2 : 1,
@@ -378,7 +378,7 @@ describe("validateAndSelectGrant — I: an alternative AUTHORIZED delegation the
         grantee: AGENT,
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
-        amountThresholds: thresholds(100000, 100000),
+        amountThresholds: thresholds(EUR(100000), EUR(100000)),
       });
       const request = actionRequest({ sequence: 3, id: "act-1", requester: AGENT, delegationId: "d-invoked", parameters: SEVEN_HUNDRED });
       if (!isEventType(request, "ACTION_REQUESTED")) {
@@ -418,7 +418,7 @@ describe("validateAndSelectGrant — K: decision_sequence backdated to an instan
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({ sequence: 2, id: "act-1", requester: AGENT, delegationId: "d-root", parameters: SEVEN_HUNDRED });
     const revocation = revokeDelegation({ sequence: 3, targetId: "d-root", issuedBy: THEO });
@@ -521,7 +521,7 @@ describe("validateAndSelectGrant — multi-hop INVOKED chain, never substituted 
       grantee: AGENT_A,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
-      amountThresholds: thresholds(100, 1000),
+      amountThresholds: thresholds(EUR(100), EUR(1000)),
     });
     const d2 = subDelegation({
       sequence: 2,
@@ -531,7 +531,7 @@ describe("validateAndSelectGrant — multi-hop INVOKED chain, never substituted 
       grantee: AGENT_B,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
-      amountThresholds: thresholds(100, 1000),
+      amountThresholds: thresholds(EUR(100), EUR(1000)),
     });
     const d3 = subDelegation({
       sequence: 3,
@@ -541,7 +541,7 @@ describe("validateAndSelectGrant — multi-hop INVOKED chain, never substituted 
       grantee: AGENT_C,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100, 1000),
+      amountThresholds: thresholds(EUR(100), EUR(1000)),
     });
     const d4 = rootDelegation({
       sequence: 4,
@@ -551,7 +551,7 @@ describe("validateAndSelectGrant — multi-hop INVOKED chain, never substituted 
       grantee: AGENT_C,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000), // would resolve AUTHORIZED instantly, if ever consulted
+      amountThresholds: thresholds(EUR(100000), EUR(100000)), // would resolve AUTHORIZED instantly, if ever consulted
     });
     const fiveHundred = monetaryParameters(EUR(500));
     const request = actionRequest({ sequence: 5, id: "act-1", requester: AGENT_C, delegationId: "d3", parameters: fiveHundred });

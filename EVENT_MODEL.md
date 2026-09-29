@@ -92,24 +92,78 @@ business ID with different content (for example, passing off a
 high-amount action as the already-approved low-amount action). Business
 ID uniqueness closes exactly this case, independently of I8.
 
-## Canonical action fingerprint (`action_fingerprint`, I15)
+## Canonical action fingerprint (`action_fingerprint`, I15, I25)
 
 Computed by Authority, never taken as-is from the source without
-verification. Inputs, in this exact order, each converted to a UTF-8
-string (an absent field is represented by the literal sentinel `∅`, an
-integer by its decimal representation with no leading zero and no
-insignificant sign):
+verification. A monetary quantity is the atomic pair `(value, currency)`
+(I25): the fingerprint covers both, so two actions that differ only by
+currency have different fingerprints.
 
-1. `capability.resource`
-2. `capability.action`
-3. `parameters.amount` (or `∅`)
-4. `parameters.recipient` (or `∅`)
+The canonical string is five segments, in this exact order, joined by the
+single character U+001F (unit separator, one byte `0x1F`), with no leading or
+trailing separator:
 
-The four segments are joined with the U+001F separator (unit separator)
-into a single string, then hashed with SHA-256 and encoded in lowercase
-hexadecimal. The result is `action_fingerprint`. This function is pure
-and deterministic (I2): the same inputs always produce the same
-fingerprint.
+```
+resource=<LEN>:<resource>
+action=<LEN>:<action>
+amount=<LEN>:<amount>
+currency=<LEN>:<currency>
+recipient=<LEN>:<recipient>
+```
+
+- **Segment.** `<label>=<LEN>:<value>`, where `<label>` is the literal
+  lowercase label above, and `<LEN>` is the decimal length of `<value>` in
+  **UTF-8 bytes** (not UTF-16 code units, not characters), without leading
+  zeros. `<value>` follows the `:` verbatim.
+- **Absent field.** The segment is `<label>=∅`, with `∅` the single character
+  U+2205 and no length prefix. `amount` and `currency` are absent together
+  (a non-monetary action) or present together (a monetary action);
+  `recipient` is absent when the action has no recipient. A present value
+  always starts with a digit after the `=`, so it can never be mistaken for
+  `∅`.
+- **`resource`, `action`, `recipient`, `currency`.** Opaque strings, taken as
+  they are: no trimming, no case folding, no Unicode normalization.
+  `EUR`, `eur` and `EUR ` are three different currencies.
+- **`amount`.** The decimal representation of `amount.value` (a
+  non-negative integer: no sign, no leading zero, `0` for zero).
+- **Encoding and digest.** The string is encoded in UTF-8, hashed with
+  SHA-256, and written as 64 lowercase hexadecimal characters. The result is
+  `action_fingerprint`. This function is pure and deterministic (I2): the
+  same inputs always produce the same fingerprint.
+
+The length prefix is what makes the string unambiguous: the boundary of every
+segment is determined by its declared byte length, never by searching for
+the separator, so a value that itself contains U+001F, or text that looks like
+another segment, cannot shift or forge a boundary.
+
+Authority never converts between currencies and does not interpret
+currency codes (ISO 4217 or otherwise): `currency` is an opaque, non-empty
+label compared by exact equality.
+
+Reference vectors. The string column shows U+001F as `␟` for legibility only;
+the hashed string contains the single byte `0x1F`, not that glyph.
+
+| Action | Canonical string | `action_fingerprint` |
+|---|---|---|
+| `payments`/`transfer`, 500 `EUR`, recipient `alice` | `resource=8:payments␟action=8:transfer␟amount=3:500␟currency=3:EUR␟recipient=5:alice` | `939c6f0ad6939d0effe6d83bfe2a098522331dd178ca84ed052b0bd59e3d84d3` |
+| same, 500 `USD` | `resource=8:payments␟action=8:transfer␟amount=3:500␟currency=3:USD␟recipient=5:alice` | `ba6fccd49fd79e72c3cc8b970d5a696ee72fa5c59faa8e9ce6e0a8beb0e6b51a` |
+| same, non-monetary, recipient `alice` | `resource=8:payments␟action=8:transfer␟amount=∅␟currency=∅␟recipient=5:alice` | `248cd9639125e734200aa67b91159991befca29c1e16b8516525390de5b2c197` |
+| same as the first, no recipient | `resource=8:payments␟action=8:transfer␟amount=3:500␟currency=3:EUR␟recipient=∅` | `4f8673ca9ad14e8b7ffec7d7d9d861275b23eb7f4a37f12590f8ee8e20816aa1` |
+| same as the first, amount 0 | `resource=8:payments␟action=8:transfer␟amount=1:0␟currency=3:EUR␟recipient=5:alice` | `b779e50c5a64bf0538e64e65075c7377bcfaf567a618896d70f00d34c5afc452` |
+| same as the first, currency `É` (2 UTF-8 bytes) | `resource=8:payments␟action=8:transfer␟amount=3:500␟currency=2:É␟recipient=5:alice` | `6307876b866f5c5052b8b353f79de675bc759accac1029ef68cdd1b5d723a9ff` |
+| `paiements`/`virement`, 500 `EUR`, recipient `zoé` | `resource=9:paiements␟action=8:virement␟amount=3:500␟currency=3:EUR␟recipient=4:zoé` | `64f90e63b46dddddf514f97f447064663698e0773d483b60b3335dbb212405e3` |
+
+These vectors are asserted, byte for byte, by
+`tests/domain/actionFingerprint.test.ts`.
+
+**Compatibility.** This format replaces the earlier one (which did not cover
+`currency`, and whose documented and implemented byte formats disagreed).
+Every fingerprint computed under the earlier format differs from the one
+computed now for the same action. V0 defines no dual-accept: a fingerprint
+computed under the earlier format is not recognized, and fails the exact
+equality required by I15 like any other different fingerprint. Likewise, a
+delegation carrying `automatic_max_amount` / `approval_max_amount` as bare
+numbers (the earlier format) is malformed and `UNKNOWN` (C22).
 
 ## The 9 event types
 
@@ -128,9 +182,9 @@ mandatorily `null` for this type.
 | `can_delegate` | boolean, mandatory | The right to subdelegate (I12). Absence means `UNKNOWN` for any resolution that depends on it. A delegation always confers execution of the listed capabilities; it confers re-delegation only if `can_delegate: true`. |
 | `expires_at` | timestamp **or** `{no_expiry: true}` | Mandatory. Never an implicit null (I1). Compared against `authority_time`, never against `occurred_at`/`recorded_at` (I4). |
 | `max_amount` | optional `{value: integer, currency}` | Structural per-action cap, used to bound subdelegations (I5). Absence means unlimited (+∞) for this comparison. |
-| `total_budget` | optional `{value: integer, currency}` | Aggregate cap: at no `sequence` may the sum of `parameters.amount` across every `ACTION_EXECUTED` whose `authority_chain_ref` passes through this delegation or one of its descendants exceed this value. Absence means unlimited (+∞). Debited at the level of **every** bounded ancestor of a chain, not only at the terminal delegation invoked (see `SPEC.md`, "total_budget semantics"). V0 guarantees an honest, deterministic calculation of this cap at resolution time, not its reservation before execution (see A24, `THREAT_MODEL.md`). |
-| `automatic_max_amount` | integer, mandatory if `max_amount` or any amount-bearing action is invoked on this delegation | Below this threshold: no approval required. |
-| `approval_max_amount` | integer, same condition | Between `automatic_max_amount` (excluded) and this threshold (included): approval required. Beyond it: `DENIED`. Must satisfy `automatic_max_amount ≤ approval_max_amount ≤ max_amount` (`max_amount` treated as +∞ if absent). If the order is violated, the delegation is malformed and `UNKNOWN` for any resolution that depends on it. |
+| `total_budget` | optional `{value: integer, currency}` | Aggregate cap: at no `sequence` may the sum of `parameters.amount` across every `ACTION_EXECUTED` whose `authority_chain_ref` passes through this delegation or one of its descendants exceed this value. Only amounts in this budget's own `currency` are summed: an execution in another currency never debits it (I25). Absence means unlimited (+∞). Debited at the level of **every** bounded ancestor of a chain, not only at the terminal delegation invoked (see `SPEC.md`, "total_budget semantics"). V0 guarantees an honest, deterministic calculation of this cap at resolution time, not its reservation before execution (see A24, `THREAT_MODEL.md`). |
+| `automatic_max_amount` | `{value: integer, currency}`, mandatory if `max_amount` or any amount-bearing action is invoked on this delegation | Below this threshold: no approval required. |
+| `approval_max_amount` | `{value: integer, currency}`, same condition | Between `automatic_max_amount` (excluded) and this threshold (included): approval required. Beyond it: `DENIED`. Must satisfy `automatic_max_amount ≤ approval_max_amount ≤ max_amount` (`max_amount` treated as +∞ if absent). If the order is violated, the delegation is malformed and `UNKNOWN` for any resolution that depends on it. All of a delegation's monetary constraints (`max_amount`, `total_budget`, `automatic_max_amount`, `approval_max_amount`) must name the same non-empty `currency` (I25); a delegation that mixes currencies, or carries a malformed amount (for example a bare number instead of `{value, currency}`), is malformed in the same way (`UNKNOWN`, C22). |
 | `parent_delegation_id` | `null` (fixed for this type) | Marks a root delegation. |
 
 ### 2. `DELEGATION_REVOKED`
@@ -169,7 +223,7 @@ and non-null.
 | `capabilities` | list of exact `{resource, action}` pairs | Exact subset of the parent's capabilities. |
 | `can_delegate` | boolean, mandatory | Same as I12. |
 | `expires_at` | timestamp **or** `{no_expiry: true}` | ≤ the parent's `expires_at` (`no_expiry` treated as +∞). |
-| `max_amount`, `total_budget`, `automatic_max_amount`, `approval_max_amount` | same types as `DELEGATION_CREATED` | Each ≤ the parent's corresponding value. For `total_budget`, ≤ the parent's **remainder** at the resolution `sequence` (the parent's declared `total_budget` minus the sum of `parameters.amount` across every authorized `ACTION_EXECUTED` whose `authority_chain_ref` passes through the parent or one of its descendants, at `sequence` ≤ the one being evaluated). |
+| `max_amount`, `total_budget`, `automatic_max_amount`, `approval_max_amount` | same types as `DELEGATION_CREATED` | Same `currency` as the parent's corresponding value (compared first, exactly), and value ≤ the parent's corresponding value. A different currency is never an attenuation (I25). For `total_budget`, ≤ the parent's **remainder** at the resolution `sequence` (the parent's declared `total_budget` minus the sum of `parameters.amount` across every authorized `ACTION_EXECUTED` whose `authority_chain_ref` passes through the parent or one of its descendants, at `sequence` ≤ the one being evaluated). |
 
 Valid (I12) only if the issuer is the parent's grantee and the parent
 carries `can_delegate: true`. Checked at ingestion against the canonical
@@ -184,7 +238,7 @@ have been revoked, or its remaining budget may have decreased, since).
 | `requesting_principal_id` | opaque identifier | The principal requesting to act. |
 | `delegation_id` | opaque identifier | The delegation or subdelegation invoked. |
 | `capability_requested` | exact `{resource, action}` | Exact capability required. |
-| `parameters` | `{amount?: integer, currency?, recipient?: opaque identifier}` | Only `amount`, `currency`, and `recipient` are typed and enter `action_fingerprint` (I15). No other business field is interpreted by the engine in V0. |
+| `parameters` | `{amount?: {value: integer, currency}, recipient?: opaque identifier}` | Only `amount` (value and currency together, I25) and `recipient` are typed and enter `action_fingerprint` (I15). No other business field is interpreted by the engine in V0. |
 
 ### 5. `APPROVAL_REQUESTED`
 
@@ -227,7 +281,7 @@ Scope of the denial: it targets exclusively the `approval_id` it cites
 (and therefore the `ACTION_REQUESTED` with the same `action_id`), never
 the `action_fingerprint` on a permanent basis. A new `APPROVAL_REQUESTED`,
 with a new `approval_id`, for an action with an identical
-`action_fingerprint` (same capability, same amount, same recipient), is
+`action_fingerprint` (same capability, same amount, same currency, same recipient), is
 admissible and is evaluated independently of this denial.
 `action_fingerprint` is never used as a persistent blacklist key. That
 would be business policy, outside V0's deterministic scope.

@@ -59,7 +59,7 @@ describe("M8 — the legacy `chain` field's own detail stays temporally filtered
       grantee: executor,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 2,
@@ -119,7 +119,7 @@ describe("M8 — the legacy `chain` field's own detail stays temporally filtered
       grantee: executor,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 2,
@@ -158,7 +158,7 @@ describe("M7 — strict temporal-window isolation across all historical/now view
       grantee: executor,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 2,
@@ -238,7 +238,7 @@ describe("M7 — strict temporal-window isolation across all historical/now view
       grantee: executor,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
 
     const store = [request, execution, d1];

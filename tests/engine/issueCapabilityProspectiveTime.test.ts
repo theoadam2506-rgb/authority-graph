@@ -36,7 +36,7 @@ import type { AuthenticatedPrincipal } from "../../src/domain/authenticatedPrinc
 import { isEventType } from "../../src/domain/events.js";
 import { actionId, capabilityId, enforcementPointId, expiresAt, iso8601, nonMonetaryParameters, thresholds, type Iso8601, type PrincipalId } from "../../src/domain/types.js";
 import type { IssueCapabilityCommand } from "../../src/domain/capabilityCommand.js";
-import { PURCHASE_ORDER_CREATE, THEO, actionRequest, rootDelegation } from "../fixtures/scenarios.js";
+import { EUR, PURCHASE_ORDER_CREATE, THEO, actionRequest, rootDelegation } from "../fixtures/scenarios.js";
 import { principal } from "../fixtures/ids.js";
 
 const AGENT = principal("prospective-time-agent");
@@ -74,7 +74,7 @@ function buildStaleLogScenario() {
     grantee: AGENT,
     capabilities: [PURCHASE_ORDER_CREATE],
     canDelegate: false,
-    amountThresholds: thresholds(100000, 100000),
+    amountThresholds: thresholds(EUR(100000), EUR(100000)),
     expires: expiresAt(iso8601(T2)),
     timing: { authorityTime: T1 },
   });
@@ -260,7 +260,7 @@ describe("[PR4B-5A RED] STALE_AUTHORITY_TIME — authorityTime older than the ca
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
       // no `expires` — noExpiry: the agent's authority itself remains
       // perfectly valid at T3. Only the evaluation instant is incoherent.
       timing: { authorityTime: T1 },

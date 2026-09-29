@@ -327,7 +327,7 @@ export function launderingChain(): {
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false, // <-- A is never granted the right to sub-delegate
       maxAmount: EUR(5000),
-      amountThresholds: thresholds(5000, 5000),
+      amountThresholds: thresholds(EUR(5000), EUR(5000)),
     }),
     // A sub-delegates anyway (I12 violation), more restrictive than its own grant (I5 satisfied).
     subDelegation({
@@ -339,7 +339,7 @@ export function launderingChain(): {
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       maxAmount: EUR(1000),
-      amountThresholds: thresholds(1000, 1000),
+      amountThresholds: thresholds(EUR(1000), EUR(1000)),
     }),
     // B, believing its grant from A is legitimate, sub-delegates further to C.
     subDelegation({
@@ -351,7 +351,7 @@ export function launderingChain(): {
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       maxAmount: EUR(500),
-      amountThresholds: thresholds(500, 500),
+      amountThresholds: thresholds(EUR(500), EUR(500)),
     }),
     // Kept as a historical record (useful for explainAction-focused tests),
     // even though authorityAt's own prospective query below does not need it.
@@ -384,7 +384,7 @@ export function siblingsSharingBudget(parentBudget: number, childBudget: number)
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       totalBudget: EUR(parentBudget),
-      amountThresholds: thresholds(parentBudget, parentBudget),
+      amountThresholds: thresholds(EUR(parentBudget), EUR(parentBudget)),
     }),
     subDelegation({
       sequence: 2,
@@ -395,7 +395,7 @@ export function siblingsSharingBudget(parentBudget: number, childBudget: number)
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(childBudget),
-      amountThresholds: thresholds(childBudget, childBudget),
+      amountThresholds: thresholds(EUR(childBudget), EUR(childBudget)),
     }),
     subDelegation({
       sequence: 3,
@@ -406,7 +406,7 @@ export function siblingsSharingBudget(parentBudget: number, childBudget: number)
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(childBudget),
-      amountThresholds: thresholds(childBudget, childBudget),
+      amountThresholds: thresholds(EUR(childBudget), EUR(childBudget)),
     }),
   ];
 }

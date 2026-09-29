@@ -34,7 +34,7 @@ const { canonicalStore } = ingestAll(
       delegation_id: delegationId("d-owner-agentA"), grantor_principal_id: OWNER,
       grantor_type: "HUMAN_ROOT", grantee_principal_id: AGENT_A,
       capabilities: [PURCHASE_ORDER_CREATE], can_delegate: false, expires_at: noExpiry,
-      thresholds: thresholds(2000, 2000), parent_delegation_id: null,
+      thresholds: thresholds(money(2000, "EUR"), money(2000, "EUR")), parent_delegation_id: null,
     },
   }, {
     // Used later by the capability-issuance example below (harmless here):
@@ -357,7 +357,7 @@ $ npm run demo
         capabilities: purchase_order.create
         can_delegate: true
         expires_at: 2025-01-01T10:00:00.000Z
-        thresholds: automatic<=2500, approval<=5000
+        thresholds: automatic<=2500 EUR, approval<=5000 EUR
         revocation: the log contains a DELEGATION_REVOKED event asserting that user revoked this delegation at sequence 11 (reason: POLICY_REVIEW)
 
   Approvals:
@@ -422,7 +422,7 @@ action was legitimate at sequence 8, back when it ran.
 ## Further reading
 
 - [`SPEC.md`](./SPEC.md): the problem statement, the two operations, the
-  four possible outcomes, and every numbered invariant (I1 through I24) as a
+  four possible outcomes, and every numbered invariant (I1 through I25) as a
   testable assertion, plus the exhaustive condition → outcome table.
 - [`THREAT_MODEL.md`](./THREAT_MODEL.md): the attack table: for each
   attack, which invariant is supposed to stop it, the defense mechanism, and
@@ -451,6 +451,16 @@ supported way to use this project today is `git clone` plus the commands in
 and the Postgres backend are both covered by the test suite described below,
 including tests against a real Postgres instance; neither has been
 benchmarked or run at production scale.
+
+**Breaking change, unit binding (I25).** A monetary quantity is the atomic
+pair `(value, currency)`; Authority compares `currency` by exact equality and
+never converts it. Two consequences for anything written against the earlier
+V0: `thresholds(automatic, approval)` now takes two `Money` values (for
+example `thresholds(money(100, "EUR"), money(1000, "EUR"))`), and
+`action_fingerprint` changed format and now covers the currency (byte-for-byte
+definition and reference vectors in [`EVENT_MODEL.md`](./EVENT_MODEL.md)). V0
+defines no dual-accept: fingerprints computed under the earlier format, and
+delegations whose thresholds are bare numbers, are not recognized.
 
 ## Development
 

@@ -70,7 +70,7 @@ describe("M3 — post-execution CLI output has exactly five explicitly labeled s
         grantee: THEO, // grantee kept as THEO to avoid needing a second principal import; irrelevant to this rendering test
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
-        amountThresholds: thresholds(1_000, 1_000),
+        amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
       }),
       actionRequest({
         sequence: 2,
@@ -115,7 +115,7 @@ describe("M3 — post-execution CLI output has exactly five explicitly labeled s
         grantee: THEO,
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
-        amountThresholds: thresholds(100, 1_000), // 500 falls in the approval band
+        amountThresholds: thresholds(EUR(100), EUR(1_000)), // 500 falls in the approval band
       }),
       actionRequest({
         sequence: 2,
@@ -154,7 +154,7 @@ describe("M3 — pre-execution CLI output has only the two '... now' sections", 
         grantee: THEO,
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
-        amountThresholds: thresholds(1_000, 1_000),
+        amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
       }),
       actionRequest({
         sequence: 2,
@@ -210,7 +210,7 @@ describe("M3 — 'unresolvable'/'none' sections keep their exact title and a non
         grantee: THEO,
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
-        amountThresholds: thresholds(1_000, 1_000),
+        amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
       }),
     ];
 
@@ -254,7 +254,7 @@ describe("M3 — 'unresolvable'/'none' sections keep their exact title and a non
 describe("I6 — explain never presents another action's approval as authorizing this action", () => {
   const parameters = monetaryParameters(EUR(500));
   const base: AuthorityEvent[] = [
-    rootDelegation({ sequence: 1, id: "i6-d1", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT_A, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100, 1_000) }),
+    rootDelegation({ sequence: 1, id: "i6-d1", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT_A, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100), EUR(1_000)) }),
     actionRequest({ sequence: 2, id: "i6-a1", requester: AGENT_A, delegationId: "i6-d1", parameters }),
     actionRequest({ sequence: 3, id: "i6-a2", requester: AGENT_A, delegationId: "i6-d1", parameters }),
     approvalRequest({ sequence: 4, id: "i6-p1", actionId: "i6-a1", requestedFrom: THEO, requester: AGENT_A }),

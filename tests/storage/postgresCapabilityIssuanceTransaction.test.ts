@@ -119,7 +119,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
   }
 
   it("T1 — same requester + same idempotency key + same command, concurrent: exactly one EXECUTED and one REPLAYED with an identical result", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t1", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t1", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request = actionRequest({ sequence: 2, id: "act-t1", requester: AGENT, delegationId: "d-t1", parameters: monetaryParameters(EUR(100)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
       throw new Error("fixture returned an unexpected event_type");
@@ -152,7 +152,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
   });
 
   it("T2 — same requester + same idempotency key + different commands, concurrent: one canonical + one IDEMPOTENCY_CONFLICT", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t2", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t2", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request1 = actionRequest({ sequence: 2, id: "act-t2-1", requester: AGENT, delegationId: "d-t2", parameters: monetaryParameters(EUR(100)) });
     const request2 = actionRequest({ sequence: 3, id: "act-t2-2", requester: AGENT, delegationId: "d-t2", parameters: monetaryParameters(EUR(100)) });
     if (!isEventType(request1, "ACTION_REQUESTED") || !isEventType(request2, "ACTION_REQUESTED")) {
@@ -178,7 +178,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
   });
 
   it("T3 — different idempotency keys, shared capacity: remainingCapacity(D)=300, two concurrent 200 EUR reservations, exactly one succeeds", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t3", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t3", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const requestA = actionRequest({ sequence: 2, id: "act-t3-a", requester: AGENT, delegationId: "d-t3", parameters: monetaryParameters(EUR(200)) });
     const requestB = actionRequest({ sequence: 3, id: "act-t3-b", requester: AGENT, delegationId: "d-t3", parameters: monetaryParameters(EUR(200)) });
     if (!isEventType(requestA, "ACTION_REQUESTED") || !isEventType(requestB, "ACTION_REQUESTED")) {
@@ -198,9 +198,9 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
   });
 
   it("T4 — two terminal delegations sharing one bounded ancestor: the shared ancestor's capacity is never over-reserved", async () => {
-    const d1 = rootDelegation({ sequence: 1, id: "d1-t4", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT_A, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: true, totalBudget: EUR(300), amountThresholds: thresholds(100000, 100000) });
-    const d2a = subDelegation({ sequence: 2, id: "d2a-t4", parentId: "d1-t4", grantor: AGENT_A, grantee: AGENT_A, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(100000, 100000) });
-    const d2b = subDelegation({ sequence: 3, id: "d2b-t4", parentId: "d1-t4", grantor: AGENT_A, grantee: AGENT_B, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(100000, 100000) });
+    const d1 = rootDelegation({ sequence: 1, id: "d1-t4", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT_A, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: true, totalBudget: EUR(300), amountThresholds: thresholds(EUR(100000), EUR(100000)) });
+    const d2a = subDelegation({ sequence: 2, id: "d2a-t4", parentId: "d1-t4", grantor: AGENT_A, grantee: AGENT_A, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(EUR(100000), EUR(100000)) });
+    const d2b = subDelegation({ sequence: 3, id: "d2b-t4", parentId: "d1-t4", grantor: AGENT_A, grantee: AGENT_B, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const requestA = actionRequest({ sequence: 4, id: "act-t4-a", requester: AGENT_A, delegationId: "d2a-t4", parameters: monetaryParameters(EUR(200)) });
     const requestB = actionRequest({ sequence: 5, id: "act-t4-b", requester: AGENT_B, delegationId: "d2b-t4", parameters: monetaryParameters(EUR(200)) });
     if (!isEventType(requestA, "ACTION_REQUESTED") || !isEventType(requestB, "ACTION_REQUESTED")) {
@@ -220,7 +220,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
   });
 
   it("T5 — N-way concurrency: capacity=300, five concurrent 100 EUR requests, exactly 3 succeed", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t5", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t5", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const requests = [1, 2, 3, 4, 5].map((n) => actionRequest({ sequence: 1 + n, id: `act-t5-${n}`, requester: AGENT, delegationId: "d-t5", parameters: monetaryParameters(EUR(100)) }));
     for (const request of requests) {
       if (!isEventType(request, "ACTION_REQUESTED")) {
@@ -245,7 +245,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
   });
 
   it("T6 — retry after a committed response is lost: REPLAYs the exact same result, never a second emission", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t6", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t6", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request = actionRequest({ sequence: 2, id: "act-t6", requester: AGENT, delegationId: "d-t6", parameters: monetaryParameters(EUR(100)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
       throw new Error("fixture returned an unexpected event_type");
@@ -279,7 +279,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
   });
 
   it("T7 — atomicity of the event write and the idempotency record: never one without the other, checked directly against the database", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t7", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t7", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request = actionRequest({ sequence: 2, id: "act-t7", requester: AGENT, delegationId: "d-t7", parameters: monetaryParameters(EUR(100)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
       throw new Error("fixture returned an unexpected event_type");
@@ -301,7 +301,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
   });
 
   it("T8 — forced capability_id collision: exactly one canonical event, fail-closed rejection for the other, retry REPLAYs the same refusal", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t8", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t8", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const requestA = actionRequest({ sequence: 2, id: "act-t8-a", requester: AGENT, delegationId: "d-t8", parameters: monetaryParameters(EUR(50)) });
     const requestB = actionRequest({ sequence: 3, id: "act-t8-b", requester: AGENT, delegationId: "d-t8", parameters: monetaryParameters(EUR(50)) });
     if (!isEventType(requestA, "ACTION_REQUESTED") || !isEventType(requestB, "ACTION_REQUESTED")) {
@@ -342,7 +342,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
   });
 
   it("T9 — snapshot/sequence adjacency: event.sequence === decision_sequence + 1", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t9", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t9", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request = actionRequest({ sequence: 2, id: "act-t9", requester: AGENT, delegationId: "d-t9", parameters: monetaryParameters(EUR(100)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
       throw new Error("fixture returned an unexpected event_type");
@@ -373,7 +373,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
       expires: expiresAt(iso8601(T2)),
     });
     const request = actionRequest({ sequence: 2, id: "act-t10", requester: AGENT, delegationId: "d-t10", parameters: nonMonetaryParameters() });
@@ -449,7 +449,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
       expires: expiresAt(iso8601(T2)),
     });
     const request = actionRequest({ sequence: 2, id: "act-t10b", requester: AGENT, delegationId: "d-t10b", parameters: nonMonetaryParameters() });
@@ -490,7 +490,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
       // no expires_at — the agent's own authority remains perfectly valid
       // at T3; only the evaluation instant itself is incoherent with what
       // the database already canonically knows.
@@ -560,7 +560,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
     const T4 = iso8601("2030-01-01T12:00:00.000Z"); // already canonical
     const T5 = iso8601("2030-01-01T13:00:00.000Z"); // T5 > T4 — individually coherent
 
-    const root = rootDelegation({ sequence: 1, id: "d-t12pg", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t12pg", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request = actionRequest({ sequence: 2, id: "act-t12pg", requester: AGENT, delegationId: "d-t12pg", parameters: nonMonetaryParameters() });
     if (!isEventType(request, "ACTION_REQUESTED")) {
       throw new Error("fixture returned an unexpected event_type");
@@ -613,7 +613,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
   });
 
   it("crash consistency — an uncommitted concurrent write is never observable: a second connection's INSERT, left uncommitted, does not appear once its client disconnects", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-crash", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-crash", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     await seed([toDraft(root)]);
 
     const strandedClient = await pool.connect();

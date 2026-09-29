@@ -118,7 +118,8 @@ export function remainingCapacity(delegationId: DelegationId, capacity: Money, g
     if (request === undefined) {
       continue;
     }
-    if (request.payload.parameters.kind === "monetary") {
+    // I25: amounts in different currencies are never summed.
+    if (request.payload.parameters.kind === "monetary" && request.payload.parameters.amount.currency === capacity.currency) {
       engaged += request.payload.parameters.amount.value;
     }
   }

@@ -32,7 +32,7 @@ describe("historical explain is invariant to current CLI clock", () => {
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       expires: expiresAt(iso8601(timeAt(5))),
-      amountThresholds: thresholds(1000, 1000),
+      amountThresholds: thresholds(EUR(1000), EUR(1000)),
     }),
     actionRequest({
       sequence: 2,

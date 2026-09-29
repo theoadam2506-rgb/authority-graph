@@ -47,7 +47,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const branchA = subDelegation({
       sequence: 2,
@@ -58,7 +58,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       totalBudget: EUR(1_000), // total_budget must be explicitly re-declared at every level once a real ancestor bounds it (validateChain.ts's totalBudgetBoundOk) — no implicit inheritance
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const leafA = subDelegation({
       sequence: 3,
@@ -69,7 +69,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const branchB = subDelegation({
       sequence: 4,
@@ -80,7 +80,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const leafB = subDelegation({
       sequence: 5,
@@ -91,7 +91,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const requestA = actionRequest({
       sequence: 6,
@@ -139,7 +139,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const branchA = subDelegation({
       sequence: 2,
@@ -150,7 +150,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const leafA = subDelegation({
       sequence: 3,
@@ -161,7 +161,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     // Declared well under root's original 1_000, deliberately: a sibling
     // whose own declared total_budget nominally exceeds the shared root's
@@ -179,7 +179,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       totalBudget: EUR(500),
-      amountThresholds: thresholds(500, 500),
+      amountThresholds: thresholds(EUR(500), EUR(500)),
     });
     const leafB = subDelegation({
       sequence: 5,
@@ -190,7 +190,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(500),
-      amountThresholds: thresholds(500, 500),
+      amountThresholds: thresholds(EUR(500), EUR(500)),
     });
     const requestA = actionRequest({
       sequence: 6,
@@ -254,7 +254,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const branchA = subDelegation({
       sequence: 2,
@@ -265,7 +265,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       totalBudget: EUR(1_000), // deliberately equal to root's own declared value — no margin
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const leafA = subDelegation({
       sequence: 3,
@@ -276,7 +276,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     // Sibling branch B: same declared ceiling as root, no margin either —
     // this is the shape under test, not something to avoid this time.
@@ -289,7 +289,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const leafB = subDelegation({
       sequence: 5,
@@ -300,7 +300,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const requestA = actionRequest({
       sequence: 6,
@@ -346,7 +346,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       grantee: MID_A,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const branchA = subDelegation({
       sequence: 2,
@@ -356,7 +356,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       grantee: MID_A,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     // Branch A's own leaf is deliberately TIGHTER than the shared root: a
     // low automatic ceiling, forcing amounts above 100 into REQUIRES_APPROVAL.
@@ -368,7 +368,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       grantee: AGENT_X,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100, 1_000),
+      amountThresholds: thresholds(EUR(100), EUR(1_000)),
     });
     const branchB = subDelegation({
       sequence: 4,
@@ -378,7 +378,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       grantee: MID_B,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     // Branch B's leaf keeps the shared root's laxer automatic ceiling.
     const leafB = subDelegation({
@@ -389,7 +389,7 @@ describe("Diamond investigation — two independent branches sharing a real ance
       grantee: AGENT_X,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
 
     const amount = monetaryParameters(EUR(500)); // above A's automatic ceiling (100), within A's approval band (<=1000); within B's automatic ceiling (1000)

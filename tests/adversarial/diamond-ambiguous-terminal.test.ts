@@ -41,7 +41,7 @@ describe("Diamond investigation — ambiguous recorded terminal", () => {
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const leafY = rootDelegation({
       sequence: 2,
@@ -52,7 +52,7 @@ describe("Diamond investigation — ambiguous recorded terminal", () => {
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     // A fully independent action, unrelated delegation, unrelated agent —
     // the control against which "reading the diagnostic changes nothing
@@ -66,7 +66,7 @@ describe("Diamond investigation — ambiguous recorded terminal", () => {
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
 
     const request = actionRequest({

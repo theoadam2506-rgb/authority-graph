@@ -9,7 +9,7 @@
  */
 import { computeActionFingerprint } from "../domain/events.js";
 import type { AuthorityEvent, CanonicalStore, ChainLink } from "../domain/events.js";
-import { MAX_CHAIN_DEPTH, type ActionId, type ActionParameters, type ApprovalId, type AuthorityDecision, type Capability, type DelegationId, type Money, type PrincipalId } from "../domain/types.js";
+import { MAX_CHAIN_DEPTH, isWellFormedMoney, monetaryUnitOf, type ActionId, type ActionParameters, type ApprovalId, type AuthorityDecision, type Capability, type DelegationId, type Money, type PrincipalId } from "../domain/types.js";
 import { isNotCausallyAfter } from "./causality.js";
 import { recordedChainIntegrity, recordedTerminalId } from "./provenance.js";
 import type { DelegationEvent } from "./validateChain.js";
@@ -186,7 +186,9 @@ export function remainingBudget(delegationId: DelegationId, totalBudget: Money, 
     if (!isDemonstrablyTiedToItsExecutor(event, request, visibleStore)) {
       continue; // I20: not a legitimate debit against this chain — PROMPT 6b finding #2
     }
-    if (request.payload.parameters.kind === "monetary") {
+    // I25: only an amount in the budget's own currency is ever debited from
+    // it — amounts in different currencies are never summed.
+    if (request.payload.parameters.kind === "monetary" && request.payload.parameters.amount.currency === totalBudget.currency) {
       spent += request.payload.parameters.amount.value;
       chargedActionIds.add(request.payload.action_id);
     }
@@ -342,6 +344,23 @@ export function evaluateConstraints(
     return { outcome: "AUTHORIZED", chain: chainIds };
   }
 
+  // I25 (unit binding): a monetary action is only ever compared with
+  // constraints in its own currency. Malformed money is unresolvable
+  // (UNKNOWN); a valid policy in another currency simply does not cover the
+  // action (DENIED). Never converted, never compared numerically.
+  if (!isWellFormedMoney(parameters.amount)) {
+    return { outcome: "UNKNOWN", reasonCode: "C22_UNKNOWN_CONSTRAINT_TYPE" };
+  }
+  for (const node of chain) {
+    const unit = monetaryUnitOf(node.payload);
+    if (unit.kind === "invalid") {
+      return { outcome: "UNKNOWN", reasonCode: "C22_UNKNOWN_CONSTRAINT_TYPE" };
+    }
+    if (unit.kind === "currency" && unit.currency !== parameters.amount.currency) {
+      return { outcome: "DENIED", reasonCode: "C11_CAPABILITY_NOT_COVERED" };
+    }
+  }
+
   const amount = parameters.amount.value;
 
   if (budgetExceeded(chain, amount, visibleStore)) {
@@ -354,16 +373,18 @@ export function evaluateConstraints(
     // not resolvable — fail-closed, not a permissive "no ceiling" default.
     return { outcome: "UNKNOWN", reasonCode: "C22_UNKNOWN_CONSTRAINT_TYPE" };
   }
+  const automaticMax = thresholds.automatic_max_amount.value;
+  const approvalMax = thresholds.approval_max_amount.value;
   const ceiling = terminal.payload.max_amount !== undefined ? terminal.payload.max_amount.value : Number.POSITIVE_INFINITY;
-  const wellFormed = thresholds.automatic_max_amount <= thresholds.approval_max_amount && thresholds.approval_max_amount <= ceiling;
+  const wellFormed = automaticMax <= approvalMax && approvalMax <= ceiling;
   if (!wellFormed) {
     return { outcome: "UNKNOWN", reasonCode: "C22_UNKNOWN_CONSTRAINT_TYPE" };
   }
 
-  if (amount <= thresholds.automatic_max_amount) {
+  if (amount <= automaticMax) {
     return { outcome: "AUTHORIZED", chain: chainIds };
   }
-  if (amount > thresholds.approval_max_amount) {
+  if (amount > approvalMax) {
     return { outcome: "DENIED", reasonCode: "C8_AMOUNT_EXCEEDS_APPROVAL_CEILING" };
   }
 

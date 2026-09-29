@@ -107,7 +107,7 @@ describe("Mandatory named scenarios (PROMPT 2 / PROMPT 2b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: true,
         totalBudget: EUR(500),
-        amountThresholds: thresholds(500, 500),
+        amountThresholds: thresholds(EUR(500), EUR(500)),
       }),
       subDelegation({
         sequence: 2,
@@ -118,7 +118,7 @@ describe("Mandatory named scenarios (PROMPT 2 / PROMPT 2b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: true,
         totalBudget: EUR(500),
-        amountThresholds: thresholds(500, 500),
+        amountThresholds: thresholds(EUR(500), EUR(500)),
       }),
       subDelegation({
         sequence: 3,
@@ -129,7 +129,7 @@ describe("Mandatory named scenarios (PROMPT 2 / PROMPT 2b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         totalBudget: EUR(500),
-        amountThresholds: thresholds(500, 500),
+        amountThresholds: thresholds(EUR(500), EUR(500)),
       }),
       actionRequest({
         sequence: 4,
@@ -176,7 +176,7 @@ describe("Mandatory named scenarios (PROMPT 2 / PROMPT 2b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         totalBudget: EUR(100),
-        amountThresholds: thresholds(100, 100),
+        amountThresholds: thresholds(EUR(100), EUR(100)),
       }),
     ];
     const firstCall = authorityAt(
@@ -208,7 +208,7 @@ describe("Mandatory named scenarios (PROMPT 2 / PROMPT 2b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         totalBudget: EUR(100),
-        amountThresholds: thresholds(100, 100),
+        amountThresholds: thresholds(EUR(100), EUR(100)),
       }),
       rootDelegation({
         sequence: 2,
@@ -219,7 +219,7 @@ describe("Mandatory named scenarios (PROMPT 2 / PROMPT 2b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         totalBudget: EUR(10_000),
-        amountThresholds: thresholds(10_000, 10_000),
+        amountThresholds: thresholds(EUR(10_000), EUR(10_000)),
       }),
       actionRequest({ sequence: 3, id: "a-1", requester: AGENT_A, delegationId: "d-poor", parameters: params }),
       actionExecution({
@@ -262,7 +262,7 @@ describe("Mandatory named scenarios (PROMPT 2 / PROMPT 2b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000),
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)),
       }),
       actionRequest({ sequence: 2, id: "a-1", requester: AGENT_A, delegationId: "d-root", parameters: params }),
       approvalRequest({ sequence: 3, id: "ap-1", actionId: "a-1", requestedFrom: THEO, requester: AGENT_A }),
@@ -300,7 +300,7 @@ describe("Mandatory named scenarios (PROMPT 2 / PROMPT 2b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000),
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)),
       }),
       actionRequest({ sequence: 150, id: "a-1", requester: AGENT_A, delegationId: "d-root", parameters: params }),
       approvalRequest({ sequence: 151, id: "ap-1", actionId: "a-1", requestedFrom: THEO, requester: AGENT_A }),
@@ -346,7 +346,7 @@ describe("Mandatory named scenarios (PROMPT 2 / PROMPT 2b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000), // 100 is comfortably auto-approved
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)), // 100 is comfortably auto-approved
       }),
       actionRequest({ sequence: 2, id: "a-1", requester: AGENT_A, delegationId: "d-root", parameters: requested }),
       // The ACTION_EXECUTED payload carries only a fingerprint (a hash), never
@@ -379,7 +379,7 @@ describe("Mandatory named scenarios (PROMPT 2 / PROMPT 2b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000),
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)),
       }),
       actionRequest({ sequence: 2, id: "a-1", requester: AGENT_A, delegationId: "d-root", parameters: params }),
       approvalRequest({ sequence: 3, id: "ap-1", actionId: "a-1", requestedFrom: THEO, requester: AGENT_A }),
@@ -463,7 +463,7 @@ describe("Mandatory named scenarios (PROMPT 2 / PROMPT 2b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000),
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)),
       }),
       actionRequest({ sequence: 2, id: "a-1", requester: AGENT_A, delegationId: "d-root", parameters: params }),
       approvalRequest({ sequence: 3, id: "ap-1", actionId: "a-1", requestedFrom: THEO, requester: AGENT_A }),
@@ -497,7 +497,7 @@ describe("Mandatory named scenarios (PROMPT 2 / PROMPT 2b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000),
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)),
       }),
       actionRequest({ sequence: 2, id: "a-1", requester: AGENT_A, delegationId: "d-root", parameters: params }),
       approvalRequest({ sequence: 3, id: "ap-1", actionId: "a-1", requestedFrom: THEO, requester: AGENT_A }),
@@ -566,7 +566,7 @@ describe("Mandatory named scenarios (PROMPT 2 / PROMPT 2b)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(1_000_000),
-        amountThresholds: thresholds(1000, 1_000_000),
+        amountThresholds: thresholds(EUR(1000), EUR(1_000_000)),
       }),
       original,
       approvalRequest({ sequence: 4, id: "ap-1", actionId: "a-1", requestedFrom: THEO, requester: AGENT_A }),

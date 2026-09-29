@@ -57,7 +57,7 @@ describe("Cross-principal action_fingerprint collision — regression", () => {
     grantee: AGENT_A,
     capabilities: [PURCHASE_ORDER_CREATE],
     canDelegate: false,
-    amountThresholds: thresholds(100, 1000),
+    amountThresholds: thresholds(EUR(100), EUR(1000)),
   });
   const chain2Root = rootDelegation({
     sequence: 2,
@@ -67,7 +67,7 @@ describe("Cross-principal action_fingerprint collision — regression", () => {
     grantee: AGENT_C,
     capabilities: [PURCHASE_ORDER_CREATE],
     canDelegate: false,
-    amountThresholds: thresholds(100, 1000),
+    amountThresholds: thresholds(EUR(100), EUR(1000)),
   });
 
   // Deliberately identical parameters: same resource/action (via the same

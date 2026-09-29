@@ -95,7 +95,7 @@ describe("issueCapability — A: correctly authenticated requester reaches resol
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({ sequence: 2, id: "act-1", requester: AGENT, delegationId: "d-root", parameters: monetaryParameters(EUR(700)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
@@ -119,7 +119,7 @@ describe("issueCapability — B: authenticated requester differs from ACTION_REQ
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({ sequence: 2, id: "act-1", requester: AGENT, delegationId: "d-root", parameters: monetaryParameters(EUR(700)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
@@ -152,7 +152,7 @@ describe("issueCapability — D: INVOKED AUTHORIZED builds a capability with the
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({ sequence: 2, id: "act-1", requester: AGENT, delegationId: "d-root", parameters: monetaryParameters(EUR(700)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
@@ -181,7 +181,7 @@ function buildHierarchy() {
     grantee: AGENT_A,
     capabilities: [PURCHASE_ORDER_CREATE],
     canDelegate: true,
-    amountThresholds: thresholds(100, 1000),
+    amountThresholds: thresholds(EUR(100), EUR(1000)),
   });
   const d2 = subDelegation({
     sequence: 2,
@@ -191,7 +191,7 @@ function buildHierarchy() {
     grantee: AGENT_B,
     capabilities: [PURCHASE_ORDER_CREATE],
     canDelegate: true,
-    amountThresholds: thresholds(100, 1000),
+    amountThresholds: thresholds(EUR(100), EUR(1000)),
   });
   const d3 = subDelegation({
     sequence: 3,
@@ -201,7 +201,7 @@ function buildHierarchy() {
     grantee: AGENT_C,
     capabilities: [PURCHASE_ORDER_CREATE],
     canDelegate: false,
-    amountThresholds: thresholds(100, 1000),
+    amountThresholds: thresholds(EUR(100), EUR(1000)),
   });
   const d4 = rootDelegation({
     sequence: 4,
@@ -211,7 +211,7 @@ function buildHierarchy() {
     grantee: AGENT_C,
     capabilities: [PURCHASE_ORDER_CREATE],
     canDelegate: false,
-    amountThresholds: thresholds(100000, 100000),
+    amountThresholds: thresholds(EUR(100000), EUR(100000)),
   });
   const request = actionRequest({ sequence: 5, id: "act-1", requester: AGENT_C, delegationId: "d3", parameters: monetaryParameters(EUR(500)) });
   if (!isEventType(request, "ACTION_REQUESTED")) {
@@ -274,7 +274,7 @@ describe("issueCapability — H: an unbounded delegation in GRANTED imposes no a
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1000000, 1000000),
+      amountThresholds: thresholds(EUR(1000000), EUR(1000000)),
       // no totalBudget at all
     });
     const request = actionRequest({ sequence: 2, id: "act-1", requester: AGENT, delegationId: "d-root", parameters: monetaryParameters(EUR(999999)) });
@@ -311,7 +311,7 @@ describe("issueCapability — I: an insufficient bounded delegation rejects the 
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1000),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const priorRequest = actionRequest({ sequence: 2, id: "act-0", requester: AGENT, delegationId: "d-root", parameters: monetaryParameters(EUR(800)) });
     const request = actionRequest({ sequence: 3, id: "act-1", requester: AGENT, delegationId: "d-root", parameters: monetaryParameters(EUR(300)) });
@@ -348,7 +348,7 @@ describe("issueCapability — J: a two-level chain with two sufficient budgets c
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       totalBudget: EUR(1000),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const d2 = subDelegation({
       sequence: 2,
@@ -359,7 +359,7 @@ describe("issueCapability — J: a two-level chain with two sufficient budgets c
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(600),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({ sequence: 3, id: "act-1", requester: AGENT_B, delegationId: "d2", parameters: monetaryParameters(EUR(300)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
@@ -395,7 +395,7 @@ describe("issueCapability — K: parent sufficient, child insufficient rejects t
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       totalBudget: EUR(1000),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const d2 = subDelegation({
       sequence: 2,
@@ -406,7 +406,7 @@ describe("issueCapability — K: parent sufficient, child insufficient rejects t
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(250),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const priorRequest = actionRequest({ sequence: 3, id: "act-0", requester: AGENT_B, delegationId: "d2", parameters: monetaryParameters(EUR(100)) });
     const request = actionRequest({ sequence: 4, id: "act-1", requester: AGENT_B, delegationId: "d2", parameters: monetaryParameters(EUR(200)) });
@@ -443,7 +443,7 @@ describe("issueCapability — L: two sequential emissions that together would ex
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1000),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const requestOne = actionRequest({ sequence: 2, id: "act-1", requester: AGENT, delegationId: "d-root", parameters: monetaryParameters(EUR(700)) });
     const requestTwo = actionRequest({ sequence: 3, id: "act-2", requester: AGENT, delegationId: "d-root", parameters: monetaryParameters(EUR(500)) });
@@ -484,7 +484,7 @@ function idempotencySetup() {
     grantee: AGENT,
     capabilities: [PURCHASE_ORDER_CREATE],
     canDelegate: false,
-    amountThresholds: thresholds(100000, 100000),
+    amountThresholds: thresholds(EUR(100000), EUR(100000)),
   });
   const request = actionRequest({ sequence: 2, id: "act-1", requester: AGENT, delegationId: "d-root", parameters: monetaryParameters(EUR(700)) });
   const request2 = actionRequest({ sequence: 3, id: "act-2", requester: AGENT, delegationId: "d-root", parameters: monetaryParameters(EUR(400)) });
@@ -547,7 +547,7 @@ describe("issueCapabilityIdempotently — O: same client key, different requeste
       grantee: AGENT_A,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const rootB = rootDelegation({
       sequence: 2,
@@ -557,7 +557,7 @@ describe("issueCapabilityIdempotently — O: same client key, different requeste
       grantee: AGENT_B,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const requestA = actionRequest({ sequence: 3, id: "act-o-a", requester: AGENT_A, delegationId: "d-root-o", parameters: monetaryParameters(EUR(100)) });
     const requestB = actionRequest({ sequence: 4, id: "act-o-b", requester: AGENT_B, delegationId: "d-root-o-b", parameters: monetaryParameters(EUR(100)) });
@@ -611,7 +611,7 @@ describe("issueCapability — C9-order-1: C9 (legacy, ACTION_EXECUTED-based) rej
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(100),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({ sequence: 2, id: "act-p", requester: AGENT, delegationId: "d-root-p", parameters: monetaryParameters(EUR(500)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
@@ -650,7 +650,7 @@ describe("issueCapability — C9-order-2: a request that clears C9 but exceeds c
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1000),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const priorRequest = actionRequest({ sequence: 2, id: "act-q-0", requester: AGENT, delegationId: "d-root-q", parameters: monetaryParameters(EUR(800)) });
     const request = actionRequest({ sequence: 3, id: "act-q-1", requester: AGENT, delegationId: "d-root-q", parameters: monetaryParameters(EUR(300)) });

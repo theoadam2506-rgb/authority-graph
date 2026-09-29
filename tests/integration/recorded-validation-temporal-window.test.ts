@@ -38,7 +38,7 @@ describe("recordedValidation — anchored to decision_sequence, not to now", () 
       grantee: executor,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 2,
