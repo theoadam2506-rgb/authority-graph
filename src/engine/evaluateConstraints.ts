@@ -9,7 +9,7 @@
  */
 import { computeActionFingerprint } from "../domain/events.js";
 import type { AuthorityEvent, CanonicalStore, ChainLink } from "../domain/events.js";
-import { MAX_CHAIN_DEPTH, type ActionParameters, type ApprovalId, type AuthorityDecision, type Capability, type DelegationId, type Money, type PrincipalId } from "../domain/types.js";
+import { MAX_CHAIN_DEPTH, type ActionId, type ActionParameters, type ApprovalId, type AuthorityDecision, type Capability, type DelegationId, type Money, type PrincipalId } from "../domain/types.js";
 import { isNotCausallyAfter } from "./causality.js";
 import { recordedChainIntegrity, recordedTerminalId } from "./provenance.js";
 import type { DelegationEvent } from "./validateChain.js";
@@ -247,11 +247,31 @@ function isApprovalConsumed(approvalId: ApprovalId, boundActionId: ActionRequest
 }
 
 /**
- * I14 + I15 + I16: search the whole visible store (not just this chain) for a
- * valid grant matching this exact fingerprint. A raw APPROVAL_DENIED is never
- * consulted here — a refusal is inherently about one past, specific request
- * (SPEC.md, "Portée d'un refus") and has no power over a fresh, unrelated
- * prospective question for the same fingerprint.
+ * I6 + I14 + I15 + I16: search the whole visible store (not just this chain)
+ * for a valid grant matching this exact fingerprint. A raw APPROVAL_DENIED is
+ * never consulted here — a refusal is inherently about one past, specific
+ * request (SPEC.md, "Portée d'un refus") and has no power over a fresh,
+ * unrelated prospective question for the same fingerprint.
+ *
+ * `queriedActionId`, when supplied, is the `action_id` of the specific
+ * ACTION_REQUESTED this evaluation is about. It is supplied by the three
+ * action-specific resolutions only: explainAction's INVOKED
+ * (`invokedAuthority`) and RECORDED (`recordedValidation`) validations, and
+ * grantValidation's `selectInvokedGrant` (capability issuance). I6 is
+ * explicit that an APPROVAL_GRANTED "covers exactly the action that
+ * requested it, identified by its `action_id` **and** by its exact
+ * `action_fingerprint`... and has no effect on a future action even an
+ * identical one".
+ *
+ * It is deliberately NOT supplied by `resolveAuthority` (authorityAt.ts),
+ * which serves the AVAILABLE question: `authorityAt` itself, and
+ * explainAction's `currentAuthority`/`execution.authorityAtDecision`. That
+ * question is fingerprint-scoped by SPEC ("a valid and unconsumed
+ * APPROVAL_GRANTED, whose fingerprint (I15) corresponds exactly to
+ * (capability, parameters) of the request, is sufficient to produce
+ * AUTHORIZED"), so an AVAILABLE AUTHORIZED may cite an approval bound to a
+ * different action_id and is never proof that a specific action was
+ * authorized.
  */
 function findGrantOutcome(
   terminal: DelegationEvent,
@@ -259,6 +279,7 @@ function findGrantOutcome(
   capability: Capability,
   parameters: ActionParameters,
   visibleStore: CanonicalStore,
+  queriedActionId?: ActionId,
 ): { readonly anyValidGrant: boolean; readonly unconsumedApprovalId: ApprovalId | undefined } {
   const targetFingerprint = computeActionFingerprint(capability, parameters);
   const habilitatedGrantor = terminal.payload.grantor_principal_id;
@@ -286,6 +307,11 @@ function findGrantOutcome(
     if (request.payload.requesting_principal_id !== agentId || request.payload.delegation_id !== terminalDelegationId) {
       continue;
     }
+    // I6: a grant covers exactly the action it was bound to at issuance —
+    // never a distinct, merely fingerprint-identical, action_id.
+    if (queriedActionId !== undefined && event.payload.action_id !== queriedActionId) {
+      continue;
+    }
     const requestFingerprint = computeActionFingerprint(request.payload.capability_requested, request.payload.parameters);
     if (requestFingerprint !== targetFingerprint) {
       continue;
@@ -304,6 +330,7 @@ export function evaluateConstraints(
   parameters: ActionParameters,
   visibleStore: CanonicalStore,
   agentId: PrincipalId,
+  queriedActionId?: ActionId,
 ): AuthorityDecision {
   const terminal = chain[chain.length - 1];
   if (terminal === undefined) {
@@ -340,7 +367,7 @@ export function evaluateConstraints(
     return { outcome: "DENIED", reasonCode: "C8_AMOUNT_EXCEEDS_APPROVAL_CEILING" };
   }
 
-  const { anyValidGrant, unconsumedApprovalId } = findGrantOutcome(terminal, agentId, capability, parameters, visibleStore);
+  const { anyValidGrant, unconsumedApprovalId } = findGrantOutcome(terminal, agentId, capability, parameters, visibleStore, queriedActionId);
   if (unconsumedApprovalId !== undefined) {
     return { outcome: "AUTHORIZED", chain: chainIds, approvalId: unconsumedApprovalId };
   }

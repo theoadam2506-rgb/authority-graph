@@ -249,7 +249,7 @@ export function selectInvokedGrant(
 
   let decision: AuthorityDecision;
   if (validation.kind === "valid") {
-    decision = evaluateConstraints(validation.chain, request.payload.capability_requested, request.payload.parameters, visibleAtSnapshot, request.payload.requesting_principal_id);
+    decision = evaluateConstraints(validation.chain, request.payload.capability_requested, request.payload.parameters, visibleAtSnapshot, request.payload.requesting_principal_id, request.payload.action_id);
   } else if (validation.kind === "denied") {
     decision = { outcome: "DENIED", reasonCode: validation.reasonCode };
   } else {

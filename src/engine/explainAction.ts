@@ -244,7 +244,7 @@ function invokedAuthority(request: ActionRequestedEvent, events: CanonicalStore,
   }
   const validation = validateChain(terminal, request.payload.capability_requested, visible, undefined, authorityTime);
   if (validation.kind === "valid") {
-    return evaluateConstraints(validation.chain, request.payload.capability_requested, request.payload.parameters, visible, request.payload.requesting_principal_id);
+    return evaluateConstraints(validation.chain, request.payload.capability_requested, request.payload.parameters, visible, request.payload.requesting_principal_id, request.payload.action_id);
   }
   return validation.kind === "denied"
     ? { outcome: "DENIED", reasonCode: validation.reasonCode }
@@ -261,7 +261,7 @@ function recordedValidation(request: ActionRequestedEvent, execution: ActionExec
   const authorityTime = reconstructAuthorityTime(visible, execution.payload.decision_sequence);
   const validation = validateChain(terminal, request.payload.capability_requested, visible, undefined, authorityTime);
   if (validation.kind === "valid") {
-    return evaluateConstraints(validation.chain, request.payload.capability_requested, request.payload.parameters, visible, execution.payload.executed_by_principal_id);
+    return evaluateConstraints(validation.chain, request.payload.capability_requested, request.payload.parameters, visible, execution.payload.executed_by_principal_id, request.payload.action_id);
   }
   return validation.kind === "denied"
     ? { outcome: "DENIED", reasonCode: validation.reasonCode }

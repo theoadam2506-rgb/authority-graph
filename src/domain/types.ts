@@ -418,7 +418,7 @@ export interface ActionExplanation {
   readonly execution?: {
     readonly executedAtSequence: SequenceNumber;
     readonly decisionSequence: SequenceNumber;
-    /** Authority for this action's immutable, as-requested fingerprint, resolved AT decisionSequence. */
+    /** AVAILABLE: authority for this action's immutable, as-requested fingerprint, resolved AT decisionSequence across every chain the agent holds. Fingerprint-scoped (SPEC.md, authorityAt): its approvalId may belong to a different action_id, so it is never proof that this specific action was authorized — see invokedAuthorityAtDecision and recordedValidation. */
     readonly authorityAtDecision: AuthorityDecision;
     /** Would the delegation specifically named by ACTION_REQUESTED.delegation_id, alone, have authorized this at decisionSequence? Read-only; no authority, budget, or approval effect. */
     readonly invokedAuthorityAtDecision: InvokedValidation;
@@ -428,9 +428,10 @@ export interface ActionExplanation {
     readonly invokedRecordedAlignment: InvokedRecordedAlignment;
     /** Authority reconstructed from the recorded terminal alone, at the historical decision point. Read-only; no authority, budget, or approval effect. */
     readonly recordedValidation: RecordedValidation;
+    /** The first approval link cited by this execution's authority_chain_ref, as recorded (ASSERTED_UNVERIFIED). Despite its name, it is NOT proof that I16 consumption occurred: consumption is decided by evaluateConstraints.ts's isApprovalConsumed, which requires the cited approval to be bound to this same action_id — an execution citing another action's approval is reported here but consumes nothing. */
     readonly consumedApprovalId?: ApprovalId;
   };
-  /** Authority for this action's immutable, as-requested fingerprint, resolved at the query's own sequence. */
+  /** AVAILABLE: authority for this action's immutable, as-requested fingerprint, resolved at the query's own sequence across every chain the agent holds. Fingerprint-scoped: its approvalId may belong to a different action_id — see invokedAuthorityNow for this specific action. */
   readonly currentAuthority: AuthorityDecision;
   /** Would the delegation specifically named by ACTION_REQUESTED.delegation_id, alone, authorize this right now? Present even before any ACTION_EXECUTED exists. Read-only; no authority, budget, or approval effect. */
   readonly invokedAuthorityNow: InvokedValidation;
