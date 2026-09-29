@@ -344,8 +344,12 @@ $ npm run demo
   source: imported canonical event export
   ACTION_EXECUTED at sequence 8
   authority at decision sequence 7: AUTHORIZED
+  invoked delegation authority at decision sequence 7: AUTHORIZED
+  recorded chain validation at decision sequence 7: AUTHORIZED
   approval consumed by execution 8
   current authority at sequence 12: DENIED
+    reason: C11_CAPABILITY_NOT_COVERED: no valid delegation chain covers the requested capability
+  invoked delegation authority at sequence 12: DENIED
     reason: C11_CAPABILITY_NOT_COVERED: no valid delegation chain covers the requested capability
 
   Authority chain (root to leaf, as declared when each delegation was created):

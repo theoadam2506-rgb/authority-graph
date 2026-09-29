@@ -22,7 +22,7 @@ import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { Pool } from "pg";
 import type { CanonicalStore } from "../domain/events.js";
-import { actionId as toActionId, iso8601, sequenceNumber, type AuthorityDecision, type AuthorityInstant } from "../domain/types.js";
+import { actionId as toActionId, iso8601, sequenceNumber, type AuthorityDecision, type AuthorityInstant, type InvokedValidation, type RecordedValidation } from "../domain/types.js";
 import {
   asAvailableChainResult,
   explain,
@@ -202,6 +202,25 @@ function renderDecisionDetail(decision: AuthorityDecision): string[] {
   return [];
 }
 
+function renderValidationLines(label: string, validation: InvokedValidation | RecordedValidation): string[] {
+  if (validation === "UNRESOLVABLE") {
+    return [`${label}: UNRESOLVABLE`];
+  }
+  return [`${label}: ${describeOutcome(validation)}`, ...renderDecisionDetail(validation)];
+}
+
+// The headline "authority at ..." lines are AVAILABLE (fingerprint-scoped,
+// any chain, any matching approval — possibly one bound to another
+// action_id). Say so whenever an AUTHORIZED AVAILABLE line disagrees with this
+// action's own INVOKED verdict, so it is never read as proof this action was
+// authorized.
+function availableDivergenceNote(available: AuthorityDecision, invoked: InvokedValidation): string[] {
+  if (available.outcome !== "AUTHORIZED" || (invoked !== "UNRESOLVABLE" && invoked.outcome === "AUTHORIZED")) {
+    return [];
+  }
+  return ["  note: the line above is AVAILABLE authority for this action's fingerprint (any chain, any matching approval); it is not proof this specific action was authorized — see the invoked delegation line"];
+}
+
 function renderChainLinkLines(chain: readonly ChainLinkDetail[]): string[] {
   const lines: string[] = [];
   for (const link of chain) {
@@ -312,16 +331,28 @@ function renderText(report: ExplanationReport, current: AuthorityInstant, source
 
   if (report.execution !== undefined) {
     lines.push(`ACTION_EXECUTED at sequence ${report.execution.executedAtSequence}`);
-    lines.push(`authority at decision sequence ${report.execution.decisionSequence}: ${describeOutcome(report.execution.authorityAtDecision)}`);
-    lines.push(...renderDecisionDetail(report.execution.authorityAtDecision));
-    if (report.execution.consumedApprovalId !== undefined) {
-      lines.push(`approval consumed by execution ${report.execution.executedAtSequence}`);
+    const execution = report.execution;
+    lines.push(`authority at decision sequence ${execution.decisionSequence}: ${describeOutcome(execution.authorityAtDecision)}`);
+    lines.push(...renderDecisionDetail(execution.authorityAtDecision));
+    lines.push(...availableDivergenceNote(execution.authorityAtDecision, execution.invokedAuthorityAtDecision));
+    lines.push(...renderValidationLines(`invoked delegation authority at decision sequence ${execution.decisionSequence}`, execution.invokedAuthorityAtDecision));
+    lines.push(...renderValidationLines(`recorded chain validation at decision sequence ${execution.decisionSequence}`, execution.recordedValidation));
+    if (execution.consumedApprovalId !== undefined) {
+      const recorded = execution.recordedValidation;
+      const recordedUsedThisApproval = recorded !== "UNRESOLVABLE" && recorded.outcome === "AUTHORIZED" && recorded.approvalId === execution.consumedApprovalId;
+      lines.push(
+        recordedUsedThisApproval
+          ? `approval consumed by execution ${execution.executedAtSequence}`
+          : `approval ${execution.consumedApprovalId} cited by execution ${execution.executedAtSequence}, but the recorded chain validation above did not authorize this action with it — the citation alone is not evidence that it authorized or was consumed by this action`,
+      );
     }
   } else {
     lines.push(`ACTION_REQUESTED at sequence ${report.requestedAtSequence} (not yet executed)`);
   }
   lines.push(`current authority at sequence ${current.atSequence}: ${describeOutcome(report.currentAuthority)}`);
   lines.push(...renderDecisionDetail(report.currentAuthority));
+  lines.push(...availableDivergenceNote(report.currentAuthority, report.invokedAuthorityNow));
+  lines.push(...renderValidationLines(`invoked delegation authority at sequence ${current.atSequence}`, report.invokedAuthorityNow));
 
   lines.push("");
   if (report.execution !== undefined) {

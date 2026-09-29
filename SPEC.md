@@ -116,8 +116,11 @@ insufficient to represent *now* in an `authorityAt` request.
 ```
 ACTION_EXECUTED at sequence 152
 authority at decision sequence 151: AUTHORIZED
+invoked delegation authority at decision sequence 151: AUTHORIZED
+recorded chain validation at decision sequence 151: AUTHORIZED
 approval consumed by execution 152
 current authority at sequence 190: DENIED
+invoked delegation authority at sequence 190: DENIED
 ```
 
 An execution historically authorized remains so forever at its

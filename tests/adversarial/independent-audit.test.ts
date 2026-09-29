@@ -226,4 +226,36 @@ describe("Independent adversarial audit", () => {
     // sequence 2 cannot be authorized by an event assigned sequence 3.
     expect(explainAction(ingested.canonicalStore, { actionId: action("audit-backdated-action") }, instant(3)).execution?.authorityAtDecision.outcome).toBe("UNKNOWN");
   });
+
+  it("I6 — an approval cannot authorize a different action_id even when fingerprint, requester, and invoked delegation are identical", () => {
+    // D1 requires approval in the [100, 1000] band. Two distinct actions,
+    // a1 and a2, share the exact same fingerprint (same capability, same
+    // amount), the same requester, and the same invoked delegation — the
+    // only thing that differs is action_id. P1 is granted for a1 only.
+    const root = rootDelegation({
+      sequence: 1,
+      id: "audit-binding-root",
+      grantor: THEO,
+      grantorType: "HUMAN_ROOT",
+      grantee: AGENT_A,
+      capabilities: [PURCHASE_ORDER_CREATE],
+      canDelegate: false,
+      amountThresholds: thresholds(100, 1_000),
+    });
+    const params = monetaryParameters(EUR(500));
+    const a1 = actionRequest({ sequence: 2, id: "audit-binding-a1", requester: AGENT_A, delegationId: "audit-binding-root", parameters: params });
+    const a2 = actionRequest({ sequence: 3, id: "audit-binding-a2", requester: AGENT_A, delegationId: "audit-binding-root", parameters: params });
+    const p1req = approvalRequest({ sequence: 4, id: "audit-binding-p1", actionId: "audit-binding-a1", requestedFrom: THEO, requester: AGENT_A });
+    const p1grant = approvalGrant({ sequence: 5, id: "audit-binding-p1", actionId: "audit-binding-a1", approver: THEO });
+    const ingested = ingestAll([toDraft(root), toDraft(a1), toDraft(a2), toDraft(p1req), toDraft(p1grant)], sequentialClock);
+
+    // I6: the grant covers exactly a1, identified by both action_id and
+    // action_fingerprint — never a distinct, merely fingerprint-identical,
+    // action_id, even before any consumption has occurred.
+    const a1Result = explainAction(ingested.canonicalStore, { actionId: action("audit-binding-a1") }, instant(5)).invokedAuthorityNow;
+    const a2Result = explainAction(ingested.canonicalStore, { actionId: action("audit-binding-a2") }, instant(5)).invokedAuthorityNow;
+
+    expect(a1Result).toMatchObject({ outcome: "AUTHORIZED", approvalId: "audit-binding-p1" });
+    expect(a2Result).toMatchObject({ outcome: "REQUIRES_APPROVAL", viaDelegation: "audit-binding-root" });
+  });
 });
