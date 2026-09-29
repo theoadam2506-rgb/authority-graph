@@ -252,7 +252,10 @@ and must not be weakened or reworded as implementation proceeds.
    `total_budget`), the child's value is a subset of or a strict restriction of
    the parent's, treating any dimension absent on the parent
    as unlimited (+∞) and any dimension absent on the child while the
-   parent bounds it as a widening attempt (therefore invalid). For
+   parent bounds it as a widening attempt (therefore invalid). For every
+   monetary dimension, the child's `currency` is compared first, by exact
+   equality (I25): a child bound in another currency than the parent's is not
+   an attenuation, whatever its numeric value. For
    `total_budget` specifically, the parent bound to consider is its **remaining**
    value at the resolution `sequence` (declared `total_budget` minus what has already been
    spent by authorized `ACTION_EXECUTED` events attached to this parent or one of
@@ -377,11 +380,13 @@ and must not be weakened or reworded as implementation proceeds.
     bears on the canonical fingerprint (`action_fingerprint`, see
     `EVENT_MODEL.md`) of the `ACTION_REQUESTED` it targets, computed from
     `capability_requested.resource`, `capability_requested.action`,
-    `parameters.amount`, and `parameters.recipient`, in that exact order. An
+    `parameters.amount` (its value), the `currency` of that amount (I25), and
+    `parameters.recipient`, in that exact order, with the byte-for-byte
+    serialization defined in `EVENT_MODEL.md`. An
     `ACTION_EXECUTED` whose declared `action_fingerprint` differs from the fingerprint of
     the `ACTION_REQUESTED` with the same `action_id` is `DENIED`, even if `action_id` and
     `approval_id` otherwise match. Test: varying `parameters` (the
-    amount or the recipient) between the approved `ACTION_REQUESTED` and
+    amount, its currency, or the recipient) between the approved `ACTION_REQUESTED` and
     the `ACTION_EXECUTED` must produce `DENIED`, never `AUTHORIZED` through mere
     `action_id` matching.
 16. **I16: Single-use consumption (clarified: PROMPT 6d, finding #3).**
@@ -807,6 +812,35 @@ this decision permanently.
     strength of guarantee at rest, only the same observable sequence of
     results in the absence of a crash.
 
+25. **I25: Unit binding — a monetary quantity is the atomic pair (value,
+    currency).** `currency` is an opaque, non-empty string, compared only by
+    exact equality: Authority never converts between currencies, never
+    normalizes a currency (`EUR`, `eur` and `EUR ` are different), and does not
+    interpret currency codes.
+    1. `action_fingerprint` (I15) covers the value and the currency of a
+       monetary action: two actions that differ only by currency have
+       different fingerprints, so an `ACTION_EXECUTED` whose fingerprint was
+       computed with another currency than its `ACTION_REQUESTED` is `DENIED`
+       (C6).
+    2. All of a delegation's monetary constraints (`max_amount`,
+       `total_budget`, `automatic_max_amount`, `approval_max_amount`) are
+       `{value, currency}` and name one and the same currency. A delegation
+       whose monetary constraints are malformed (including an empty currency,
+       or a bare number where an amount is expected) or name several
+       currencies is `UNKNOWN` (C22): an invalid configuration is never
+       reported as `DENIED`.
+    3. A monetary action is never compared with, or counted against, a
+       constraint in another currency: if any delegation of the chain
+       declares monetary constraints in a currency other than the action's,
+       the answer is `DENIED` (`C11_CAPABILITY_NOT_COVERED`), before any
+       numeric comparison. An amount in another currency is never summed into
+       a `total_budget` (`remaining(D, S)`) nor into an issuance capacity.
+    4. A sub-delegation's monetary constraint is an attenuation (I5) only if
+       its currency equals the parent's, compared before the value.
+    Malformed money carried by the action itself (for example an empty
+    currency) is `UNKNOWN` (C22). Test: `tests/adversarial/unit-binding.test.ts`
+    and `tests/domain/actionFingerprint.test.ts`.
+
 ## Additional application rules
 
 These rules are not additional numbered invariants. They clarify
@@ -902,7 +936,7 @@ gray area.
   `APPROVAL_REQUESTED`, identified by its `approval_id`, never an
   `action_fingerprint` on a permanent basis. A new `APPROVAL_REQUESTED` carrying a
   different `approval_id`, even for an action with an identical
-  `action_fingerprint` (same capability, same amount, same recipient), is
+  `action_fingerprint` (same capability, same amount, same currency, same recipient), is
   admissible and is evaluated independently (a new instance of C4).
   `action_fingerprint` is never a permanent blacklist: making it one would
   amount to inventing a business policy (block duration, scope, exceptions) that V0
@@ -960,3 +994,5 @@ that `authorityAt` could produce from the fingerprint alone (an
 | C26 *(I19)* | `APPROVAL_GRANTED`/`APPROVAL_DENIED` whose referenced `action_id` or `approval_id` does not exist in the canonical store, or exists there with a `sequence` strictly greater than that of the approval decision itself (equality tolerated: this can never occur through real ingestion anyway, see I19, "Note on sequence equality") | Treated as if the cited event did not exist: the approval decision is ignored (as with C16). `REQUIRES_APPROVAL` (C4) remains the output in the absence of any other valid approval decision. **Does not apply** to `SUBDELEGATION_CREATED.parent_delegation_id`: this field remains governed by C10 alone (A5, see I19 for the distinction) |
 | C27 *(I20)* | `ACTION_EXECUTED` whose `executed_by_principal_id` differs from the `requesting_principal_id` of the `ACTION_REQUESTED` with the same `action_id`; or whose terminal delegation link in `authority_chain_ref` has a `grantee_principal_id` different from its own `executed_by_principal_id`; or citing a delegation link D in `authority_chain_ref` that is neither the terminal link nor one of its real ancestors reachable by walking up `parent_delegation_id` from the terminal (PROMPT 6e) | For the first and second conditions: the entire execution is excluded from the computation of `remaining(D', S)` for every delegation D' in its chain. For the third: only the link D at issue is excluded from the computation of `remaining(D, S)`, counted as if this specific link did not appear in `authority_chain_ref`, without affecting the debit of the other links of the same chain that are, themselves, real ancestors of the terminal. Affects no output other than the amount of remaining budget, which then feeds C9 normally |
 | C28 *(I16, clarified)* | `ACTION_EXECUTED` referencing a valid `approval_id` in `authority_chain_ref`, but whose own `action_id` differs from the one carried by the corresponding `APPROVAL_GRANTED` | Never consumes this `approval_id`: treated as if it did not reference it in its chain. A fresh question on the actually approved fingerprint remains `AUTHORIZED` (C3) as long as no execution of the action actually covered has consumed the grant |
+| C29 *(I25)* | A monetary action whose `currency` differs from the `currency` of the monetary constraints of a delegation of the chain | `DENIED` (`C11_CAPABILITY_NOT_COVERED`), before any numeric comparison |
+| C30 *(I25)* | A delegation of the chain whose monetary constraints are malformed or name several currencies; or a monetary action whose amount is malformed (empty currency) | `UNKNOWN` (`C22_UNKNOWN_CONSTRAINT_TYPE`) |

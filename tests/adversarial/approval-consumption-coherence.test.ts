@@ -40,7 +40,7 @@ describe("Approval consumption — chain-coherence (DoS resistance)", () => {
       grantee: executor,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100, 1_000),
+      amountThresholds: thresholds(EUR(100), EUR(1_000)),
     });
     const pathB = rootDelegation({
       sequence: 2,
@@ -50,7 +50,7 @@ describe("Approval consumption — chain-coherence (DoS resistance)", () => {
       grantee: executor,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100, 1_000),
+      amountThresholds: thresholds(EUR(100), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 3,

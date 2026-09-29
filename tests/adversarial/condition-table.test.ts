@@ -67,7 +67,7 @@ describe("SPEC.md condition table C1-C24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000),
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)),
       }),
     ];
     const query: AuthorityQuery = {
@@ -91,7 +91,7 @@ describe("SPEC.md condition table C1-C24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000),
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)),
       }),
       actionRequest({ sequence: 2, id: "a-1", requester: AGENT_A, delegationId: "d-root", parameters: params }),
       approvalRequest({ sequence: 3, id: "ap-1", actionId: "a-1", requestedFrom: THEO, requester: AGENT_A }),
@@ -112,7 +112,7 @@ describe("SPEC.md condition table C1-C24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000),
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)),
       }),
     ];
     const query: AuthorityQuery = {
@@ -136,7 +136,7 @@ describe("SPEC.md condition table C1-C24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000),
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)),
       }),
       actionRequest({ sequence: 2, id: "a-1", requester: AGENT_A, delegationId: "d-root", parameters: params }),
       approvalRequest({ sequence: 3, id: "ap-1", actionId: "a-1", requestedFrom: THEO, requester: AGENT_A }),
@@ -160,7 +160,7 @@ describe("SPEC.md condition table C1-C24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(1_000_000),
-        amountThresholds: thresholds(1000, 1_000_000),
+        amountThresholds: thresholds(EUR(1000), EUR(1_000_000)),
       }),
       actionRequest({
         sequence: 2,
@@ -198,7 +198,7 @@ describe("SPEC.md condition table C1-C24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000),
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)),
       }),
       actionRequest({ sequence: 2, id: "a-1", requester: AGENT_A, delegationId: "d-root", parameters: params }),
       approvalRequest({ sequence: 3, id: "ap-1", actionId: "a-1", requestedFrom: THEO, requester: AGENT_A }),
@@ -229,7 +229,7 @@ describe("SPEC.md condition table C1-C24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 5000),
+        amountThresholds: thresholds(EUR(1000), EUR(5000)),
       }),
     ];
     const query: AuthorityQuery = {
@@ -252,7 +252,7 @@ describe("SPEC.md condition table C1-C24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         totalBudget: EUR(1000),
-        amountThresholds: thresholds(1000, 1000),
+        amountThresholds: thresholds(EUR(1000), EUR(1000)),
       }),
     ];
     const query: AuthorityQuery = {
@@ -394,7 +394,7 @@ describe("SPEC.md condition table C1-C24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000),
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)),
       }),
       actionRequest({ sequence: 2, id: "a-1", requester: AGENT_A, delegationId: "d-root", parameters: params }),
       approvalRequest({ sequence: 3, id: "ap-1", actionId: "a-1", requestedFrom: THEO, requester: AGENT_A }),

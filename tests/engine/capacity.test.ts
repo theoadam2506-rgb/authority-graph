@@ -68,7 +68,7 @@ describe("remainingCapacity — A: a single validated grant debits its delegatio
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1000),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({
       sequence: 2,
@@ -110,7 +110,7 @@ describe("remainingCapacity — B: an ACTION_EXECUTED in the same store never ad
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1000),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     if (!isEventType(root, "DELEGATION_CREATED")) {
       throw new Error("fixture returned an unexpected event_type");
@@ -172,7 +172,7 @@ describe("remainingCapacity — C: a canonical two-level chain debits every boun
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
       totalBudget: EUR(1000),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const d2 = subDelegation({
       sequence: 2,
@@ -183,7 +183,7 @@ describe("remainingCapacity — C: a canonical two-level chain debits every boun
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(600),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({
       sequence: 3,
@@ -225,7 +225,7 @@ describe("remainingCapacity — D: a grant whose chain does not contain D never 
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1000),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const dOther = rootDelegation({
       sequence: 2,
@@ -235,7 +235,7 @@ describe("remainingCapacity — D: a grant whose chain does not contain D never 
       grantee: AGENT_B,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const request = actionRequest({
       sequence: 3,
@@ -276,7 +276,7 @@ describe("remainingCapacity — E: two validated grants that together exceed cap
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1000),
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
     });
     const requestOne = actionRequest({
       sequence: 2,

@@ -52,7 +52,7 @@ describe("Principal binding — AVAILABLE/INVOKED divergence (PB1)", () => {
       grantee: AGENT_X,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100, 1_000),
+      amountThresholds: thresholds(EUR(100), EUR(1_000)),
     });
     // D2, rooted at an entirely independent P': automatic ceiling covers 500 outright.
     const d2 = rootDelegation({
@@ -63,7 +63,7 @@ describe("Principal binding — AVAILABLE/INVOKED divergence (PB1)", () => {
       grantee: AGENT_X,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     // Request nominally invokes D1 (P's context) only.
     const request = actionRequest({
@@ -117,7 +117,7 @@ describe("Principal binding — approval stays chain-bound for the same agent (P
       grantee: AGENT_X,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100, 1_000),
+      amountThresholds: thresholds(EUR(100), EUR(1_000)),
     });
     const d2 = rootDelegation({
       sequence: 2,
@@ -127,7 +127,7 @@ describe("Principal binding — approval stays chain-bound for the same agent (P
       grantee: AGENT_X,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100, 1_000), // also approval-banded — D2 alone can never auto-authorize 500
+      amountThresholds: thresholds(EUR(100), EUR(1_000)), // also approval-banded — D2 alone can never auto-authorize 500
     });
     const request = actionRequest({
       sequence: 3,
@@ -203,7 +203,7 @@ describe("Principal binding — INVOKED validation is a third, independent axis 
       grantee: AGENT_X,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100, 1_000),
+      amountThresholds: thresholds(EUR(100), EUR(1_000)),
     });
     // D2, rooted at an unrelated P': wide enough to auto-authorize 500 on its
     // own. Not invoked, not recorded — only reachable by the root-agnostic
@@ -216,7 +216,7 @@ describe("Principal binding — INVOKED validation is a third, independent axis 
       grantee: AGENT_X,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     // D3, rooted at yet another unrelated P'': structurally valid, but
     // revoked before decision_sequence. Cited alone in authority_chain_ref —
@@ -230,7 +230,7 @@ describe("Principal binding — INVOKED validation is a third, independent axis 
       grantee: AGENT_X,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const d3Revoked = revokeDelegation({ sequence: 4, targetId: "m1-d3", issuedBy: Pdoubleprime });
     // Request nominally invokes D1.
@@ -295,7 +295,7 @@ describe("INVOKED validation requires the requester to actually hold the invoked
       grantee: AGENT_B,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     // A requests, naming D1 (B's delegation, not A's) as the invoked delegation.
     const request = actionRequest({
@@ -339,7 +339,7 @@ describe("Invoked canonical chain is verdict-independent (M6)", () => {
       grantee: AGENT_X,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100, 1_000),
+      amountThresholds: thresholds(EUR(100), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 2,

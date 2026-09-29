@@ -37,7 +37,7 @@ function baseStore(chain: Parameters<typeof actionExecution>[0]["chain"]) {
     grantee: principal("recorded-integrity-mid"),
     capabilities: [PURCHASE_ORDER_CREATE],
     canDelegate: true,
-    amountThresholds: thresholds(1_000, 1_000),
+    amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
   });
   const leaf = subDelegation({
     sequence: 2,
@@ -47,7 +47,7 @@ function baseStore(chain: Parameters<typeof actionExecution>[0]["chain"]) {
     grantee: EXECUTOR,
     capabilities: [PURCHASE_ORDER_CREATE],
     canDelegate: false,
-    amountThresholds: thresholds(1_000, 1_000),
+    amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
   });
   const request = actionRequest({
     sequence: 3,
@@ -98,7 +98,7 @@ describe("recordedChainIntegrity / invokedRecordedAlignment — read-only proven
       grantee: mid,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const leafB = subDelegation({
       sequence: 2,
@@ -108,7 +108,7 @@ describe("recordedChainIntegrity / invokedRecordedAlignment — read-only proven
       grantee: EXECUTOR,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const pathA = rootDelegation({
       sequence: 3,
@@ -118,7 +118,7 @@ describe("recordedChainIntegrity / invokedRecordedAlignment — read-only proven
       grantee: EXECUTOR,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 4,
@@ -154,7 +154,7 @@ describe("recordedChainIntegrity / invokedRecordedAlignment — read-only proven
       grantee: executor,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: true,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const leaf = subDelegation({
       sequence: 2,
@@ -164,7 +164,7 @@ describe("recordedChainIntegrity / invokedRecordedAlignment — read-only proven
       grantee: executor,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 3,
@@ -203,7 +203,7 @@ describe("recordedChainIntegrity / invokedRecordedAlignment — read-only proven
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1_000),
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 2,

@@ -38,7 +38,7 @@ describe("Independent adversarial audit", () => {
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       maxAmount: EUR(1_000),
-      amountThresholds: thresholds(100, 1_000),
+      amountThresholds: thresholds(EUR(100), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 2,
@@ -83,7 +83,7 @@ describe("Independent adversarial audit", () => {
       canDelegate: false,
       totalBudget: EUR(100),
       maxAmount: EUR(100),
-      amountThresholds: thresholds(100, 100),
+      amountThresholds: thresholds(EUR(100), EUR(100)),
     });
     const request = actionRequest({
       sequence: 2,
@@ -132,7 +132,7 @@ describe("Independent adversarial audit", () => {
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       maxAmount: EUR(1_000),
-      amountThresholds: thresholds(100, 1_000),
+      amountThresholds: thresholds(EUR(100), EUR(1_000)),
     });
     const approvedAction = actionRequest({
       sequence: 2,
@@ -240,7 +240,7 @@ describe("Independent adversarial audit", () => {
       grantee: AGENT_A,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100, 1_000),
+      amountThresholds: thresholds(EUR(100), EUR(1_000)),
     });
     const params = monetaryParameters(EUR(500));
     const a1 = actionRequest({ sequence: 2, id: "audit-binding-a1", requester: AGENT_A, delegationId: "audit-binding-root", parameters: params });

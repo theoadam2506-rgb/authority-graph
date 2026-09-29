@@ -230,7 +230,7 @@ describe("Expiration boundary (PROMPT 3b)", () => {
         canDelegate: false,
         expires: expiresAt(iso8601(EXPIRES)),
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(1000, 10_000),
+        amountThresholds: thresholds(EUR(1000), EUR(10_000)),
       }),
       actionRequest({ sequence: 2, id: "a-approval-expiry", requester: AGENT_A, delegationId: "d-root-approval-expiry", parameters: params }),
       approvalRequest({ sequence: 3, id: "ap-approval-expiry", actionId: "a-approval-expiry", requestedFrom: THEO, requester: AGENT_A }),

@@ -207,13 +207,18 @@ export const noExpiry: ExpiresAt = { kind: "no_expiry" };
  * The two approval thresholds (Blocker 3) are mandatory together or absent
  * together: representing "automatic_max_amount without approval_max_amount"
  * is not possible at the type level, only as a single nested optional field.
+ *
+ * Unit binding (I25): both are `Money`, like `max_amount` and `total_budget`,
+ * so every monetary constraint of a delegation names its currency. Authority
+ * never converts between currencies: `monetaryUnitOf` below is the one place
+ * that decides whether a delegation's constraints share a single currency.
  */
 export interface AmountThresholds {
-  readonly automatic_max_amount: number;
-  readonly approval_max_amount: number;
+  readonly automatic_max_amount: Money;
+  readonly approval_max_amount: Money;
 }
 
-export function thresholds(automaticMaxAmount: number, approvalMaxAmount: number): AmountThresholds {
+export function thresholds(automaticMaxAmount: Money, approvalMaxAmount: Money): AmountThresholds {
   return { automatic_max_amount: automaticMaxAmount, approval_max_amount: approvalMaxAmount };
 }
 
@@ -231,6 +236,56 @@ export interface DelegationConstraints {
   readonly max_amount?: Money;
   readonly total_budget?: Money;
   readonly thresholds?: AmountThresholds;
+}
+
+/**
+ * Structural check for a `Money` that may have come from outside this type
+ * system (an imported event export, a store read): `money()` guards
+ * construction, but nothing guards a JSON payload. Only the currency shape is
+ * checked here — a non-empty string, compared later by exact equality and
+ * never interpreted (I25). A pre-unit-binding bare-number threshold is not a
+ * well-formed `Money`.
+ */
+export function isWellFormedMoney(candidate: unknown): candidate is Money {
+  if (typeof candidate !== "object" || candidate === null) {
+    return false;
+  }
+  const { value, currency } = candidate as { readonly value?: unknown; readonly currency?: unknown };
+  return typeof value === "number" && typeof currency === "string" && currency.length > 0;
+}
+
+/**
+ * The single currency shared by all of a delegation's monetary constraints
+ * (I25): `none` when it declares none, `invalid` when any of them is
+ * malformed or when they do not all name the same currency. `invalid` is
+ * never a policy decision — the resolver treats it as an unresolvable
+ * configuration (UNKNOWN, C22), never as DENIED.
+ */
+export type MonetaryUnit =
+  | { readonly kind: "none" }
+  | { readonly kind: "currency"; readonly currency: string }
+  | { readonly kind: "invalid" };
+
+export function monetaryUnitOf(constraints: DelegationConstraints): MonetaryUnit {
+  const declared: unknown[] = [];
+  if (constraints.thresholds !== undefined) {
+    const declaredThresholds: Partial<AmountThresholds> = constraints.thresholds;
+    declared.push(declaredThresholds.automatic_max_amount, declaredThresholds.approval_max_amount);
+  }
+  if (constraints.max_amount !== undefined) {
+    declared.push(constraints.max_amount);
+  }
+  if (constraints.total_budget !== undefined) {
+    declared.push(constraints.total_budget);
+  }
+  let currency: string | undefined;
+  for (const money of declared) {
+    if (!isWellFormedMoney(money) || (currency !== undefined && money.currency !== currency)) {
+      return { kind: "invalid" };
+    }
+    currency = money.currency;
+  }
+  return currency === undefined ? { kind: "none" } : { kind: "currency", currency };
 }
 
 // ---------------------------------------------------------------------------

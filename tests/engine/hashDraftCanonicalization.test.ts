@@ -89,7 +89,7 @@ describe("T3 — same event_id, nested payload object key order differs", () => 
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(1000),
-      amountThresholds: thresholds(100, 1000),
+      amountThresholds: thresholds(EUR(100), EUR(1000)),
     });
     const draft1 = toDraft(original);
     const draft2 = withReversedPayloadKeyOrder(draft1);

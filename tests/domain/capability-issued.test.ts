@@ -64,7 +64,7 @@ function baseScenario() {
     capabilities: [PURCHASE_ORDER_CREATE],
     canDelegate: false,
     totalBudget: EUR(1000),
-    amountThresholds: thresholds(100000, 100000),
+    amountThresholds: thresholds(EUR(100000), EUR(100000)),
   });
   const request = actionRequest({
     sequence: 2,

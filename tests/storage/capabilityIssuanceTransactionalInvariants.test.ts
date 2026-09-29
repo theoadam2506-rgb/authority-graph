@@ -81,7 +81,7 @@ function isExecutedOk(o: CapabilityIssuanceOutcome): o is { readonly outcome: "E
 
 describe("T1 — same requester + same idempotency key + same command, concurrent", () => {
   it("exactly one EXECUTED and one REPLAYED with an identical result, via the real transactional mutex", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t1", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t1", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request = actionRequest({ sequence: 2, id: "act-t1", requester: AGENT, delegationId: "d-t1", parameters: monetaryParameters(EUR(100)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
       throw new Error("fixture returned an unexpected event_type");
@@ -120,7 +120,7 @@ describe("T1 — same requester + same idempotency key + same command, concurren
 
 describe("T2 — same requester + same idempotency key + different commands, concurrent", () => {
   it("one canonical + one IDEMPOTENCY_CONFLICT, never two CAPABILITY_ISSUED", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t2", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t2", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request1 = actionRequest({ sequence: 2, id: "act-t2-1", requester: AGENT, delegationId: "d-t2", parameters: monetaryParameters(EUR(100)) });
     const request2 = actionRequest({ sequence: 3, id: "act-t2-2", requester: AGENT, delegationId: "d-t2", parameters: monetaryParameters(EUR(100)) });
     if (!isEventType(request1, "ACTION_REQUESTED") || !isEventType(request2, "ACTION_REQUESTED")) {
@@ -151,7 +151,7 @@ describe("T2 — same requester + same idempotency key + different commands, con
 
 describe("T3 — different idempotency keys, shared capacity", () => {
   it("remainingCapacity(D)=300, two concurrent 200 EUR reservations, exactly one succeeds", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t3", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t3", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const requestA = actionRequest({ sequence: 2, id: "act-t3-a", requester: AGENT, delegationId: "d-t3", parameters: monetaryParameters(EUR(200)) });
     const requestB = actionRequest({ sequence: 3, id: "act-t3-b", requester: AGENT, delegationId: "d-t3", parameters: monetaryParameters(EUR(200)) });
     if (!isEventType(requestA, "ACTION_REQUESTED") || !isEventType(requestB, "ACTION_REQUESTED")) {
@@ -177,14 +177,14 @@ describe("T3 — different idempotency keys, shared capacity", () => {
 
 describe("T4 — two terminal delegations sharing one bounded ancestor", () => {
   it("the shared ancestor's capacity is never over-reserved across two different invoked delegations", async () => {
-    const d1 = rootDelegation({ sequence: 1, id: "d1-t4", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT_A, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: true, totalBudget: EUR(300), amountThresholds: thresholds(100000, 100000) });
+    const d1 = rootDelegation({ sequence: 1, id: "d1-t4", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT_A, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: true, totalBudget: EUR(300), amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     // d2a/d2b each declare their OWN total_budget (individually within
     // d1's 300 EUR) — a bounded parent with an unbounded child is a
     // structural widening violation (validateChain.ts's totalBudgetBoundOk,
     // C9), unrelated to the property this test targets. C9 itself is not
     // modified anywhere in this round.
-    const d2a = subDelegation({ sequence: 2, id: "d2a-t4", parentId: "d1-t4", grantor: AGENT_A, grantee: AGENT_A, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(100000, 100000) });
-    const d2b = subDelegation({ sequence: 3, id: "d2b-t4", parentId: "d1-t4", grantor: AGENT_A, grantee: AGENT_B, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(100000, 100000) });
+    const d2a = subDelegation({ sequence: 2, id: "d2a-t4", parentId: "d1-t4", grantor: AGENT_A, grantee: AGENT_A, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(EUR(100000), EUR(100000)) });
+    const d2b = subDelegation({ sequence: 3, id: "d2b-t4", parentId: "d1-t4", grantor: AGENT_A, grantee: AGENT_B, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const requestA = actionRequest({ sequence: 4, id: "act-t4-a", requester: AGENT_A, delegationId: "d2a-t4", parameters: monetaryParameters(EUR(200)) });
     const requestB = actionRequest({ sequence: 5, id: "act-t4-b", requester: AGENT_B, delegationId: "d2b-t4", parameters: monetaryParameters(EUR(200)) });
     if (!isEventType(requestA, "ACTION_REQUESTED") || !isEventType(requestB, "ACTION_REQUESTED")) {
@@ -210,7 +210,7 @@ describe("T4 — two terminal delegations sharing one bounded ancestor", () => {
 
 describe("T5 — N-way concurrency", () => {
   it("capacity=300, five concurrent 100 EUR requests, exactly 3 succeed and never more than 300 engaged", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t5", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t5", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, totalBudget: EUR(300), amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const requests = [1, 2, 3, 4, 5].map((n) =>
       actionRequest({ sequence: 1 + n, id: `act-t5-${n}`, requester: AGENT, delegationId: "d-t5", parameters: monetaryParameters(EUR(100)) }),
     );
@@ -246,7 +246,7 @@ describe("T5 — N-way concurrency", () => {
 
 describe("T6 — retry after a committed response is lost", () => {
   it("a retry with the same requester/key/command on the same transaction REPLAYs the exact same capability_id/event_id/sequence, never a second emission", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t6", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t6", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request = actionRequest({ sequence: 2, id: "act-t6", requester: AGENT, delegationId: "d-t6", parameters: monetaryParameters(EUR(100)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
       throw new Error("fixture returned an unexpected event_type");
@@ -284,7 +284,7 @@ describe("T6 — retry after a committed response is lost", () => {
 
 describe("T7 — atomicity of the event write and the idempotency record", () => {
   it("the transactional API never exposes a success record without its matching canonical event, nor a canonical event without its success record", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t7", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t7", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request = actionRequest({ sequence: 2, id: "act-t7", requester: AGENT, delegationId: "d-t7", parameters: monetaryParameters(EUR(100)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
       throw new Error("fixture returned an unexpected event_type");
@@ -323,7 +323,7 @@ describe("T7 — atomicity of the event write and the idempotency record", () =>
 
 describe("T8 — forced capability_id collision", () => {
   it("a second emission forced to reuse an already-canonical capability_id is rejected fail-closed, with no success record for it", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t8", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t8", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const requestA = actionRequest({ sequence: 2, id: "act-t8-a", requester: AGENT, delegationId: "d-t8", parameters: monetaryParameters(EUR(50)) });
     const requestB = actionRequest({ sequence: 3, id: "act-t8-b", requester: AGENT, delegationId: "d-t8", parameters: monetaryParameters(EUR(50)) });
     if (!isEventType(requestA, "ACTION_REQUESTED") || !isEventType(requestB, "ACTION_REQUESTED")) {
@@ -395,7 +395,7 @@ describe("replaceExecutedIdempotencyResult — pure correction of an already-rec
   // would have one at the point it needs to correct it. This test never
   // needs to know how IdempotencyState represents its keys internally.
   function priorExecutedState() {
-    const root = rootDelegation({ sequence: 1, id: "d-correction", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-correction", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request = actionRequest({ sequence: 2, id: "act-correction", requester: AGENT, delegationId: "d-correction", parameters: monetaryParameters(EUR(10)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
       throw new Error("fixture returned an unexpected event_type");
@@ -456,7 +456,7 @@ describe("replaceExecutedIdempotencyResult — pure correction of an already-rec
 
 describe("T9 — snapshot/sequence adjacency", () => {
   it("event.sequence === decision_sequence + 1 for a single issuance", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t9", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t9", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request = actionRequest({ sequence: 2, id: "act-t9", requester: AGENT, delegationId: "d-t9", parameters: monetaryParameters(EUR(100)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
       throw new Error("fixture returned an unexpected event_type");
@@ -479,7 +479,7 @@ describe("T9 — snapshot/sequence adjacency", () => {
   });
 
   it("holds independently for each of two concurrent, unrelated issuances — proving the mutex correctly advances the snapshot between turns instead of letting a write interleave between decision and persistence", async () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t9b", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t9b", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const requestA = actionRequest({ sequence: 2, id: "act-t9b-a", requester: AGENT, delegationId: "d-t9b", parameters: monetaryParameters(EUR(10)) });
     const requestB = actionRequest({ sequence: 3, id: "act-t9b-b", requester: AGENT, delegationId: "d-t9b", parameters: monetaryParameters(EUR(10)) });
     if (!isEventType(requestA, "ACTION_REQUESTED") || !isEventType(requestB, "ACTION_REQUESTED")) {
@@ -554,7 +554,7 @@ describe("T10 — no Date.now()/Math.random() anywhere in the pure kernel or the
 
 describe("T11 — non-regression: issueCapabilityIdempotently's PR4B-2 properties under correct sequential chaining (regression lock, expected GREEN)", () => {
   it("replays under correct state chaining, conflicts on a different command, and keeps cross-requester independence — exactly as tests/engine/issueCapability.test.ts M/N/O already established", () => {
-    const root = rootDelegation({ sequence: 1, id: "d-t11", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t11", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request = actionRequest({ sequence: 2, id: "act-t11", requester: AGENT, delegationId: "d-t11", parameters: monetaryParameters(EUR(100)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
       throw new Error("fixture returned an unexpected event_type");
@@ -600,7 +600,7 @@ describe("T12 — InMemoryCapabilityIssuanceTransaction rejects issuance past ex
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
       expires: expiresAt(iso8601(T2)),
       timing: { authorityTime: T1 },
     });
@@ -669,7 +669,7 @@ describe("T12 — InMemoryCapabilityIssuanceTransaction rejects issuance past ex
       grantee: AGENT,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100000, 100000),
+      amountThresholds: thresholds(EUR(100000), EUR(100000)),
       expires: expiresAt(iso8601(T2)),
       timing: { authorityTime: T1 },
     });
@@ -720,7 +720,7 @@ describe("T13 — PR4B-5A: a rejected draft's clock reading must not become a hi
     const T3 = iso8601("2030-01-01T11:00:00.000Z"); // T1 < T3 < T4
     const T4 = iso8601("2030-01-01T12:00:00.000Z");
 
-    const root = rootDelegation({ sequence: 1, id: "d-t13", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t13", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request = actionRequest({ sequence: 2, id: "act-t13", requester: AGENT, delegationId: "d-t13", parameters: monetaryParameters(EUR(100)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
       throw new Error("fixture returned an unexpected event_type");
@@ -799,7 +799,7 @@ describe("T14 — PR4B-5A: idempotence of a STALE_AUTHORITY_TIME refusal", () =>
     const T4 = iso8601("2030-01-01T12:00:00.000Z"); // the hidden high-water mark
     const T5 = iso8601("2030-01-01T13:00:00.000Z"); // T5 > T4 — individually coherent
 
-    const root = rootDelegation({ sequence: 1, id: "d-t14", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(100000, 100000) });
+    const root = rootDelegation({ sequence: 1, id: "d-t14", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(EUR(100000), EUR(100000)) });
     const request = actionRequest({ sequence: 2, id: "act-t14", requester: AGENT, delegationId: "d-t14", parameters: monetaryParameters(EUR(100)) });
     if (!isEventType(request, "ACTION_REQUESTED")) {
       throw new Error("fixture returned an unexpected event_type");

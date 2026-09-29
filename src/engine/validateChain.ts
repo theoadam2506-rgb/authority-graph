@@ -9,6 +9,7 @@
  * Pure: no I/O, no Date.now(), no mutation of its inputs.
  */
 import {
+  monetaryUnitOf,
   sameCapability,
   type AmountThresholds,
   type Capability,
@@ -196,15 +197,20 @@ function isExpired(expires: ExpiresAt, authorityTime: Iso8601): boolean {
   return Date.parse(authorityTime) >= Date.parse(expires.value);
 }
 
-/** Absence on the parent side means unbounded (+Infinity); absence on the child side while the parent bounds it is a widening violation. */
-function numericBoundOk(childValue: number | undefined, parentValue: number | undefined): boolean {
-  if (parentValue === undefined) {
+/**
+ * Absence on the parent side means unbounded (+Infinity); absence on the child side while the parent bounds it is a widening violation.
+ * I5 + I25: a child's `Money` bound is an attenuation of the parent's only if
+ * it is in the SAME currency (compared first, exactly) and its value does not
+ * exceed the parent's. A different currency is never a narrowing.
+ */
+function moneyBoundOk(child: Money | undefined, parent: Money | undefined): boolean {
+  if (parent === undefined) {
     return true;
   }
-  if (childValue === undefined) {
+  if (child === undefined) {
     return false;
   }
-  return childValue <= parentValue;
+  return child.currency === parent.currency && child.value <= parent.value;
 }
 
 function expiryWithinBound(child: ExpiresAt, parent: ExpiresAt): boolean {
@@ -224,7 +230,7 @@ function thresholdsBoundOk(child: AmountThresholds | undefined, parent: AmountTh
   if (child === undefined) {
     return false;
   }
-  return child.automatic_max_amount <= parent.automatic_max_amount && child.approval_max_amount <= parent.approval_max_amount;
+  return moneyBoundOk(child.automatic_max_amount, parent.automatic_max_amount) && moneyBoundOk(child.approval_max_amount, parent.approval_max_amount);
 }
 
 function totalBudgetBoundOk(child: Money | undefined, parent: Money | undefined, parentId: DelegationId, visibleStore: CanonicalStore): boolean {
@@ -234,7 +240,7 @@ function totalBudgetBoundOk(child: Money | undefined, parent: Money | undefined,
   if (child === undefined) {
     return false;
   }
-  return child.value <= remainingBudget(parentId, parent, visibleStore);
+  return child.currency === parent.currency && child.value <= remainingBudget(parentId, parent, visibleStore);
 }
 
 function capabilitiesSubset(child: readonly Capability[], parent: readonly Capability[]): boolean {
@@ -280,6 +286,12 @@ export function validateChain(
     if (typeof node.payload.can_delegate !== "boolean") {
       return { kind: "unknown", reasonCode: "C15_MISSING_CAN_DELEGATE" };
     }
+    // I25: a delegation whose monetary constraints are malformed, or do not
+    // all name one currency, is an unresolvable configuration — never a
+    // DENIED verdict (which would hide a structurally invalid policy).
+    if (monetaryUnitOf(node.payload).kind === "invalid") {
+      return { kind: "unknown", reasonCode: "C22_UNKNOWN_CONSTRAINT_TYPE" };
+    }
   }
 
   const root = chain[0];
@@ -324,7 +336,7 @@ export function validateChain(
     if (!expiryWithinBound(child.payload.expires_at, parent.payload.expires_at)) {
       return { kind: "denied", reasonCode: "C11_CAPABILITY_NOT_COVERED" };
     }
-    if (!numericBoundOk(child.payload.max_amount?.value, parent.payload.max_amount?.value)) {
+    if (!moneyBoundOk(child.payload.max_amount, parent.payload.max_amount)) {
       return { kind: "denied", reasonCode: "C11_CAPABILITY_NOT_COVERED" };
     }
     if (!thresholdsBoundOk(child.payload.thresholds, parent.payload.thresholds)) {

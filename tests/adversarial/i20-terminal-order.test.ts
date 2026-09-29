@@ -29,12 +29,12 @@ describe("I20 — terminal attribution is invariant under chain-ref permutation"
     const root = rootDelegation({
       sequence: 1, id: "i20-order-root", grantor: THEO, grantorType: "HUMAN_ROOT",
       grantee: intermediate, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: true,
-      totalBudget: EUR(1_000), amountThresholds: thresholds(1_000, 1_000),
+      totalBudget: EUR(1_000), amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const leaf = subDelegation({
       sequence: 2, id: "i20-order-leaf", parentId: "i20-order-root",
       grantor: intermediate, grantee: executor, capabilities: [PURCHASE_ORDER_CREATE],
-      canDelegate: false, amountThresholds: thresholds(1_000, 1_000),
+      canDelegate: false, amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 3, id: "i20-order-action", requester: executor,
@@ -62,12 +62,12 @@ describe("I20 — terminal attribution is invariant under chain-ref permutation"
     const pathA = rootDelegation({
       sequence: 1, id: "i20-invoked-a", grantor: THEO, grantorType: "HUMAN_ROOT",
       grantee: executor, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false,
-      totalBudget: EUR(1_000), amountThresholds: thresholds(1_000, 1_000),
+      totalBudget: EUR(1_000), amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const pathB = rootDelegation({
       sequence: 2, id: "i20-invoked-b", grantor: THEO, grantorType: "HUMAN_ROOT",
       grantee: executor, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false,
-      totalBudget: EUR(1_000), amountThresholds: thresholds(1_000, 1_000),
+      totalBudget: EUR(1_000), amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 3, id: "i20-invoked-action", requester: executor,
@@ -89,12 +89,12 @@ describe("I20 — terminal attribution is invariant under chain-ref permutation"
     const pathA = rootDelegation({
       sequence: 1, id: "i20-mismatch-a", grantor: THEO, grantorType: "HUMAN_ROOT",
       grantee: executor, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false,
-      totalBudget: EUR(1_000), amountThresholds: thresholds(1_000, 1_000),
+      totalBudget: EUR(1_000), amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const pathB = rootDelegation({
       sequence: 2, id: "i20-mismatch-b", grantor: THEO, grantorType: "HUMAN_ROOT",
       grantee: executor, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false,
-      totalBudget: EUR(1_000), amountThresholds: thresholds(1_000, 1_000),
+      totalBudget: EUR(1_000), amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 3, id: "i20-mismatch-action", requester: executor,
@@ -115,7 +115,7 @@ describe("I20 — terminal attribution is invariant under chain-ref permutation"
     const root = rootDelegation({
       sequence: 1, id: "i20-replay-root", grantor: THEO, grantorType: "HUMAN_ROOT",
       grantee: executor, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false,
-      totalBudget: EUR(1_000), amountThresholds: thresholds(1_000, 1_000),
+      totalBudget: EUR(1_000), amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 2, id: "i20-replay-action", requester: executor,

@@ -43,7 +43,7 @@ describe("Chain padding — an intermediate authority_chain_ref link that is not
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
       totalBudget: EUR(100),
-      amountThresholds: thresholds(100, 100),
+      amountThresholds: thresholds(EUR(100), EUR(100)),
     });
     const malloryRoot = rootDelegation({
       sequence: 2,
@@ -53,7 +53,7 @@ describe("Chain padding — an intermediate authority_chain_ref link that is not
       grantee: MALLORY,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(100, 100),
+      amountThresholds: thresholds(EUR(100), EUR(100)),
     });
     const malloryRequest = actionRequest({
       sequence: 3,

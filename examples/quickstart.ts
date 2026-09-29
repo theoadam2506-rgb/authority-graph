@@ -81,7 +81,7 @@ const delegationCreated: DraftAuthorityEvent = {
     capabilities: [PURCHASE_ORDER_CREATE],
     can_delegate: false,
     expires_at: noExpiry,
-    thresholds: thresholds(2000, 2000),
+    thresholds: thresholds(money(2000, "EUR"), money(2000, "EUR")),
     parent_delegation_id: null,
   },
 };

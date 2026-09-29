@@ -237,7 +237,7 @@ function renderChainLinkLines(chain: readonly ChainLinkDetail[]): string[] {
       lines.push(`      total_budget: ${link.totalBudget.value} ${link.totalBudget.currency}`);
     }
     if (link.thresholds !== undefined) {
-      lines.push(`      thresholds: automatic<=${link.thresholds.automatic_max_amount}, approval<=${link.thresholds.approval_max_amount}`);
+      lines.push(`      thresholds: automatic<=${link.thresholds.automatic_max_amount.value} ${link.thresholds.automatic_max_amount.currency}, approval<=${link.thresholds.approval_max_amount.value} ${link.thresholds.approval_max_amount.currency}`);
     }
     if (link.revocations.length === 0) {
       lines.push("      revocations: none");

@@ -93,7 +93,7 @@ describe("THREAT_MODEL A1-A20, A24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: true,
         maxAmount: EUR(1000),
-        amountThresholds: thresholds(1000, 1000),
+        amountThresholds: thresholds(EUR(1000), EUR(1000)),
       }),
       subDelegation({
         sequence: 2,
@@ -104,7 +104,7 @@ describe("THREAT_MODEL A1-A20, A24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(2000), // escalation: exceeds parent's 1000
-        amountThresholds: thresholds(2000, 2000),
+        amountThresholds: thresholds(EUR(2000), EUR(2000)),
       }),
     ];
     const query: AuthorityQuery = {
@@ -341,7 +341,7 @@ describe("THREAT_MODEL A1-A20, A24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(100, 10_000),
+        amountThresholds: thresholds(EUR(100), EUR(10_000)),
       }),
       actionRequest({ sequence: 2, id: "a-1", requester: AGENT_A, delegationId: "d-root", parameters: params }),
       approvalRequest({ sequence: 3, id: "ap-1", actionId: "a-1", requestedFrom: THEO, requester: AGENT_A }),
@@ -435,7 +435,7 @@ describe("THREAT_MODEL A1-A20, A24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(100, 10_000),
+        amountThresholds: thresholds(EUR(100), EUR(10_000)),
       }),
       actionRequest({ sequence: 2, id: "a-1", requester: AGENT_A, delegationId: "d-root", parameters: params }),
       approvalRequest({ sequence: 3, id: "ap-1", actionId: "a-1", requestedFrom: THEO, requester: AGENT_A }),
@@ -482,7 +482,7 @@ describe("THREAT_MODEL A1-A20, A24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(1_000_000),
-        amountThresholds: thresholds(100, 1_000_000),
+        amountThresholds: thresholds(EUR(100), EUR(1_000_000)),
       }),
       actionRequest({
         sequence: 2,
@@ -524,7 +524,7 @@ describe("THREAT_MODEL A1-A20, A24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(100, 10_000),
+        amountThresholds: thresholds(EUR(100), EUR(10_000)),
       }),
       actionRequest({ sequence: 2, id: "a-1", requester: AGENT_A, delegationId: "d-root", parameters: params }),
       approvalRequest({ sequence: 3, id: "ap-1", actionId: "a-1", requestedFrom: THEO, requester: AGENT_A }),
@@ -627,7 +627,7 @@ describe("THREAT_MODEL A1-A20, A24", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         totalBudget: EUR(1000),
-        amountThresholds: thresholds(1000, 1000),
+        amountThresholds: thresholds(EUR(1000), EUR(1000)),
       }),
     ];
     // Both hypothetical spends, evaluated before either is executed, are

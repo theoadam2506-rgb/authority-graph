@@ -170,7 +170,7 @@ async function main(): Promise<void> {
     grantee: AGENT_A,
     capabilities: [PO_CREATE],
     canDelegate: true,
-    constraints: { expires_at: expiresAt(iso8601(hour(10))), thresholds: thresholds(2500, 5000) },
+    constraints: { expires_at: expiresAt(iso8601(hour(10))), thresholds: thresholds(money(2500, "EUR"), money(5000, "EUR")) },
     occurredAt: hour(0),
   });
   expectAccepted((await store.append([rootDraft])).outcomes[0], "Root delegation user -> A");
@@ -193,7 +193,7 @@ async function main(): Promise<void> {
     grantee: AGENT_B,
     capabilities: [PO_CREATE],
     canDelegate: false,
-    constraints: { expires_at: expiresAt(iso8601(hour(8))), thresholds: thresholds(2000, 2000) },
+    constraints: { expires_at: expiresAt(iso8601(hour(8))), thresholds: thresholds(money(2000, "EUR"), money(2000, "EUR")) },
     occurredAt: hour(1),
   });
   expectAccepted((await store.append([subDraft])).outcomes[0], "Sub-delegation A -> B (<=2000, bounded within user -> A per I5)");

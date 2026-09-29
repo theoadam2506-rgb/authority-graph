@@ -32,7 +32,7 @@ describe("changing the clock-drift diagnostic threshold cannot change authority"
       grantee: AGENT_A,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1000, 1000),
+      amountThresholds: thresholds(EUR(1000), EUR(1000)),
     }),
     actionRequest({
       sequence: 2,

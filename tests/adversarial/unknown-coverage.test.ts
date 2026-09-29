@@ -392,7 +392,7 @@ describe("UNKNOWN coverage (I1 fail-closed)", () => {
         capabilities: [PURCHASE_ORDER_CREATE],
         canDelegate: false,
         maxAmount: EUR(10_000),
-        amountThresholds: thresholds(9000, 1000), // automatic > approval: nonsensical
+        amountThresholds: thresholds(EUR(9000), EUR(1000)), // automatic > approval: nonsensical
       }),
     ];
     const query: AuthorityQuery = {

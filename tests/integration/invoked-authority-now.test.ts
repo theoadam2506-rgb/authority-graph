@@ -47,7 +47,7 @@ describe("M2 — availableChainNow reflects live state, independent of the histo
       grantee: executor,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 2,
@@ -76,7 +76,7 @@ describe("M2 — availableChainNow reflects live state, independent of the histo
       grantee: executor,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
 
     const store = [d1, request, execution, d1Revoked, d2];
@@ -111,7 +111,7 @@ describe("M4 — recordedDelegationReferences is a raw, unfiltered readout of th
       grantee: executor,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 2,
@@ -154,7 +154,7 @@ describe("M5 — INVOKED is evaluated under the requester, RECORDED under the cl
       grantee: AGENT_A,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     // A requests, naming D1 (A's own delegation).
     const request = actionRequest({
@@ -208,7 +208,7 @@ describe("invokedAuthorityNow/invokedCanonicalChainNow exist before any executio
       grantee: executor,
       capabilities: [PURCHASE_ORDER_CREATE],
       canDelegate: false,
-      amountThresholds: thresholds(1_000, 1_000),
+      amountThresholds: thresholds(EUR(1_000), EUR(1_000)),
     });
     const request = actionRequest({
       sequence: 2,

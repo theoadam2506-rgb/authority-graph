@@ -255,20 +255,36 @@ export function toDraft<E extends AuthorityEvent>(event: E): Extract<DraftAuthor
 // resolution decision.
 // ---------------------------------------------------------------------------
 
-const FIELD_SEPARATOR = ""; // unit separator, per EVENT_MODEL.md
+const FIELD_SEPARATOR = "\u001f"; // unit separator, per EVENT_MODEL.md
 const ABSENT = "∅"; // ∅, per EVENT_MODEL.md
+
+/**
+ * One `label=<LEN>:<value>` segment, LEN being the value's length in UTF-8
+ * bytes (never UTF-16 code units). The length prefix is what keeps the
+ * serialization unambiguous even when a free-text field (currency,
+ * recipient, ...) itself contains the separator or a lookalike segment.
+ * An absent field is the bare sentinel; a present value always starts with a
+ * digit after the `=`, so it can never be mistaken for it.
+ */
+function fingerprintSegment(label: string, value: string | undefined): string {
+  return value === undefined ? `${label}=${ABSENT}` : `${label}=${Buffer.byteLength(value, "utf8")}:${value}`;
+}
 
 export function computeActionFingerprint(
   capabilityRequested: Capability,
   parameters: ActionParameters,
 ): Fingerprint {
-  const amountSegment = parameters.kind === "monetary" ? String(parameters.amount.value) : ABSENT;
-  const recipientSegment = parameters.recipient !== undefined ? String(parameters.recipient) : ABSENT;
+  // I25: amount and currency are one atomic value — present together (a
+  // monetary action) or absent together (a non-monetary one).
+  const amountSegment = parameters.kind === "monetary" ? String(parameters.amount.value) : undefined;
+  const currencySegment = parameters.kind === "monetary" ? String(parameters.amount.currency) : undefined;
+  const recipientSegment = parameters.recipient !== undefined ? String(parameters.recipient) : undefined;
   const canonical = [
-    `resource=${capabilityRequested.resource}`,
-    `action=${capabilityRequested.action}`,
-    `amount=${amountSegment}`,
-    `recipient=${recipientSegment}`,
+    fingerprintSegment("resource", capabilityRequested.resource),
+    fingerprintSegment("action", capabilityRequested.action),
+    fingerprintSegment("amount", amountSegment),
+    fingerprintSegment("currency", currencySegment),
+    fingerprintSegment("recipient", recipientSegment),
   ].join(FIELD_SEPARATOR);
   return createHash("sha256").update(canonical, "utf8").digest("hex") as Fingerprint;
 }
