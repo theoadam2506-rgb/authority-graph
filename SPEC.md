@@ -841,6 +841,79 @@ this decision permanently.
     currency) is `UNKNOWN` (C22). Test: `tests/adversarial/unit-binding.test.ts`
     and `tests/domain/actionFingerprint.test.ts`.
 
+## I6 — action-instance approval binding
+
+This section states, as a normative scenario, one consequence of I6 ("an
+`APPROVAL_GRANTED` covers exactly the action that requested it, identified
+by its `action_id` **and** by its exact `action_fingerprint`"). It adds no
+new invariant: it pins down that the `action_id` half of that identification
+is never satisfied by the fingerprint half alone.
+
+**Scenario.** One canonical store contains, in this order:
+
+1. a root delegation D1 (`HUMAN_ROOT` grantor) to a requester R, whose
+   thresholds put the amount below in the approval band
+   (`automatic_max_amount` < amount ≤ `approval_max_amount`);
+2. a first `ACTION_REQUESTED` with `action_id` A1;
+3. a second `ACTION_REQUESTED` with `action_id` A2, distinct from A1.
+
+A1 and A2 are two distinct action instances that share everything else:
+
+- the same `action_fingerprint` (same capability, same parameters, so the
+  same amount, currency and recipient);
+- the same requester R (`requesting_principal_id`);
+- the same invoked delegation D1 (`delegation_id`).
+
+Then:
+
+4. an `APPROVAL_REQUESTED` for approval P1, bound to A1;
+5. an `APPROVAL_GRANTED` for P1, bound to A1.
+
+P1 is granted for A1 only. No `ACTION_EXECUTED` exists: P1 is **not
+consumed**.
+
+**Expected outcomes** (at the sequence of the grant, for the resolution of
+each action's own invoked delegation, that is, `explainAction(...)`'s
+`invokedAuthorityNow` and the `invoked delegation authority` line of
+`authority explain`):
+
+| Action | Outcome |
+|---|---|
+| A1 | `AUTHORIZED`, citing approval P1 |
+| A2 | `REQUIRES_APPROVAL`, via D1 |
+
+**Rule.** An approval is never reused between two distinct `action_id`
+values. An `APPROVAL_GRANTED` bound to A1 cannot authorize A2, even when A2
+has the same fingerprint, the same requester and the same invoked
+delegation, and even while the approval is still unconsumed. This applies
+to every resolution that is about one specific action instance: the invoked
+delegation validation of `explainAction`, the recorded chain validation of
+an `ACTION_EXECUTED` (consumption itself is already bound by `action_id`,
+see C28), and the grant selection of capability issuance.
+
+**What this rule does not change.** The prospective question
+(`authorityAt`) is about a fingerprint, not about an action instance: "a
+valid and unconsumed `APPROVAL_GRANTED` whose fingerprint (I15) corresponds
+exactly to (capability, parameters) of the request is sufficient to produce
+`AUTHORIZED`". `authorityAt`, and `explainAction`'s `currentAuthority` and
+`execution.authorityAtDecision`, which answer that same fingerprint-scoped
+question, may therefore report `AUTHORIZED` citing P1 for the fingerprint
+shared by A1 and A2. Such an answer is never proof that A2 itself was
+authorized; `authority explain` prints a note saying so whenever this
+fingerprint-scoped line is `AUTHORIZED` while the invoked delegation line is
+not.
+
+**Reference test.** `I6 — an approval cannot authorize a different
+action_id even when fingerprint, requester, and invoked delegation are
+identical`, in
+[`tests/adversarial/independent-audit.test.ts`](./tests/adversarial/independent-audit.test.ts).
+
+**Origin.** The binding was added by
+[pull request #9](https://github.com/theoadam2506-rgb/authority-graph/pull/9)
+(`fix: bind approvals to action instances`). Before it, a grant matching on
+fingerprint, requester and invoked delegation could authorize a different,
+fingerprint-identical action instance.
+
 ## Additional application rules
 
 These rules are not additional numbered invariants. They clarify

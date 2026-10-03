@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      # No database is reachable in this job, so the 17 PostgreSQL tests are
+      # skipped here. Running them is mandatory in the `postgres` job below.
+      - run: npm test
+
+      - run: npm run demo
+
+      - run: npm run quickstart
+
+      - name: Check the README demo excerpt against the real demo output
+        run: node scripts/check-readme-demo-excerpt.mjs
+
+  postgres:
+    name: PostgreSQL 16
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: authority_graph_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d authority_graph_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/authority_graph_test
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Both files TRUNCATE the same tables in one shared database, so they
+      # must not run concurrently: --no-file-parallelism runs them one after
+      # the other.
+      - name: Run the PostgreSQL tests
+        run: >-
+          npx vitest run
+          tests/storage/postgresEventStore.test.ts
+          tests/storage/postgresCapabilityIssuanceTransaction.test.ts
+          --no-file-parallelism
+          --reporter=default
+          --reporter=json
+          --outputFile.json=vitest-postgres.json
+
+      # Vitest exits 0 when every PostgreSQL test is skipped (no reachable
+      # database). This step fails the job unless all of them actually ran
+      # and passed.
+      - name: Check that no PostgreSQL test was skipped
+        if: ${{ !cancelled() }}
+        run: node scripts/check-postgres-report.mjs vitest-postgres.json
+
+      - name: Upload the Vitest JSON report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: vitest-postgres-report
+          path: vitest-postgres.json
+          if-no-files-found: warn
