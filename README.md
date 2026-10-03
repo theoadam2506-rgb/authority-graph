@@ -1,5 +1,7 @@
 # authority-graph
 
+[![CI](https://github.com/theoadam2506-rgb/authority-graph/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/theoadam2506-rgb/authority-graph/actions/workflows/ci.yml)
+
 An AI agent executes an action. Six months later, nobody can say exactly what
 human authority covered it at that moment, or why. This engine answers that
 question deterministically, from an append-only log of events: delegation,
@@ -256,91 +258,19 @@ escalation, single-use consumption, revocation, backdating, and a historical
 `authority explain` on a now-defunct authority, entirely in memory, and
 **asserts** the property each step claims to demonstrate. If any assumption
 stops holding, the script throws and exits non-zero; it is a narrative
-integration test, not a slideshow. Its actual output is reproduced byte for
-byte below.
+integration test, not a slideshow.
 
+The excerpt below is illustrative, not the full output: it shows the outcome
+lines of the last step, a historical `authority explain` of the 4800 EUR
+action `a-a-4800`, printed by the real CLI from a JSON export of the demo's
+log. Run `npm run demo` for the complete, current output. CI checks that
+every line of this excerpt still appears, in this order, in the real output
+(`node scripts/check-readme-demo-excerpt.mjs`); the rest of the output may
+change.
+
+<!-- demo-excerpt:start -->
 ```
-$ npm run demo
-
-> authority-graph@0.0.0 demo
-> tsx demo/run.ts
-
-
-==============================================================================
-1. Root delegation: User → Agent A
-==============================================================================
-  ✓ Root delegation user -> A -> accepted at sequence 1
-  ✓ A holds purchase_order.create directly from the user -> AUTHORIZED (chain: d-user-a)
-
-==============================================================================
-2. Valid sub-delegation: A → B, ≤ 2000
-==============================================================================
-  ✓ Sub-delegation A -> B (<=2000, bounded within user -> A per I5) -> accepted at sequence 2
-
-==============================================================================
-3. Laundering rejected: Mallory (never granted anything) attempts an invalid chain
-==============================================================================
-  ✓ Mallory's forged sub-delegation off user -> A -> rejected at ingestion (UNAUTHORIZED_SUBDELEGATION), no canonical sequence assigned
-  ✓ Rejected draft appears in the security log (reasonCode: UNAUTHORIZED_SUBDELEGATION), event_id evt-subdelegation-3
-  ✓ Canonical store still has 2 events. The rejected draft never entered it
-  ✓ Mallory holds no authority whatsoever (her fabricated delegation never existed canonically) -> UNKNOWN (C24_NO_VALID_CHAIN)
-
-==============================================================================
-4. Normal action: B attempts 1800 → AUTHORIZED
-==============================================================================
-  ✓ B requests purchase_order.create for 1800 EUR -> accepted at sequence 3
-  ✓ B executes the 1800 EUR action -> accepted at sequence 4
-  ✓ B's 1800 EUR action is authorized, automatically, within its own band -> AUTHORIZED (chain: d-user-a -> d-a-b)
-
-==============================================================================
-5. Escalation: 4800 exceeds B, goes through A via the root delegation
-==============================================================================
-  ✓ B cannot reach 4800 EUR (its own delegation caps it at 2000) -> DENIED (C8_AMOUNT_EXCEEDS_APPROVAL_CEILING)
-  ✓ A can reach 4800 EUR via the root delegation, but it falls in the approval band (2500 < 4800 <= 5000) -> REQUIRES_APPROVAL (via d-user-a)
-  ✓ A requests purchase_order.create for 4800 EUR -> accepted at sequence 5
-
-==============================================================================
-6. Approval binding: User approves exactly the 4800 action
-==============================================================================
-  ✓ A requests the user's approval for the 4800 EUR action -> accepted at sequence 6
-  ✓ The user grants approval appr-4800 -> accepted at sequence 7
-  ✓ The exact approved action (4800 EUR, vendor-1) is now authorized -> AUTHORIZED (chain: d-user-a, approval: appr-4800)
-  ✓ Changing the amount by 1 EUR makes the same approval unusable (I15 binds the exact fingerprint) -> REQUIRES_APPROVAL (via d-user-a)
-  ✓ Changing the recipient makes the same approval unusable -> REQUIRES_APPROVAL (via d-user-a)
-
-==============================================================================
-7. Single use: valid execution, then a second consumption attempt → denied
-==============================================================================
-  ✓ A executes the 4800 EUR action, consuming appr-4800 -> accepted at sequence 8
-  ✓ a-a-4800's execution was authorized at its own decision sequence -> AUTHORIZED (chain: d-user-a, approval: appr-4800)
-  ✓ The exact same request, asked again, is now denied: the approval is spent -> DENIED (C7_APPROVAL_ALREADY_CONSUMED)
-  ✓ A second, identical 4800 EUR request is recorded -> accepted at sequence 9
-  ✓ The log accepts a second ACTION_EXECUTED reusing appr-4800 (I3: append-only never blocks a structurally valid record) -> accepted at sequence 10
-  ✓ But resolution denies it: the log recording it does not grant it authority -> DENIED (C7_APPROVAL_ALREADY_CONSUMED)
-
-==============================================================================
-8. Revocation: User revokes d-user-a; descendants that depend on it exclusively fall too
-==============================================================================
-  ✓ The user revokes d-user-a -> accepted at sequence 11
-  ✓ A's own authority is gone immediately -> DENIED (C12_DELEGATION_REVOKED)
-  ✓ B's authority (which only ever existed through d-user-a) falls too, even though d-a-b itself was never touched -> DENIED (C12_DELEGATION_REVOKED)
-
-==============================================================================
-9. Backdating: an earlier occurred_at is injected; authority is not restored
-==============================================================================
-  ✓ Ingestion accepts the structurally valid request regardless of its occurred_at claim (I4: occurred_at is never decisional) -> accepted at sequence 12
-  ✓ The backdated occurred_at does not resurrect a revoked delegation: sequence and authority_time are unmoved -> DENIED (C12_DELEGATION_REVOKED)
-  ✓ explain() flags LATE_OR_BACKDATED_EVENT_OBSERVED for this event (drift: 157885200000ms), diagnostic only, and it changed no decision above
-
-==============================================================================
-10. Historical explain: yesterday's authority, explained today
-==============================================================================
-  ✓ execution.authorityAtDecision is identical whether asked right after execution or 44 hours later
-  ✓ ...while currentAuthority, asked today, reflects that this authority no longer exists -> DENIED (C11_CAPABILITY_NOT_COVERED)
-  (the chain is both revoked, at sequence 11, and, independently, expired past 2025-01-01T10:00:00.000Z: either fact alone would deny it today)
-
   --- authority explain a-a-4800 (real CLI output) ---
-
   source: imported canonical event export
   ACTION_EXECUTED at sequence 8
   authority at decision sequence 7: AUTHORIZED
@@ -351,32 +281,11 @@ $ npm run demo
     reason: C11_CAPABILITY_NOT_COVERED: no valid delegation chain covers the requested capability
   invoked delegation authority at sequence 12: DENIED
     reason: C11_CAPABILITY_NOT_COVERED: no valid delegation chain covers the requested capability
-
-  Authority chain (root to leaf, as declared when each delegation was created):
-    - delegation d-user-a: user (HUMAN_ROOT) -> agent-a (granted at sequence 1)
-        capabilities: purchase_order.create
-        can_delegate: true
-        expires_at: 2025-01-01T10:00:00.000Z
-        thresholds: automatic<=2500 EUR, approval<=5000 EUR
-        revocation: the log contains a DELEGATION_REVOKED event asserting that user revoked this delegation at sequence 11 (reason: POLICY_REVIEW)
-
-  Approvals:
-    - approval appr-4800 (requested at sequence 6 from user)
-        the log contains an event asserting that user granted this approval at sequence 7
-
-  Clock drift diagnostics:
-    LATE_OR_BACKDATED_EVENT_OBSERVED: ACTION_REQUESTED (evt-action-request-13): |authority_time - occurred_at| = 157885200000ms (authority_time: 2025-01-01T09:00:00.000Z, occurred_at: 2020-01-01T00:00:00.000Z)
-
-  assurance_level: ASSERTED_UNVERIFIED: no cryptographic signature or verified identity backs any event in this log (I17); every claim above is "the log contains an event asserting", never a proof.
-
   ✓ CLI confirms: authorized at its own decision sequence -> AUTHORIZED (chain: d-user-a, approval: appr-4800)
   ✓ CLI confirms: not authorized today -> DENIED (C11_CAPABILITY_NOT_COVERED)
-  ✓ The real `authority explain` CLI reproduces exactly the properties checked above, from a plain JSON export, with no database and no network
-
-==============================================================================
 All properties held. Demo complete.
-==============================================================================
 ```
+<!-- demo-excerpt:end -->
 
 The last section is the point of the whole exercise: `d-user-a` is revoked
 *and* expired. Today, nothing authorizes A to spend 4800 EUR. And yet the
@@ -439,6 +348,17 @@ intent). All four were fixed; the reproductions the audit wrote are kept
 verbatim in [`tests/adversarial/independent-audit.test.ts`](./tests/adversarial/independent-audit.test.ts),
 unmodified.
 
+## Approvals are bound to action instances (I6)
+
+An approval covers exactly the action instance it was granted for. If two
+distinct actions share the same fingerprint, the same requester and the same
+invoked delegation, and approval P1 is granted (and not yet consumed) for the
+first one only, the first is `AUTHORIZED` with P1 and the second remains
+`REQUIRES_APPROVAL`: an approval is never reused across two `action_id`
+values. See
+[`SPEC.md`, I6 — action-instance approval binding](./SPEC.md#i6--action-instance-approval-binding)
+for the exact scenario, its scope and its reference test.
+
 ## License
 
 Apache License 2.0: see [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
@@ -449,8 +369,9 @@ V0. Not published to npm, and `package.json` is marked `private`: the
 supported way to use this project today is `git clone` plus the commands in
 [Run it](#run-it) above, not a package manager install. The in-memory engine
 and the Postgres backend are both covered by the test suite described below,
-including tests against a real Postgres instance; neither has been
-benchmarked or run at production scale.
+including tests against a real PostgreSQL 16 instance, which CI runs on every
+push and pull request; neither has been benchmarked or run at production
+scale.
 
 **Breaking change, unit binding (I25).** A monetary quantity is the atomic
 pair `(value, currency)`; Authority compares `currency` by exact equality and
@@ -469,4 +390,26 @@ npm run typecheck    # tsc --noEmit
 npm test             # vitest run
 npm run demo         # the full scripted scenario
 npm run quickstart    # the short story from the top of this README
+node scripts/check-readme-demo-excerpt.mjs   # the README demo excerpt still matches the demo
 ```
+
+Without a reachable database, `npm test` skips the 17 PostgreSQL tests and
+still exits 0. To run them, point `TEST_DATABASE_URL` at an isolated
+PostgreSQL 16 database (the tests truncate its tables) and run the two files
+one after the other, then check the report:
+
+```
+TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/authority_graph_test \
+  npx vitest run \
+  tests/storage/postgresEventStore.test.ts \
+  tests/storage/postgresCapabilityIssuanceTransaction.test.ts \
+  --no-file-parallelism \
+  --reporter=default --reporter=json --outputFile.json=vitest-postgres.json
+node scripts/check-postgres-report.mjs vitest-postgres.json
+```
+
+The second command fails unless every PostgreSQL test ran and passed (none
+skipped, failed or todo, at least 17 passed). CI
+([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs all of the
+above: the first block on Node 20 and 22, the PostgreSQL block on Node 20
+against a `postgres:16` service.
