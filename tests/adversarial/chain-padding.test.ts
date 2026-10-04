@@ -6,8 +6,9 @@
  * passesThroughDelegation only tested array membership.
  *
  * This is a self-written reproduction (not part of the external audit) —
- * kept in its own file so tests/adversarial/independent-audit.test.ts stays
- * an untouched record of what that audit actually found.
+ * kept in its own file so the audit block of
+ * tests/adversarial/independent-audit.test.ts stays a record of what that
+ * audit actually found (that file's header lists its later edits).
  *
  * Same process rule as everywhere else in this repo: if this test fails,
  * the fix belongs in the implementation, never here.

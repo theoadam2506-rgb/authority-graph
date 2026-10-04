@@ -344,9 +344,14 @@ action was legitimate at sequence 8, back when it ran.
 
 The spec and its invariants were submitted to an independent adversarial
 audit, which found four real gaps in the implementation (not in the spec's
-intent). All four were fixed; the reproductions the audit wrote are kept
-verbatim in [`tests/adversarial/independent-audit.test.ts`](./tests/adversarial/independent-audit.test.ts),
-unmodified.
+intent). All four were fixed. The four reproductions the audit wrote are
+kept in the "Independent adversarial audit" block of
+[`tests/adversarial/independent-audit.test.ts`](./tests/adversarial/independent-audit.test.ts):
+their scenarios and assertions are unchanged since they were committed
+(`62369a1`), and their only later edit is a mechanical rewrite of threshold
+literals as currency-bound amounts (`f73e962`). The same file also holds,
+in a separately labeled block, one post-audit regression test that the
+audit did not write (I6 action-instance binding, added by pull request #9).
 
 ## Approvals are bound to action instances (I6)
 

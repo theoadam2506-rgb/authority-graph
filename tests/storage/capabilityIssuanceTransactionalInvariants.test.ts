@@ -758,12 +758,10 @@ describe("T13 — PR4B-5A: a rejected draft's clock reading must not become a hi
 
     const result = await transaction.issue(authenticated(AGENT), key, command, deps, T3);
 
-    // SECURE, EXPECTED behavior once fixed: EXECUTED with an explicit
-    // temporal-consistency refusal, never a silent clamp to T4. ACTUAL,
-    // CURRENT behavior: store.append([draft], T3) clamps T3 up to T4 via
-    // advanceTrustedTime(this.lastTrustedTimeMs, T3) and silently writes
-    // authority_time = T4 — this assertion is the SECURE expectation,
-    // expected to fail until PR4B-5A's fix lands.
+    // T3 is earlier than the store's trusted-time boundary (T4, set by the
+    // rejected draft above): the transaction is EXECUTED with an explicit
+    // temporal-consistency refusal. T3 is never silently raised to T4 or
+    // accepted, and no capability is written.
     expect(result.outcome).toBe("EXECUTED");
     if (result.outcome !== "EXECUTED") {
       throw new Error("expected EXECUTED");
