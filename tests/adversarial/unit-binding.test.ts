@@ -5,9 +5,11 @@
  *
  * Each `describe` below is tagged with the Round 3 test identifier it
  * implements (M1-M7); F1-F3 live in tests/domain/actionFingerprint.test.ts,
- * and M6 (PR #9 action-instance binding) is the unchanged pre-existing
- * tests/adversarial/independent-audit.test.ts and
- * tests/cli/invoked-authority-rendering.test.ts.
+ * and M6 (PR #9 action-instance binding) is covered by the pre-existing
+ * post-audit regression test in tests/adversarial/independent-audit.test.ts
+ * and by tests/cli/invoked-authority-rendering.test.ts, whose scenarios this
+ * change leaves as they were (only their threshold literals become
+ * currency-bound).
  */
 import { describe, expect, it } from "vitest";
 import { authorityAt, explainAction, ingestAll } from "../../src/engine/authority.js";

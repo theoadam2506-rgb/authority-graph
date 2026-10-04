@@ -1,9 +1,22 @@
 /**
- * Reproductions written by the independent security audit.
+ * Reproductions written by the independent security audit, followed by one
+ * post-audit regression test that the audit did not write.
  *
- * They state the contract in SPEC.md / EVENT_MODEL.md and deliberately do
- * not modify the production implementation.  They are expected to fail on
- * the audited revision when a finding is present.
+ * Provenance (`git log -- tests/adversarial/independent-audit.test.ts`):
+ * - The four tests in the "Independent adversarial audit" block were
+ *   committed in 62369a1 ("test: independent audit findings (4 red)").
+ *   Their scenarios and assertions are unchanged since then. Their only
+ *   later edit is f73e962, which mechanically rewrote the threshold
+ *   literals `thresholds(100, 1_000)` / `thresholds(100, 100)` as
+ *   `thresholds(EUR(...), EUR(...))` when thresholds became
+ *   currency-bound (I25).
+ * - The test in the "Post-audit regression" block was added after the
+ *   audit, in 46e1321 (pull request #9). It is the reference test for I6
+ *   action-instance binding in SPEC.md, not an audit finding.
+ *
+ * The audit's tests state the contract in SPEC.md / EVENT_MODEL.md and
+ * deliberately do not modify the production implementation.  They are
+ * expected to fail on the audited revision when a finding is present.
  */
 import { describe, expect, it } from "vitest";
 import { authorityAt, explainAction, ingestAll } from "../../src/engine/authority.js";
@@ -226,7 +239,10 @@ describe("Independent adversarial audit", () => {
     // sequence 2 cannot be authorized by an event assigned sequence 3.
     expect(explainAction(ingested.canonicalStore, { actionId: action("audit-backdated-action") }, instant(3)).execution?.authorityAtDecision.outcome).toBe("UNKNOWN");
   });
+});
 
+// Not written by the audit: added after it, in 46e1321 (pull request #9).
+describe("Post-audit regression (not part of the independent audit)", () => {
   it("I6 — an approval cannot authorize a different action_id even when fingerprint, requester, and invoked delegation are identical", () => {
     // D1 requires approval in the [100, 1000] band. Two distinct actions,
     // a1 and a2, share the exact same fingerprint (same capability, same

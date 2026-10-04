@@ -109,7 +109,7 @@ describe("[PR4B-5] issueCapability takes authorityTime as its own explicit param
     expect(commandKeys).not.toContain("authorityTime");
   });
 
-  it("[was BLOCKER, now fixed] rejects an issuance whose real evaluation instant T3 is past the delegation's expires_at T2, even though the log's own last authority_time T1 predates T2", () => {
+  it("rejects an issuance whose real evaluation instant T3 is past the delegation's expires_at T2, even though the log's own last authority_time T1 predates T2", () => {
     const { store, command } = buildStaleLogScenario();
 
     const result = issueCapability(store, authenticated(AGENT), command, makeDependencies(), T3);
@@ -229,7 +229,7 @@ describe("[PR4B-5] the exact same explicit authorityTime flows through the whole
   });
 });
 
-describe("[PR4B-5A RED] STALE_AUTHORITY_TIME — authorityTime older than the canonical maximum already visible in the snapshot", () => {
+describe("[PR4B-5A] STALE_AUTHORITY_TIME — authorityTime older than the canonical maximum already visible in the snapshot", () => {
   /**
    * PR4B-5A — the follow-up debate to PR4B-5 found that an explicit
    * `authorityTime` can still be OLDER than an authority_time already
@@ -285,7 +285,7 @@ describe("[PR4B-5A RED] STALE_AUTHORITY_TIME — authorityTime older than the ca
     return { store, command };
   }
 
-  it("[BLOCKER RED] authorityTime = T3, strictly before the canonical maximum T4 already visible, must be refused with STALE_AUTHORITY_TIME — currently FAILS: the capability is issued", () => {
+  it("rejects authorityTime = T3, strictly earlier than the canonical maximum T4 already visible, with STALE_AUTHORITY_TIME and issues no capability", () => {
     const { store, command } = buildNewerCanonicalEventScenario();
 
     // Sanity check on the scenario itself.
@@ -299,12 +299,9 @@ describe("[PR4B-5A RED] STALE_AUTHORITY_TIME — authorityTime older than the ca
 
     const result = issueCapability(store, authenticated(AGENT), command, deps, T3);
 
-    // SECURE, EXPECTED behavior once fixed: a temporal-consistency refusal,
-    // never an authority verdict (the agent's own authority is fine at T3).
-    // ACTUAL, CURRENT behavior: issueCapability has no notion of "the
-    // canonical maximum already visible" — it issues at T3 without
-    // complaint. This assertion is deliberately the SECURE expectation; it
-    // is expected to fail until PR4B-5A's fix lands.
+    // A temporal-consistency refusal, never an authority verdict (the
+    // agent's own authority is fine at T3): issueCapability compares T3 with
+    // the canonical maximum already visible in the snapshot and refuses.
     expect(result.ok).toBe(false);
     expect(result).toEqual({ ok: false, reason: "STALE_AUTHORITY_TIME" });
 

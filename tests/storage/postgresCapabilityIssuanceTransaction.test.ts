@@ -531,12 +531,11 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
 
     const result = await transaction.issue(authenticated(AGENT), key, command, makeDependencies(), T3);
 
-    // SECURE, EXPECTED behavior once fixed: EXECUTED carrying an explicit
-    // temporal-consistency refusal, never NOT_AUTHORIZED (the agent's
-    // authority is not the problem), never a row silently written with
-    // authority_time = T3 (which the current, unfixed code does — Postgres
-    // never clamps at all, see the PR4B-5A audit). This is the SECURE
-    // expectation; it is expected to fail until PR4B-5A's fix lands.
+    // T3 is earlier than the canonical maximum T4 already in the database:
+    // the transaction is EXECUTED carrying an explicit temporal-consistency
+    // refusal, never NOT_AUTHORIZED (the agent's authority is not the
+    // problem). T3 is never silently raised or accepted, and no capability
+    // row is written.
     expect(result.outcome).toBe("EXECUTED");
     if (result.outcome !== "EXECUTED") {
       throw new Error("expected EXECUTED");
