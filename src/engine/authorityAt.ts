@@ -2,6 +2,8 @@
  * authorityAt — the prospective operation (SPEC.md, "question prospective").
  * Pure function: no I/O, no Date.now(), no global state, no mutation of its
  * inputs. Never requires an ACTION_REQUESTED to exist anywhere in `events`.
+ * Its result is fingerprint-scoped discovery, not an execution authorization
+ * for a particular action instance or invoked delegation.
  */
 import type { AuthorityDecision, AuthorityInstant, AuthorityQuery, Iso8601 } from "../domain/types.js";
 import type { CanonicalStore } from "../domain/events.js";

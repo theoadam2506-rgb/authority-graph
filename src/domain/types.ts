@@ -317,7 +317,8 @@ export function nonMonetaryParameters(recipient?: RecipientId): ActionParameters
 // authorityAt is PROSPECTIVE: "would this be authorized in this state?". It
 // never requires a pre-existing ACTION_REQUESTED — the engine must not be
 // structurally dependent on a historical event to answer a question about
-// the current state of authority.
+// the current state of authority. Its answer is fingerprint-scoped discovery,
+// not proof that a particular action instance may be executed.
 //
 // explainAction is HISTORICAL: "what happened for this action, and why?". It
 // looks up the immutable ACTION_REQUESTED for a given actionId and evaluates
@@ -355,7 +356,10 @@ export type UnknownReasonCode =
  * The shared decision shape. Deliberately carries no reference back to any
  * specific ACTION_REQUESTED/actionId: it is the answer to "is (agentId,
  * capability, parameters) authorized at this sequence", full stop — a
- * question that makes sense whether or not any action was ever requested.
+ * fingerprint-scoped discovery question that makes sense whether or not any
+ * action was ever requested. It is never proof that a particular action
+ * instance may be executed; use instance-bound invoked validation or
+ * capability issuance for that decision.
  */
 export type AuthorityDecision =
   | { readonly outcome: "AUTHORIZED"; readonly chain: readonly DelegationId[]; readonly approvalId?: ApprovalId }
