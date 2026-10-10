@@ -108,6 +108,22 @@ been requested, and a question about what actually happened to one action
 needs that action's own history (its approvals, its denials): history a
 fresh, unrelated prospective query has no business consulting.
 
+### Execution decisions are instance-bound
+
+`authorityAt` answers a fingerprint-scoped discovery question. Its
+`AUTHORIZED` result means that compatible authority currently exists for the
+given agent, capability, and parameters; it is **not** proof that a particular
+action instance may be executed. In particular, a compatible approval may have
+been granted for another action with the same fingerprint, or another
+delegation held by the same agent may cover the capability.
+
+Before an external effect, evaluate the exact `ACTION_REQUESTED` and the
+delegation it invokes through `explainAction(...).invokedAuthorityNow`, or use
+transactional capability issuance. Those paths bind the decision to the exact
+`action_id` and invoked delegation. An instance-bound decision is not a
+reservation and does not consume an approval: durable capability issuance and
+recorded execution have their own transactional and event semantics.
+
 ## Capability issuance
 
 Alongside the two read-side operations above, the engine also exposes a
