@@ -33,10 +33,11 @@ import { PostgresCapabilityIssuanceTransaction } from "../../src/storage/postgre
 import type { IssueCapabilityDependencies } from "../../src/engine/issueCapability.js";
 import type { AuthenticatedPrincipal } from "../../src/domain/authenticatedPrincipal.js";
 import { isEventType, toDraft } from "../../src/domain/events.js";
-import { capabilityId, clientIdempotencyKey, enforcementPointId, expiresAt, iso8601, monetaryParameters, nonMonetaryParameters, thresholds, type PrincipalId } from "../../src/domain/types.js";
+import { actionId, capabilityId, clientIdempotencyKey, enforcementPointId, expiresAt, iso8601, monetaryParameters, nonMonetaryParameters, thresholds, type PrincipalId } from "../../src/domain/types.js";
 import type { IssueCapabilityCommand } from "../../src/domain/capabilityCommand.js";
 import { principal } from "../fixtures/ids.js";
-import { EUR, PURCHASE_ORDER_CREATE, THEO, actionRequest, rootDelegation, sequentialClock, subDelegation } from "../fixtures/scenarios.js";
+import { EUR, PURCHASE_ORDER_CREATE, THEO, actionRequest, rootDelegation, sequentialClock, subDelegation, timeAt } from "../fixtures/scenarios.js";
+import { I6_AGENT, i6Through } from "../fixtures/i6InstanceBinding.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgresql://postgres:postgres@127.0.0.1:5432/authority_graph_test";
 
@@ -609,6 +610,46 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
 
     const finalEvents = await pool.query("SELECT count(*) FROM authority_events WHERE event_type = 'CAPABILITY_ISSUED'");
     expect(Number(finalEvents.rows[0].count)).toBe(1);
+  });
+
+  it("I6 — P1 (bound to A1) never yields a capability for a fingerprint-identical A2; only P2, bound to A2, does", async () => {
+    // tests/fixtures/i6InstanceBinding.ts events 1..6: D1, A1, A2, P1 for A1, forged ACTION_EXECUTED for A2 citing [D1, P1].
+    await seed(i6Through(6).map(toDraft));
+    const transaction = new PostgresCapabilityIssuanceTransaction(pool);
+    const commandA2: IssueCapabilityCommand = { action_id: actionId("A2"), enforcement_point_id: EP };
+    const deps = makeDependencies();
+
+    const refused = await transaction.issue(authenticated(I6_AGENT), clientIdempotencyKey("pg-i6-refused"), commandA2, deps, AUTHORITY_TIME);
+    expect(refused.outcome).toBe("EXECUTED");
+    if (refused.outcome !== "EXECUTED") {
+      throw new Error("expected EXECUTED (a refusal)");
+    }
+    expect(refused.result).toMatchObject({ ok: false, reason: "NOT_AUTHORIZED", decision: { outcome: "REQUIRES_APPROVAL" } });
+    const afterRefusal = await pool.query("SELECT count(*) FROM authority_events WHERE event_type = 'CAPABILITY_ISSUED'");
+    expect(Number(afterRefusal.rows[0].count)).toBe(0);
+
+    // P2, explicitly bound to A2 (events 7..8), appended with explicit authority times after the seed.
+    const p2Store = new PostgresEventStore(pool, { authorityTime: (_draft, index) => iso8601(timeAt(10 + index)) });
+    const appended = await p2Store.append(i6Through(8).slice(6).map(toDraft));
+    for (const outcome of appended.outcomes) {
+      if (!outcome.accepted) {
+        throw new Error(`P2 fixture rejected: ${outcome.reasonCode}`);
+      }
+    }
+
+    const issued = await transaction.issue(authenticated(I6_AGENT), clientIdempotencyKey("pg-i6-issued"), commandA2, deps, AUTHORITY_TIME);
+    expect(issued.outcome).toBe("EXECUTED");
+    if (issued.outcome !== "EXECUTED" || !issued.result.ok) {
+      throw new Error("expected an issued capability for A2 after P2");
+    }
+    expect(issued.result.capability.granted_chain_ref).toEqual([
+      { kind: "delegation", delegation_id: "D1" },
+      { kind: "approval", approval_id: "P2" },
+    ]);
+    const rows = await pool.query("SELECT payload FROM authority_events WHERE event_type = 'CAPABILITY_ISSUED'");
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0].payload.action_id).toBe("A2");
+    expect(JSON.stringify(rows.rows[0].payload.granted_chain_ref)).not.toContain("P1");
   });
 
   it("crash consistency — an uncommitted concurrent write is never observable: a second connection's INSERT, left uncommitted, does not appear once its client disconnects", async () => {
