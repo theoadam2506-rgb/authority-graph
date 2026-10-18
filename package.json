@@ -23,6 +23,7 @@
     "vitest": "^2.1.4"
   },
   "dependencies": {
+    "json-canonicalize": "^3.0.1",
     "pg": "^8.23.0"
   }
 }

@@ -98,6 +98,11 @@ export const executionResultCode = (value: string): ExecutionResultCode =>
 /** Output of computeActionFingerprint (events.ts) only — never authored by a source. */
 export type Fingerprint = Branded<string, "Fingerprint">;
 
+/** SHA-256 of complete tool arguments after RFC 8785 canonicalization. */
+export type ArgumentsDigest = Branded<string, "ArgumentsDigest">;
+
+export type FingerprintSchemeVersion = 1 | 2;
+
 export type Iso8601 = Branded<string, "Iso8601">;
 export const iso8601 = (value: string): Iso8601 => {
   if (Number.isNaN(Date.parse(value))) {
@@ -298,16 +303,46 @@ export function monetaryUnitOf(constraints: DelegationConstraints): MonetaryUnit
  * "meant together" — hence a discriminated union rather than three
  * independent optional fields.
  */
-export type ActionParameters =
-  | { readonly kind: "monetary"; readonly amount: Money; readonly recipient?: RecipientId }
-  | { readonly kind: "non_monetary"; readonly recipient?: RecipientId };
+type LegacyFingerprint = { readonly fingerprint_scheme_version?: 1; readonly arguments_digest?: never };
+type DigestBoundFingerprint = { readonly fingerprint_scheme_version: 2; readonly arguments_digest: ArgumentsDigest };
 
-export function monetaryParameters(amount: Money, recipient?: RecipientId): ActionParameters {
+export type ActionParameters =
+  | ({ readonly kind: "monetary"; readonly amount: Money; readonly recipient?: RecipientId } & (LegacyFingerprint | DigestBoundFingerprint))
+  | ({ readonly kind: "non_monetary"; readonly recipient?: RecipientId } & (LegacyFingerprint | DigestBoundFingerprint));
+
+export function monetaryParameters(amount: Money, recipient?: RecipientId, argumentsDigest?: ArgumentsDigest): ActionParameters {
+  if (argumentsDigest !== undefined) {
+    return { kind: "monetary", amount, ...(recipient === undefined ? {} : { recipient }), fingerprint_scheme_version: 2, arguments_digest: argumentsDigest };
+  }
   return recipient === undefined ? { kind: "monetary", amount } : { kind: "monetary", amount, recipient };
 }
 
-export function nonMonetaryParameters(recipient?: RecipientId): ActionParameters {
+export function nonMonetaryParameters(recipient?: RecipientId, argumentsDigest?: ArgumentsDigest): ActionParameters {
+  if (argumentsDigest !== undefined) {
+    return { kind: "non_monetary", ...(recipient === undefined ? {} : { recipient }), fingerprint_scheme_version: 2, arguments_digest: argumentsDigest };
+  }
   return recipient === undefined ? { kind: "non_monetary" } : { kind: "non_monetary", recipient };
+}
+
+/** Runtime boundary check for persisted or externally authored event payloads. */
+export function isWellFormedActionParameters(candidate: unknown): candidate is ActionParameters {
+  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+  try {
+    const value = candidate as Record<string, unknown>;
+    const recipient = value.recipient;
+    if (recipient !== undefined && (typeof recipient !== "string" || recipient.length === 0)) return false;
+    if (value.kind === "monetary") {
+      if (!isWellFormedMoney(value.amount)) return false;
+    } else if (value.kind !== "non_monetary" || value.amount !== undefined) {
+      return false;
+    }
+    const version = value.fingerprint_scheme_version;
+    const digest = value.arguments_digest;
+    if (version === undefined || version === 1) return digest === undefined;
+    return version === 2 && typeof digest === "string" && /^[0-9a-f]{64}$/.test(digest);
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -507,6 +542,7 @@ export type IngestRejectionCode =
   | "UNAUTHORIZED_SUBDELEGATION"
   | "UNAUTHORIZED_APPROVAL_DECISION"
   | "UNKNOWN_SCHEMA_VERSION"
+  | "MALFORMED_ACTION_PARAMETERS"
   // PR4B-5A — never produced by `processDraft`/ingest.ts (legacy ingestion
   // is entirely untouched): `InMemoryEventStore.append()` alone returns
   // this, strictly scoped to the one draft carrying the `explicitAuthorityTime`

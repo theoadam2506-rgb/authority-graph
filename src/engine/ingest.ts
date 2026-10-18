@@ -35,6 +35,7 @@ import { toDraft, type AuthorityEvent, type CanonicalStore, type DraftAuthorityE
 import {
   CURRENT_SCHEMA_VERSION,
   iso8601,
+  isWellFormedActionParameters,
   sequenceNumber,
   type ActionId,
   type DelegationId,
@@ -335,6 +336,10 @@ export function processDraft(
 
   if (draft.schema_version !== CURRENT_SCHEMA_VERSION) {
     return rejected("UNKNOWN_SCHEMA_VERSION");
+  }
+
+  if (draft.event_type === "ACTION_REQUESTED" && !isWellFormedActionParameters(draft.payload.parameters)) {
+    return rejected("MALFORMED_ACTION_PARAMETERS");
   }
 
   // I11: reject recognizable PII shapes at the door. This is not, and cannot
