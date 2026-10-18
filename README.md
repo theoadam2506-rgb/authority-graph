@@ -394,6 +394,16 @@ including tests against a real PostgreSQL 16 instance, which CI runs on every
 push and pull request; neither has been benchmarked or run at production
 scale.
 
+### P1.5 security boundary for tool observation
+
+The core now supports a versioned V2 action fingerprint for observed tools:
+it binds the capability, amount, currency, recipient and a RFC 8785 digest of
+the complete tool arguments. Invalid V2 parameters are rejected at ingestion;
+canonical replay rejects malformed, duplicate or internally inconsistent
+evidence without throwing. A replay success means only “consistent with the
+asserted journal”, not proof of identity, execution, or journal completeness.
+See [`EVENT_MODEL.md`](./EVENT_MODEL.md#p15--fingerprint-scheme-v2-for-observed-tool-calls).
+
 **Breaking change, unit binding (I25).** A monetary quantity is the atomic
 pair `(value, currency)`; Authority compares `currency` by exact equality and
 never converts it. Two consequences for anything written against the earlier
