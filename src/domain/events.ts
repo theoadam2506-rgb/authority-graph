@@ -176,17 +176,46 @@ export function toDraft(event: AuthorityEvent): DraftAuthorityEvent {
 const FIELD_SEPARATOR = ""; // unit separator, per EVENT_MODEL.md
 const ABSENT = "∅"; // ∅, per EVENT_MODEL.md
 
+/**
+ * Version 2 applies when arguments_digest is present. Version 1 is retained
+ * exactly for historic V0 events that did not carry complete tool arguments.
+ */
+export const FINGERPRINT_SCHEME_VERSION = 2;
+
+function lengthPrefixed(label: string, value: string): string {
+  return `${label}:${Buffer.byteLength(value, "utf8")}:${value}`;
+}
+
 export function computeActionFingerprint(
   capabilityRequested: Capability,
   parameters: ActionParameters,
 ): Fingerprint {
   const amountSegment = parameters.kind === "monetary" ? String(parameters.amount.value) : ABSENT;
   const recipientSegment = parameters.recipient !== undefined ? String(parameters.recipient) : ABSENT;
+  // Keep the legacy layout byte-for-byte stable until an arguments digest is
+  // present. New tool integrations must always supply one.
+  if (parameters.fingerprint_scheme_version === undefined || parameters.fingerprint_scheme_version === 1) {
+    if (parameters.arguments_digest !== undefined) {
+      throw new Error("arguments_digest requires fingerprint scheme version 2");
+    }
+    const canonical = [
+      `resource=${capabilityRequested.resource}`,
+      `action=${capabilityRequested.action}`,
+      `amount=${amountSegment}`,
+      `recipient=${recipientSegment}`,
+    ].join(FIELD_SEPARATOR);
+    return createHash("sha256").update(canonical, "utf8").digest("hex") as Fingerprint;
+  }
+  if (parameters.fingerprint_scheme_version !== FINGERPRINT_SCHEME_VERSION || parameters.arguments_digest === undefined) {
+    throw new Error("Fingerprint scheme version 2 requires arguments_digest");
+  }
   const canonical = [
-    `resource=${capabilityRequested.resource}`,
-    `action=${capabilityRequested.action}`,
-    `amount=${amountSegment}`,
-    `recipient=${recipientSegment}`,
+    lengthPrefixed("fingerprint_scheme", String(FINGERPRINT_SCHEME_VERSION)),
+    lengthPrefixed("resource", capabilityRequested.resource),
+    lengthPrefixed("action", capabilityRequested.action),
+    lengthPrefixed("amount", amountSegment),
+    lengthPrefixed("recipient", recipientSegment),
+    lengthPrefixed("arguments_digest", parameters.arguments_digest),
   ].join(FIELD_SEPARATOR);
   return createHash("sha256").update(canonical, "utf8").digest("hex") as Fingerprint;
 }

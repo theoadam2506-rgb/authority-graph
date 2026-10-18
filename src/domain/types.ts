@@ -57,6 +57,12 @@ export const executionResultCode = (value: string): ExecutionResultCode =>
 /** Output of computeActionFingerprint (events.ts) only — never authored by a source. */
 export type Fingerprint = Branded<string, "Fingerprint">;
 
+/** SHA-256 of the complete tool arguments after RFC 8785 canonicalization. */
+export type ArgumentsDigest = Branded<string, "ArgumentsDigest">;
+
+/** V1 is historic; V2 binds a digest of complete tool arguments. */
+export type FingerprintSchemeVersion = 1 | 2;
+
 export type Iso8601 = Branded<string, "Iso8601">;
 export const iso8601 = (value: string): Iso8601 => {
   if (Number.isNaN(Date.parse(value))) {
@@ -202,16 +208,43 @@ export interface DelegationConstraints {
  * "meant together" — hence a discriminated union rather than three
  * independent optional fields.
  */
-export type ActionParameters =
-  | { readonly kind: "monetary"; readonly amount: Money; readonly recipient?: RecipientId }
-  | { readonly kind: "non_monetary"; readonly recipient?: RecipientId };
+type LegacyFingerprint = { readonly fingerprint_scheme_version?: 1; readonly arguments_digest?: never };
+type DigestBoundFingerprint = { readonly fingerprint_scheme_version: 2; readonly arguments_digest: ArgumentsDigest };
 
-export function monetaryParameters(amount: Money, recipient?: RecipientId): ActionParameters {
-  return recipient === undefined ? { kind: "monetary", amount } : { kind: "monetary", amount, recipient };
+export type ActionParameters =
+  | ({ readonly kind: "monetary"; readonly amount: Money; readonly recipient?: RecipientId } & (LegacyFingerprint | DigestBoundFingerprint))
+  | ({ readonly kind: "non_monetary"; readonly recipient?: RecipientId } & (LegacyFingerprint | DigestBoundFingerprint));
+
+export function monetaryParameters(amount: Money, recipient?: RecipientId, argumentsDigest?: ArgumentsDigest): ActionParameters {
+  if (argumentsDigest !== undefined) {
+    return {
+      kind: "monetary",
+      amount,
+      ...(recipient === undefined ? {} : { recipient }),
+      fingerprint_scheme_version: 2,
+      arguments_digest: argumentsDigest,
+    };
+  }
+  return {
+    kind: "monetary",
+    amount,
+    ...(recipient === undefined ? {} : { recipient }),
+  };
 }
 
-export function nonMonetaryParameters(recipient?: RecipientId): ActionParameters {
-  return recipient === undefined ? { kind: "non_monetary" } : { kind: "non_monetary", recipient };
+export function nonMonetaryParameters(recipient?: RecipientId, argumentsDigest?: ArgumentsDigest): ActionParameters {
+  if (argumentsDigest !== undefined) {
+    return {
+      kind: "non_monetary",
+      ...(recipient === undefined ? {} : { recipient }),
+      fingerprint_scheme_version: 2,
+      arguments_digest: argumentsDigest,
+    };
+  }
+  return {
+    kind: "non_monetary",
+    ...(recipient === undefined ? {} : { recipient }),
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -91,19 +91,27 @@ indépendamment de I8.
 ## Empreinte canonique d'action (`action_fingerprint`, I15)
 
 Calculée par Authority, jamais fournie telle quelle par la source sans
-vérification. Entrées, dans cet ordre exact, chacune convertie en chaîne UTF-8 (un
-champ absent est représenté par le sentinel littéral `∅`, un entier par sa
-représentation décimale sans zéro ni signe non significatif) :
+vérification. Les événements historiques V0 sans `arguments_digest` gardent le
+schéma d'empreinte historique **V1** afin que leur replay reste stable. Toute
+nouvelle intégration d'outil doit fournir `fingerprint_scheme_version: 2` et
+`arguments_digest`, un SHA-256 du JSON des
+arguments complets canonicalisé selon RFC 8785 ; les arguments bruts ne sont pas
+stockés dans Authority.
 
-1. `capability.resource`
-2. `capability.action`
-3. `parameters.amount` (ou `∅`)
-4. `parameters.recipient` (ou `∅`)
+Avec le schéma V2, les six segments suivants sont encodés en UTF-8,
+prefixés par leur longueur et séparés par U+001F (un champ absent est le sentinel
+littéral `∅`) :
 
-Les quatre segments sont joints par le séparateur U+001F (unit separator) en une
-seule chaîne, puis hashés en SHA-256, encodés en hexadécimal minuscule. Le résultat
-est `action_fingerprint`. Cette fonction est pure et déterministe (I2) : mêmes
-entrées ⇒ même empreinte, toujours.
+1. la version littérale `2`
+2. `capability.resource`
+3. `capability.action`
+4. `parameters.amount` (ou `∅`)
+5. `parameters.recipient` (ou `∅`)
+6. `parameters.arguments_digest`
+
+La chaîne est hashée en SHA-256, encodée en hexadécimal minuscule. Le résultat est
+`action_fingerprint`. Cette fonction est pure et déterministe (I2) : mêmes entrées
+⇒ même empreinte, toujours.
 
 ## Les 8 types d'événements
 
@@ -176,7 +184,7 @@ a pu diminuer, depuis).
 | `requesting_principal_id` | identifiant opaque | Le principal qui demande à agir. |
 | `delegation_id` | identifiant opaque | La délégation/sous-délégation invoquée. |
 | `capability_requested` | `{resource, action}` exact | Capacité exacte requise. |
-| `parameters` | `{amount?: entier, currency?, recipient?: identifiant opaque}` | Seuls `amount`, `currency` et `recipient` sont typés et entrent dans `action_fingerprint` (I15) ; aucun autre champ métier n'est interprété par le moteur en V0. |
+| `parameters` | `{amount?: entier, currency?, recipient?: identifiant opaque, fingerprint_scheme_version?: 1 \| 2, arguments_digest?: sha256}` | `amount`, `currency` et `recipient` restent typés. V1 interdit le digest ; une nouvelle intégration doit utiliser V2 **et** ajouter le SHA-256 RFC 8785 de tous ses arguments dans `arguments_digest`, qui entre dans `action_fingerprint` (I15). Aucun argument brut supplémentaire n'est interprété par le moteur en V0. |
 
 ### 5. `APPROVAL_REQUESTED`
 

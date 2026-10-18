@@ -374,11 +374,14 @@ et ne doivent être ni affaiblis ni reformulés au fil de l'implémentation.
     implicitement sur l'empreinte canonique (`action_fingerprint`, voir
     `EVENT_MODEL.md`) de l'`ACTION_REQUESTED` qu'elle vise, calculée à partir de
     `capability_requested.resource`, `capability_requested.action`,
-    `parameters.amount` et `parameters.recipient`, dans cet ordre exact. Une
+    `parameters.amount`, `parameters.recipient` et, pour les nouvelles
+    intégrations d'outils, `parameters.fingerprint_scheme_version: 2` et
+    `parameters.arguments_digest` (SHA-256 RFC 8785 de tous les arguments),
+    dans cet ordre exact. Une
     `ACTION_EXECUTED` dont l'`action_fingerprint` déclaré diffère de l'empreinte de
     l'`ACTION_REQUESTED` de même `action_id` est `DENIED`, même si `action_id` et
-    `approval_id` correspondent par ailleurs. Test : faire varier `parameters` (le
-    montant ou le destinataire) entre l'`ACTION_REQUESTED` approuvée et
+    `approval_id` correspondent par ailleurs. Test : faire varier `parameters`
+    (montant, destinataire ou digest des arguments) entre l'`ACTION_REQUESTED` approuvée et
     l'`ACTION_EXECUTED` doit produire `DENIED`, jamais `AUTHORIZED` par simple
     correspondance d'`action_id`.
 16. **I16 — Consommation à usage unique.** Un `approval_id` donné ne peut être

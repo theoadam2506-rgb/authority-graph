@@ -163,15 +163,22 @@ export function explainAction(events: CanonicalStore, query: ActionExplanationQu
   }
 
   const requestFingerprint = computeActionFingerprint(request.payload.capability_requested, request.payload.parameters);
-  const authorityAtDecision: AuthorityDecision =
-    execution.payload.action_fingerprint === requestFingerprint
-      ? resolveActionAuthority(
-          request,
-          events,
-          execution.payload.decision_sequence,
-          reconstructAuthorityTime(events, execution.payload.decision_sequence),
-        )
-      : { outcome: "DENIED", reasonCode: "C6_ACTION_FINGERPRINT_MISMATCH" };
+  let authorityAtDecision: AuthorityDecision;
+  if (execution.payload.decision_sequence >= execution.sequence) {
+    // An execution cannot cite a decision that happened after it (I4 causal
+    // boundary). A decision may legitimately predate a later recorded
+    // ACTION_REQUESTED in V0's observation model.
+    authorityAtDecision = { outcome: "UNKNOWN", reasonCode: "C24_NO_VALID_CHAIN" };
+  } else if (execution.payload.action_fingerprint !== requestFingerprint) {
+    authorityAtDecision = { outcome: "DENIED", reasonCode: "C6_ACTION_FINGERPRINT_MISMATCH" };
+  } else {
+    authorityAtDecision = resolveActionAuthority(
+      request,
+      events,
+      execution.payload.decision_sequence,
+      reconstructAuthorityTime(events, execution.payload.decision_sequence),
+    );
+  }
 
   const consumedApprovalId = findApprovalLink(execution.payload.authority_chain_ref);
 

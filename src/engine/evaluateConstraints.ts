@@ -13,6 +13,7 @@ import type { ActionParameters, ApprovalId, AuthorityDecision, Capability, Deleg
 import type { DelegationEvent } from "./validateChain.js";
 
 type ActionRequestedEvent = Extract<AuthorityEvent, { readonly event_type: "ACTION_REQUESTED" }>;
+type ApprovalRequestedEvent = Extract<AuthorityEvent, { readonly event_type: "APPROVAL_REQUESTED" }>;
 
 function findActionRequested(actionId: ActionRequestedEvent["payload"]["action_id"], visibleStore: CanonicalStore): ActionRequestedEvent | undefined {
   for (const event of visibleStore) {
@@ -21,6 +22,35 @@ function findActionRequested(actionId: ActionRequestedEvent["payload"]["action_i
     }
   }
   return undefined;
+}
+
+function findApprovalRequested(approvalId: ApprovalId, visibleStore: CanonicalStore): ApprovalRequestedEvent | undefined {
+  for (const event of visibleStore) {
+    if (event.event_type === "APPROVAL_REQUESTED" && event.payload.approval_id === approvalId) {
+      return event;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * An execution may affect a budget only if its own immutable request matches
+ * the asserted executor, decision point, and fingerprint. Full authority is
+ * still reconstructed by explainAction; this low-level guard prevents an
+ * arbitrary execution record from spending another principal's budget.
+ */
+function isExecutionSelfConsistent(event: Extract<AuthorityEvent, { readonly event_type: "ACTION_EXECUTED" }>, visibleStore: CanonicalStore): boolean {
+  const request = findActionRequested(event.payload.action_id, visibleStore);
+  if (request === undefined) {
+    return false;
+  }
+  if (event.payload.executed_by_principal_id !== request.payload.requesting_principal_id) {
+    return false;
+  }
+  if (event.payload.decision_sequence >= event.sequence) {
+    return false;
+  }
+  return event.payload.action_fingerprint === computeActionFingerprint(request.payload.capability_requested, request.payload.parameters);
 }
 
 /**
@@ -36,6 +66,9 @@ export function remainingBudget(delegationId: DelegationId, totalBudget: Money, 
   let spent = 0;
   for (const event of visibleStore) {
     if (event.event_type !== "ACTION_EXECUTED") {
+      continue;
+    }
+    if (!isExecutionSelfConsistent(event, visibleStore)) {
       continue;
     }
     const passesThroughDelegation = event.payload.authority_chain_ref.some(
@@ -66,9 +99,15 @@ function budgetExceeded(chain: readonly DelegationEvent[], amount: number, visib
 }
 
 function isApprovalConsumed(approvalId: ApprovalId, visibleStore: CanonicalStore): boolean {
+  const approvalRequest = findApprovalRequested(approvalId, visibleStore);
+  if (approvalRequest === undefined) {
+    return false;
+  }
   return visibleStore.some(
     (event) =>
       event.event_type === "ACTION_EXECUTED" &&
+      event.payload.action_id === approvalRequest.payload.action_id &&
+      isExecutionSelfConsistent(event, visibleStore) &&
       event.payload.authority_chain_ref.some((link) => link.kind === "approval" && link.approval_id === approvalId),
   );
 }
@@ -98,6 +137,10 @@ function findGrantOutcome(
     }
     if (event.principal_id !== habilitatedGrantor || event.payload.approving_principal_id !== habilitatedGrantor) {
       continue; // I14: not the delegation's own grantor — ignored for decision
+    }
+    const approvalRequest = findApprovalRequested(event.payload.approval_id, visibleStore);
+    if (approvalRequest === undefined || approvalRequest.payload.action_id !== event.payload.action_id) {
+      continue; // no approval flow exists for this grant
     }
     const request = findActionRequested(event.payload.action_id, visibleStore);
     if (request === undefined) {

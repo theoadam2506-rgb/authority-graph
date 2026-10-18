@@ -9,10 +9,36 @@ See [`SPEC.md`](./SPEC.md), [`THREAT_MODEL.md`](./THREAT_MODEL.md) and
 [`EVENT_MODEL.md`](./EVENT_MODEL.md) for the invariants, threat table, and
 event schema this engine is built against.
 
+## Current project direction
+
+The engine is being taken toward an **observe-only MCP demonstration**: a
+verifier must be able to replay the authority behind an agent action after the
+fact, without Authority becoming an identity provider, policy engine, gateway,
+or hosted platform. The core remains deliberately honest about its V0
+assurance level: events are asserted, not cryptographically proven.
+
+- [`docs/PROJECT.md`](./docs/PROJECT.md) — product boundary and first paid
+  offer hypothesis.
+- [`docs/BUILD_PLAN.md`](./docs/BUILD_PLAN.md) — incremental technical plan.
+- [`docs/DECISIONS.md`](./docs/DECISIONS.md) — decisions that constrain the
+  project.
+- [`docs/WORKLOG.md`](./docs/WORKLOG.md) — current verified state and next
+  action.
+- [`docs/GO_TO_MARKET.md`](./docs/GO_TO_MARKET.md) — first-payment experiment.
+- [`docs/CLAUDE_BUILD_DEBATE.md`](./docs/CLAUDE_BUILD_DEBATE.md) — prompt for
+  a hostile construction review.
+
 ## Run the demo
 
 ```
 npm run demo
+```
+
+For the smaller business-facing Authority Proof scenario (three MCP-shaped
+write actions, without an MCP transport yet):
+
+```
+npm run demo:proof
 ```
 
 One command, no database, no network, no API key. It plays a full scenario —
