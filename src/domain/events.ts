@@ -29,6 +29,7 @@ import type {
   SchemaVersion,
   SequenceNumber,
 } from "./types.js";
+import { isWellFormedActionParameters } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Envelope
@@ -257,6 +258,7 @@ export function toDraft<E extends AuthorityEvent>(event: E): Extract<DraftAuthor
 
 const FIELD_SEPARATOR = "\u001f"; // unit separator, per EVENT_MODEL.md
 const ABSENT = "∅"; // ∅, per EVENT_MODEL.md
+export const FINGERPRINT_SCHEME_VERSION = 2;
 
 /**
  * One `label=<LEN>:<value>` segment, LEN being the value's length in UTF-8
@@ -274,17 +276,32 @@ export function computeActionFingerprint(
   capabilityRequested: Capability,
   parameters: ActionParameters,
 ): Fingerprint {
+  if (!isWellFormedActionParameters(parameters)) {
+    return createHash("sha256").update("invalid-action-parameters", "utf8").digest("hex") as Fingerprint;
+  }
   // I25: amount and currency are one atomic value — present together (a
   // monetary action) or absent together (a non-monetary one).
   const amountSegment = parameters.kind === "monetary" ? String(parameters.amount.value) : undefined;
   const currencySegment = parameters.kind === "monetary" ? String(parameters.amount.currency) : undefined;
   const recipientSegment = parameters.recipient !== undefined ? String(parameters.recipient) : undefined;
-  const canonical = [
+  const v1Canonical = [
     fingerprintSegment("resource", capabilityRequested.resource),
     fingerprintSegment("action", capabilityRequested.action),
     fingerprintSegment("amount", amountSegment),
     fingerprintSegment("currency", currencySegment),
     fingerprintSegment("recipient", recipientSegment),
   ].join(FIELD_SEPARATOR);
-  return createHash("sha256").update(canonical, "utf8").digest("hex") as Fingerprint;
+  if (parameters.fingerprint_scheme_version === undefined || parameters.fingerprint_scheme_version === 1) {
+    return createHash("sha256").update(v1Canonical, "utf8").digest("hex") as Fingerprint;
+  }
+  const v2Canonical = [
+    fingerprintSegment("fingerprint_scheme", String(FINGERPRINT_SCHEME_VERSION)),
+    fingerprintSegment("resource", capabilityRequested.resource),
+    fingerprintSegment("action", capabilityRequested.action),
+    fingerprintSegment("amount", amountSegment),
+    fingerprintSegment("currency", currencySegment),
+    fingerprintSegment("recipient", recipientSegment),
+    fingerprintSegment("arguments_digest", parameters.arguments_digest),
+  ].join(FIELD_SEPARATOR);
+  return createHash("sha256").update(v2Canonical, "utf8").digest("hex") as Fingerprint;
 }

@@ -18,7 +18,7 @@
  * Pure: no I/O, no Date.now(), no mutation of its inputs.
  */
 import type { AuthorityEvent, CanonicalStore, ChainLink } from "../domain/events.js";
-import type { Branded, DelegationId, Iso8601, Money } from "../domain/types.js";
+import { isWellFormedActionParameters, type Branded, type DelegationId, type Iso8601, type Money } from "../domain/types.js";
 
 export type CapabilityIssuedEvent = Extract<AuthorityEvent, { readonly event_type: "CAPABILITY_ISSUED" }>;
 type ActionRequestedEvent = Extract<AuthorityEvent, { readonly event_type: "ACTION_REQUESTED" }>;
@@ -116,6 +116,9 @@ export function remainingCapacity(delegationId: DelegationId, capacity: Money, g
     }
     const request = findActionRequested(grant.event.payload.action_id, visibleStore);
     if (request === undefined) {
+      continue;
+    }
+    if (!isWellFormedActionParameters(request.payload.parameters)) {
       continue;
     }
     // I25: amounts in different currencies are never summed.

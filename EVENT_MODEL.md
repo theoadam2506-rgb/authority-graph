@@ -125,7 +125,7 @@ recipient=<LEN>:<recipient>
   they are: no trimming, no case folding, no Unicode normalization.
   `EUR`, `eur` and `EUR ` are three different currencies.
 - **`amount`.** The decimal representation of `amount.value` (a
-  non-negative integer: no sign, no leading zero, `0` for zero).
+  non-negative safe integer: no sign, no leading zero, `0` for zero).
 - **Encoding and digest.** The string is encoded in UTF-8, hashed with
   SHA-256, and written as 64 lowercase hexadecimal characters. The result is
   `action_fingerprint`. This function is pure and deterministic (I2): the
@@ -164,6 +164,48 @@ computed under the earlier format is not recognized, and fails the exact
 equality required by I15 like any other different fingerprint. Likewise, a
 delegation carrying `automatic_max_amount` / `approval_max_amount` as bare
 numbers (the earlier format) is malformed and `UNKNOWN` (C22).
+
+### P1.5 — fingerprint scheme V2 for observed tool calls
+
+V1 above remains the historic format. A new tool integration must use
+`fingerprint_scheme_version: 2` together with an `arguments_digest`: the
+lowercase SHA-256 digest of the complete RFC 8785 (JCS) canonical argument
+object. A V2 payload without a 64-character digest, a V1 payload carrying a
+digest, or any unknown scheme is rejected at ingestion as
+`MALFORMED_ACTION_PARAMETERS`; it never reaches the canonical store.
+
+V2 has the following length-prefixed segments, in this exact order:
+
+```
+fingerprint_scheme=<LEN>:2
+resource=<LEN>:<resource>
+action=<LEN>:<action>
+amount=<LEN>:<amount>
+currency=<LEN>:<currency>
+recipient=<LEN>:<recipient>
+arguments_digest=<LEN>:<sha256>
+```
+
+It therefore binds the existing I25 currency dimension **and** every argument
+the observer supplied to the digest. An MCP observer must derive `amount`,
+`currency`, `recipient`, and the digest from one versioned mapping of the
+same handler input, including `server_id`, `tool_name`, and a digest of the
+mapping definition. It must not trust a digest supplied by the caller.
+
+## Canonical replay (P1.5)
+
+`replayCanonicalStore` re-ingests a purported canonical stream and requires
+one append per input event, contiguous assigned sequences, canonical monotone
+trusted times, and byte-for-byte equal rebuilt events. Malformed evidence,
+duplicates, rejected drafts, or any mismatch are returned as a replay failure,
+never thrown to a verifier.
+
+A successful replay means only **consistent with this asserted event stream**.
+It does not prove issuer identity, real-world execution, a genuine
+`recorded_at`, completeness of the stream, or resistance to a coherent
+renumbered/truncated forgery. Those claims require authenticated observers,
+signatures, and an externally anchored signed journal head; they are outside
+P1.5 and must not be presented as `proved` by a future verifier.
 
 ## The 9 event types
 
@@ -238,7 +280,7 @@ have been revoked, or its remaining budget may have decreased, since).
 | `requesting_principal_id` | opaque identifier | The principal requesting to act. |
 | `delegation_id` | opaque identifier | The delegation or subdelegation invoked. |
 | `capability_requested` | exact `{resource, action}` | Exact capability required. |
-| `parameters` | `{amount?: {value: integer, currency}, recipient?: opaque identifier}` | Only `amount` (value and currency together, I25) and `recipient` are typed and enter `action_fingerprint` (I15). No other business field is interpreted by the engine in V0. |
+| `parameters` | `{amount?: {value: integer, currency}, recipient?: opaque identifier, fingerprint_scheme_version?: 1 \| 2, arguments_digest?: sha256}` | `amount` (value and currency together, I25) and `recipient` always enter `action_fingerprint` (I15). Historic V1 carries no digest; V2 requires a RFC 8785 SHA-256 digest of complete observed tool arguments and is described above. No raw business field beyond these values is interpreted by the engine. |
 
 ### 5. `APPROVAL_REQUESTED`
 

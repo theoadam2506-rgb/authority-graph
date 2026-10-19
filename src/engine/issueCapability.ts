@@ -26,7 +26,7 @@ import type {
   Money,
   SequenceNumber,
 } from "../domain/types.js";
-import { sequenceNumber } from "../domain/types.js";
+import { isWellFormedActionParameters, sequenceNumber } from "../domain/types.js";
 import type { AuthenticatedPrincipal } from "../domain/authenticatedPrincipal.js";
 import { remainingCapacity, type ValidatedGrant } from "./capacity.js";
 import {
@@ -236,6 +236,9 @@ export function issueCapability(
   const request = findActionRequested(command.action_id, store);
   if (request === undefined) {
     return { ok: false, reason: "ACTION_NOT_FOUND" };
+  }
+  if (!isWellFormedActionParameters(request.payload.parameters)) {
+    return { ok: false, reason: "NOT_AUTHORIZED", decision: { outcome: "UNKNOWN", reasonCode: "C22_UNKNOWN_CONSTRAINT_TYPE" } };
   }
 
   // 2. authenticated_requester_id === ACTION_REQUESTED.requesting_principal_id.

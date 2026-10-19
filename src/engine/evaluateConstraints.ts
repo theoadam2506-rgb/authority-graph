@@ -9,7 +9,7 @@
  */
 import { computeActionFingerprint } from "../domain/events.js";
 import type { AuthorityEvent, CanonicalStore, ChainLink } from "../domain/events.js";
-import { MAX_CHAIN_DEPTH, isWellFormedMoney, monetaryUnitOf, type ActionId, type ActionParameters, type ApprovalId, type AuthorityDecision, type Capability, type DelegationId, type Money, type PrincipalId } from "../domain/types.js";
+import { MAX_CHAIN_DEPTH, isWellFormedActionParameters, isWellFormedMoney, monetaryUnitOf, type ActionId, type ActionParameters, type ApprovalId, type AuthorityDecision, type Capability, type DelegationId, type Money, type PrincipalId } from "../domain/types.js";
 import { isNotCausallyAfter } from "./causality.js";
 import { recordedChainIntegrity, recordedTerminalId } from "./provenance.js";
 import type { DelegationEvent } from "./validateChain.js";
@@ -162,6 +162,11 @@ export function remainingBudget(delegationId: DelegationId, totalBudget: Money, 
     }
     const request = findActionRequested(event.payload.action_id, visibleStore);
     if (request === undefined) {
+      continue;
+    }
+    // An old imported/persisted request can predate current ingress checks.
+    // It must never debit another action's budget or make its evaluation throw.
+    if (!isWellFormedActionParameters(request.payload.parameters)) {
       continue;
     }
     // I20 (extended, PROMPT 6f): citing D somewhere in the array is not
@@ -334,6 +339,11 @@ export function evaluateConstraints(
   agentId: PrincipalId,
   queriedActionId?: ActionId,
 ): AuthorityDecision {
+  // Current ingestion rejects malformed parameters. This guard contains old
+  // persisted data or a bypassed storage boundary to one UNKNOWN decision.
+  if (!isWellFormedActionParameters(parameters)) {
+    return { outcome: "UNKNOWN", reasonCode: "C22_UNKNOWN_CONSTRAINT_TYPE" };
+  }
   const terminal = chain[chain.length - 1];
   if (terminal === undefined) {
     return { outcome: "UNKNOWN", reasonCode: "C24_NO_VALID_CHAIN" };
