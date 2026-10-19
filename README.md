@@ -254,13 +254,22 @@ CREATE ROLE authority_login LOGIN PASSWORD '...' IN ROLE authority_app;
 That role can `SELECT` and `INSERT` on the three journal tables (and use
 `security_log`'s id sequence), and cannot `UPDATE`, `DELETE` or `TRUNCATE`
 them. `roles.sql` refuses to finish if `authority_app` owns the tables or
-inherits another role; `src/storage/append_only_check.sql` (bind the role
-name as `$1`) lists any violation for the actual login role. Existing
+inherits another role, but it can only see `authority_app`, not the login
+role you actually created, which may belong to other groups. Existing
 deployments whose application connects as the table owner or as a superuser
 must switch to such a login role (and move table ownership to the migration
 role) — a `REVOKE` aimed at an owner or superuser does nothing. The boundary
 does not defend against a superuser, the table owner, the database owner or
 a compromised infrastructure.
+
+**Mandatory deployment validation.** A deployment is not P2A-compliant until
+`src/storage/append_only_check.sql` has been run with the real login role the
+application uses, after every change to roles or grants, and returned **no
+row**. The file takes the role name as `$1`, so run it from a driver that
+binds the parameter, or substitute the name by hand in `psql`; any returned
+row is a violation to fix before going live (inherited `UPDATE`/`DELETE`
+from another group, ownership, superuser, or a missing `SELECT`/`INSERT`).
+Checking `authority_app` alone proves nothing about the login role.
 
 The in-memory equivalent, `InMemoryCapabilityIssuanceTransaction`, gives the
 same *observable* sequencing guarantees but only within one process and one

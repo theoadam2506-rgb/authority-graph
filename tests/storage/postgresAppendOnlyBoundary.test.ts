@@ -71,7 +71,12 @@ describe.skipIf(!databaseAvailable)("P2A — PostgreSQL append-only role boundar
   const violations = async (role: string): Promise<string[]> => (await owner.query<{ violation: string }>(CHECK_SQL, [role])).rows.map((r) => r.violation);
   const expectDenied = (promise: Promise<unknown>): Promise<void> => expect(promise).rejects.toMatchObject({ code: "42501" });
 
+  // Roles are cluster-global: remember whether this run created authority_app,
+  // so teardown removes exactly what the test added and nothing a deployment owns.
+  let createdAuthorityApp = false;
+
   beforeAll(async () => {
+    createdAuthorityApp = (await owner.query("SELECT 1 FROM pg_roles WHERE rolname = 'authority_app'")).rowCount === 0;
     await owner.query(SCHEMA_SQL);
     await owner.query(ROLES_SQL);
     await owner.query(`DROP ROLE IF EXISTS ${LOGIN_ROLE}`);
@@ -83,9 +88,20 @@ describe.skipIf(!databaseAvailable)("P2A — PostgreSQL append-only role boundar
   });
 
   afterAll(async () => {
-    await app.end();
-    await owner.query(`DROP ROLE IF EXISTS ${LOGIN_ROLE}`);
-    await owner.end();
+    try {
+      await app.end();
+    } finally {
+      try {
+        await owner.query(`DROP OWNED BY ${LOGIN_ROLE}`);
+        await owner.query(`DROP ROLE IF EXISTS ${LOGIN_ROLE}`);
+        if (createdAuthorityApp) {
+          await owner.query("DROP OWNED BY authority_app");
+          await owner.query("DROP ROLE IF EXISTS authority_app");
+        }
+      } finally {
+        await owner.end();
+      }
+    }
   });
 
   it("the check reports no violation for the application login role, and reports each weakness on a deliberately bad role", async () => {
@@ -199,6 +215,32 @@ describe.skipIf(!databaseAvailable)("P2A — PostgreSQL append-only role boundar
       );
     });
     // Nothing above persisted.
+    expect(await violations(LOGIN_ROLE)).toEqual([]);
+  });
+
+  it("the check detects UPDATE/DELETE inherited through another group the login role also belongs to", async () => {
+    await rolledBack(owner, async (c) => {
+      await c.query("CREATE ROLE p2a_other_group NOLOGIN");
+      await c.query("GRANT UPDATE, DELETE ON authority_events TO p2a_other_group");
+      await c.query(`GRANT p2a_other_group TO ${LOGIN_ROLE}`);
+
+      // The bypass is real: acting as the login role, the journal can be rewritten.
+      await c.query("INSERT INTO authority_events VALUES (1, 'e1', 'DELEGATION_CREATED', 'p', 1, now(), now(), now(), 'ASSERTED_UNVERIFIED', '{\"v\":1}')");
+      await c.query(`SET LOCAL ROLE ${LOGIN_ROLE}`);
+      await c.query("UPDATE authority_events SET payload = '{\"v\":2}'");
+      await c.query("RESET ROLE");
+      expect((await c.query("SELECT payload FROM authority_events")).rows).toEqual([{ payload: { v: 2 } }]);
+
+      // ... and the check, run for the login role, reports it. authority_app itself stays clean.
+      const login = await c.query<{ violation: string }>(CHECK_SQL, [LOGIN_ROLE]);
+      expect(login.rows.map((r) => r.violation).sort()).toEqual([
+        "role holds DELETE on authority_events",
+        "role holds UPDATE on authority_events",
+        "role holds a column-level UPDATE on authority_events",
+      ]);
+      const group = await c.query<{ violation: string }>(CHECK_SQL, ["authority_app"]);
+      expect(group.rows).toEqual([]);
+    });
     expect(await violations(LOGIN_ROLE)).toEqual([]);
   });
 
