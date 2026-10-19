@@ -238,7 +238,29 @@ This is **not** a claim that the underlying Postgres journal is
 cryptographically append-only: the advisory lock is a cooperative mutex
 between writers that go through this API, not a database-level permission
 barrier (see [What it doesn't do](#what-it-doesnt-do) above, the same
-caveat that already applies to `PostgresEventStore`).
+caveat that already applies to `PostgresEventStore`). The role boundary
+described there is what restricts the application role to read and append.
+
+**Roles (P2A).** Create the tables with `src/storage/schema.sql` as a
+migration/owner role, then apply `src/storage/roles.sql` the same way
+(`psql --single-transaction -f ...`; idempotent, safe on an existing
+database). Connect the application with a *login* role that is a member of
+`authority_app` and nothing else:
+
+```
+CREATE ROLE authority_login LOGIN PASSWORD '...' IN ROLE authority_app;
+```
+
+That role can `SELECT` and `INSERT` on the three journal tables (and use
+`security_log`'s id sequence), and cannot `UPDATE`, `DELETE` or `TRUNCATE`
+them. `roles.sql` refuses to finish if `authority_app` owns the tables or
+inherits another role; `src/storage/append_only_check.sql` (bind the role
+name as `$1`) lists any violation for the actual login role. Existing
+deployments whose application connects as the table owner or as a superuser
+must switch to such a login role (and move table ownership to the migration
+role) — a `REVOKE` aimed at an owner or superuser does nothing. The boundary
+does not defend against a superuser, the table owner, the database owner or
+a compromised infrastructure.
 
 The in-memory equivalent, `InMemoryCapabilityIssuanceTransaction`, gives the
 same *observable* sequencing guarantees but only within one process and one
@@ -324,17 +346,18 @@ action was legitimate at sequence 8, back when it ran.
   high-throughput production workloads. No "works up to N events" claim is
   made anywhere in this repo: that number has never been benchmarked, and a
   guessed one would be worse than none.
-- **The `EventSource` API is append-only; the Postgres journal itself is
-  not, against a privileged writer.** `pg_advisory_xact_lock` only protects
-  writers that go through this API and cooperate with it. It is a mutex
-  between well-behaved callers, not a database-level permission barrier.
-  Nothing in `schema.sql` revokes `UPDATE`/`DELETE` grants or otherwise
-  stops a writer with raw SQL access (or a different, non-cooperating
-  client) from mutating rows directly. Append-only is a property of every
-  code path this repository provides to write to the journal, not an
-  intrinsic property of the Postgres table itself. Enforcing that at the
-  database's own permission layer is future work, not something already in
-  place.
+- **The Postgres journal is append-only for the application role, not for
+  a privileged one.** `pg_advisory_xact_lock` is only a cooperative mutex.
+  The permission boundary is `src/storage/roles.sql` (P2A, see
+  [`ROADMAP.md`](./ROADMAP.md)): a deployment that applies it and connects
+  as a login role that is a member of `authority_app` (and owns nothing,
+  and is no superuser) can `SELECT` and `INSERT` on the journal tables and
+  cannot `UPDATE`, `DELETE` or `TRUNCATE` them. This holds only for that
+  role. A superuser, the table owner, the database owner, or anyone with
+  control of the infrastructure can still alter or drop the journal; a
+  deployment that connects the application as the owner or a superuser gets
+  no protection from this file. `schema.sql` alone grants nothing and
+  protects nothing.
 - **Budget overspend from concurrent decisions (TOCTOU) is detected, not
   prevented.** Two individually `AUTHORIZED` decisions against the same
   `total_budget`, made before either is executed, can combine to exceed it:
@@ -424,23 +447,25 @@ npm run quickstart    # the short story from the top of this README
 node scripts/check-readme-demo-excerpt.mjs   # the README demo excerpt still matches the demo
 ```
 
-Without a reachable database, `npm test` skips the 17 PostgreSQL tests and
+Without a reachable database, `npm test` skips the 28 PostgreSQL tests and
 still exits 0. To run them, point `TEST_DATABASE_URL` at an isolated
-PostgreSQL 16 database (the tests truncate its tables) and run the two files
-one after the other, then check the report:
+PostgreSQL 16 database (the tests truncate its tables; the boundary test also
+creates roles, so connect as a superuser) and run the three files one after
+the other, then check the report:
 
 ```
 TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/authority_graph_test \
   npx vitest run \
   tests/storage/postgresEventStore.test.ts \
   tests/storage/postgresCapabilityIssuanceTransaction.test.ts \
+  tests/storage/postgresAppendOnlyBoundary.test.ts \
   --no-file-parallelism \
   --reporter=default --reporter=json --outputFile.json=vitest-postgres.json
 node scripts/check-postgres-report.mjs vitest-postgres.json
 ```
 
 The second command fails unless every PostgreSQL test ran and passed (none
-skipped, failed or todo, at least 17 passed). CI
+skipped, failed or todo, at least 28 passed). CI
 ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs all of the
 above: the first block on Node 20 and 22, the PostgreSQL block on Node 20
 against a `postgres:16` service.

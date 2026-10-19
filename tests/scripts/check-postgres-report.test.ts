@@ -19,6 +19,7 @@ const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const GUARD = path.join(REPO_ROOT, "scripts/check-postgres-report.mjs");
 const EVENT_STORE_FILE = path.join(REPO_ROOT, "tests/storage/postgresEventStore.test.ts");
 const ISSUANCE_FILE = path.join(REPO_ROOT, "tests/storage/postgresCapabilityIssuanceTransaction.test.ts");
+const BOUNDARY_FILE = path.join(REPO_ROOT, "tests/storage/postgresAppendOnlyBoundary.test.ts");
 
 type AssertionStatus = "passed" | "failed" | "skipped" | "pending" | "todo";
 
@@ -80,15 +81,15 @@ function runGuardOn(report: unknown): { readonly status: number | null; readonly
 }
 
 describe("scripts/check-postgres-report.mjs", () => {
-  it("accepts a report where all 17 PostgreSQL tests ran and passed", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: passing(14) }));
+  it("accepts a report where all 28 PostgreSQL tests ran and passed", () => {
+    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: passing(15), [BOUNDARY_FILE]: passing(10) }));
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("17/17 tests passed");
+    expect(result.stdout).toContain("28/28 tests passed");
     expect(result.status).toBe(0);
   });
 
-  it("accepts more than 17 passed tests (the floor is a minimum, not an exact count)", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(4), [ISSUANCE_FILE]: passing(15) }));
+  it("accepts more than 28 passed tests (the floor is a minimum, not an exact count)", () => {
+    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(4), [ISSUANCE_FILE]: passing(16), [BOUNDARY_FILE]: passing(10) }));
     expect(result.status).toBe(0);
   });
 
@@ -96,14 +97,15 @@ describe("scripts/check-postgres-report.mjs", () => {
     const result = runGuardOn(
       vitestReport({
         "C:\\work\\authority-graph\\tests\\storage\\postgresEventStore.test.ts": passing(3),
-        "C:\\work\\authority-graph\\tests\\storage\\postgresCapabilityIssuanceTransaction.test.ts": passing(14),
+        "C:\\work\\authority-graph\\tests\\storage\\postgresCapabilityIssuanceTransaction.test.ts": passing(15),
+        "C:\\work\\authority-graph\\tests\\storage\\postgresAppendOnlyBoundary.test.ts": passing(10),
       }),
     );
     expect(result.status).toBe(0);
   });
 
-  it("rejects a report where all 17 PostgreSQL tests were skipped, even though Vitest calls it a success", () => {
-    const report = vitestReport({ [EVENT_STORE_FILE]: skipped(3), [ISSUANCE_FILE]: skipped(14) });
+  it("rejects a report where all 28 PostgreSQL tests were skipped, even though Vitest calls it a success", () => {
+    const report = vitestReport({ [EVENT_STORE_FILE]: skipped(3), [ISSUANCE_FILE]: skipped(15), [BOUNDARY_FILE]: skipped(10) });
     expect(report["success"]).toBe(true);
     const result = runGuardOn(report);
     expect(result.status).toBe(1);
@@ -113,38 +115,44 @@ describe("scripts/check-postgres-report.mjs", () => {
   });
 
   it("rejects a partially skipped report", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: [...passing(13), "skipped"] }));
+    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: [...passing(14), "skipped"], [BOUNDARY_FILE]: passing(10) }));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("1 PostgreSQL test(s) were skipped or pending");
   });
 
   it("rejects todo tests", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: [...passing(14), "todo"] }));
+    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: [...passing(15), "todo"], [BOUNDARY_FILE]: passing(10) }));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("marked todo");
   });
 
   it("rejects failed tests", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: ["passed", "failed", "passed"], [ISSUANCE_FILE]: passing(14) }));
+    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: ["passed", "failed", "passed"], [ISSUANCE_FILE]: passing(15), [BOUNDARY_FILE]: passing(10) }));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("1 PostgreSQL test(s) failed");
     expect(result.stderr).toContain("tests/storage/postgresEventStore.test.ts failed as a file");
   });
 
-  it("rejects fewer than 17 passed tests", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: passing(10) }));
+  it("rejects fewer than 28 passed tests", () => {
+    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: passing(11), [BOUNDARY_FILE]: passing(10) }));
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("only 13 PostgreSQL test(s) passed, expected at least 17");
+    expect(result.stderr).toContain("only 24 PostgreSQL test(s) passed, expected at least 28");
   });
 
   it("rejects a report where a required test file is absent", () => {
-    const result = runGuardOn(vitestReport({ [ISSUANCE_FILE]: passing(17) }));
+    const result = runGuardOn(vitestReport({ [ISSUANCE_FILE]: passing(18), [BOUNDARY_FILE]: passing(10) }));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("tests/storage/postgresEventStore.test.ts does not appear in testResults");
   });
 
+  it("rejects a report where the append-only boundary test file is absent", () => {
+    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: passing(25) }));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("tests/storage/postgresAppendOnlyBoundary.test.ts does not appear in testResults");
+  });
+
   it("rejects a report where one file has no passed test, even if the totals are met", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: [], [ISSUANCE_FILE]: passing(17) }));
+    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: [], [ISSUANCE_FILE]: passing(18), [BOUNDARY_FILE]: passing(10) }));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("tests/storage/postgresEventStore.test.ts has no passed test");
   });
