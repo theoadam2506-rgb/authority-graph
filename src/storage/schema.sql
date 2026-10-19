@@ -13,6 +13,12 @@
 -- uniqueness/ordering, and append-only-ness (no UPDATE/DELETE statement
 -- appears anywhere in this codebase against these tables — see
 -- src/storage/postgresEventStore.ts).
+--
+-- This file creates the tables and grants nothing. Run it as a migration/
+-- owner role, then run src/storage/roles.sql: that file is what stops the
+-- application role from UPDATE/DELETE/TRUNCATE (P2A, ROADMAP.md). The
+-- application must not connect as the owner of these tables or as a
+-- superuser.
 
 CREATE TABLE IF NOT EXISTS authority_events (
   sequence        BIGINT PRIMARY KEY,

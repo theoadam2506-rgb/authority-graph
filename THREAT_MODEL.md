@@ -62,7 +62,12 @@ fix for this point is announced as planned in this version.
 
 - Compromise of the event store itself (disk access, tampering outside the
   ingestion API). This is a matter of infrastructure security, not of the
-  engine.
+  engine. Partial mitigation (P2A): `src/storage/roles.sql` removes
+  `UPDATE`/`DELETE`/`TRUNCATE` from the PostgreSQL role the application
+  connects as, so a bug or injection in the application cannot rewrite the
+  journal. It does not defend against a superuser, the table owner, the
+  database owner, a backup restore, or anyone controlling the infrastructure,
+  and it protects nothing if the application connects as one of those.
 - Identity spoofing upstream of an event's issuance (a legitimate
   principal, including a `HUMAN_ROOT`, whose credentials are stolen). This
   is a matter of source authentication, not of authority resolution logic.

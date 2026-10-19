@@ -16,18 +16,20 @@
 import { readFileSync } from "node:fs";
 
 /**
- * Floor on the number of passed PostgreSQL tests. 17 is the number of
- * PostgreSQL tests at the time this guard was introduced (3 in
- * postgresEventStore.test.ts, 14 in postgresCapabilityIssuanceTransaction.test.ts).
+ * Floor on the number of passed PostgreSQL tests. 30 is the number of
+ * PostgreSQL tests since the append-only role boundary was added (3 in
+ * postgresEventStore.test.ts, 15 in postgresCapabilityIssuanceTransaction.test.ts,
+ * 12 in postgresAppendOnlyBoundary.test.ts); the guard started at 17.
  * New tests may raise the real count; `numPassedTests === numTotalTests`
  * covers them. Never lower this floor silently.
  */
-const MIN_PASSED_TESTS = 17;
+const MIN_PASSED_TESTS = 30;
 
 /** The test files the PostgreSQL job must run, relative to the repository root. */
 const REQUIRED_TEST_FILES = [
   "tests/storage/postgresEventStore.test.ts",
   "tests/storage/postgresCapabilityIssuanceTransaction.test.ts",
+  "tests/storage/postgresAppendOnlyBoundary.test.ts",
 ];
 
 const COUNT_FIELDS = ["numTotalTests", "numPassedTests", "numFailedTests", "numPendingTests", "numTodoTests"];

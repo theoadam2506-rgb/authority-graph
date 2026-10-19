@@ -75,7 +75,7 @@ npm run quickstart
 node scripts/check-readme-demo-excerpt.mjs
 ```
 
-Without a reachable database, `npm test` skips the 17 PostgreSQL tests.
+Without a reachable database, `npm test` skips the 30 PostgreSQL tests.
 Skipped is not passed: CI runs them against PostgreSQL 16, and the
 [Development section of the README](./README.md#development) shows how to
 run them locally.

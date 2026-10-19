@@ -27,7 +27,7 @@ jobs:
 
       - run: npm run typecheck
 
-      # No database is reachable in this job, so the 17 PostgreSQL tests are
+      # No database is reachable in this job, so the PostgreSQL tests are
       # skipped here. Running them is mandatory in the `postgres` job below.
       - run: npm test
 
@@ -67,14 +67,16 @@ jobs:
 
       - run: npm ci
 
-      # Both files TRUNCATE the same tables in one shared database, so they
+      # The three files share one database (two TRUNCATE the same tables), so they
       # must not run concurrently: --no-file-parallelism runs them one after
-      # the other.
+      # the other. The boundary test creates roles, which are cluster-wide;
+      # CI connects as the container's superuser for that reason.
       - name: Run the PostgreSQL tests
         run: >-
           npx vitest run
           tests/storage/postgresEventStore.test.ts
           tests/storage/postgresCapabilityIssuanceTransaction.test.ts
+          tests/storage/postgresAppendOnlyBoundary.test.ts
           --no-file-parallelism
           --reporter=default
           --reporter=json
