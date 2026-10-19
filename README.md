@@ -456,7 +456,7 @@ npm run quickstart    # the short story from the top of this README
 node scripts/check-readme-demo-excerpt.mjs   # the README demo excerpt still matches the demo
 ```
 
-Without a reachable database, `npm test` skips the 28 PostgreSQL tests and
+Without a reachable database, `npm test` skips the 30 PostgreSQL tests and
 still exits 0. To run them, point `TEST_DATABASE_URL` at an isolated
 PostgreSQL 16 database (the tests truncate its tables; the boundary test also
 creates roles, so connect as a superuser) and run the three files one after
@@ -474,7 +474,7 @@ node scripts/check-postgres-report.mjs vitest-postgres.json
 ```
 
 The second command fails unless every PostgreSQL test ran and passed (none
-skipped, failed or todo, at least 28 passed). CI
+skipped, failed or todo, at least 30 passed). CI
 ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs all of the
 above: the first block on Node 20 and 22, the PostgreSQL block on Node 20
 against a `postgres:16` service.

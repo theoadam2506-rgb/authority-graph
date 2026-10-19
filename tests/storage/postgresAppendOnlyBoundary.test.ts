@@ -244,6 +244,67 @@ describe.skipIf(!databaseAvailable)("P2A — PostgreSQL append-only role boundar
     expect(await violations(LOGIN_ROLE)).toEqual([]);
   });
 
+  it("the check detects privileges reachable only through SET ROLE from a NOINHERIT login role", async () => {
+    const setLogin = "p2a_set_login";
+    const setGroup = "p2a_set_group";
+    const noInheritApp = new Pool({ connectionString: loginUrl().replace(LOGIN_ROLE, setLogin) });
+    try {
+      await owner.query(`DROP ROLE IF EXISTS ${setLogin}`);
+      await owner.query(`DROP ROLE IF EXISTS ${setGroup}`);
+      await owner.query(`CREATE ROLE ${setLogin} LOGIN NOINHERIT PASSWORD '${LOGIN_PASSWORD}' IN ROLE authority_app`);
+      await owner.query(`CREATE ROLE ${setGroup} NOLOGIN`);
+      await owner.query(`GRANT UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON authority_events TO ${setGroup}`);
+      await owner.query(`GRANT UPDATE (payload_hash), REFERENCES (payload_hash) ON security_log TO ${setGroup}`);
+      await owner.query(`GRANT ${setGroup} TO ${setLogin}`);
+      await owner.query(
+        "INSERT INTO authority_events VALUES (1, 'e1', 'DELEGATION_CREATED', 'p', 1, now(), now(), now(), 'ASSERTED_UNVERIFIED', '{\"v\":1}')",
+      );
+
+      // NOINHERIT: nothing is inherited, so a plain UPDATE is refused ...
+      await expectDenied(noInheritApp.query("UPDATE authority_events SET payload = '{\"v\":2}'"));
+
+      // ... but SET ROLE to the other group, on one connection, rewrites the journal: the bypass is real.
+      const client = await noInheritApp.connect();
+      try {
+        await client.query(`SET ROLE ${setGroup}`);
+        await client.query("UPDATE authority_events SET payload = '{\"v\":2}'");
+        await client.query("RESET ROLE");
+      } finally {
+        client.release();
+      }
+      expect((await owner.query("SELECT payload FROM authority_events")).rows).toEqual([{ payload: { v: 2 } }]);
+
+      // The check reports every dangerous path, column-level ones included, and nothing for the healthy roles.
+      expect((await violations(setLogin)).sort()).toEqual(
+        [
+          ...["UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"].map((p) => `role can SET ROLE to ${setGroup}, which holds ${p} on authority_events`),
+          `role can SET ROLE to ${setGroup}, which holds a column-level UPDATE on authority_events`,
+          `role can SET ROLE to ${setGroup}, which holds a column-level REFERENCES on authority_events`,
+          `role can SET ROLE to ${setGroup}, which holds a column-level UPDATE on security_log`,
+          `role can SET ROLE to ${setGroup}, which holds a column-level REFERENCES on security_log`,
+          // A NOINHERIT login role also inherits nothing from authority_app, so the required
+          // read/append rights are (rightly) reported as missing for it.
+          ...["authority_events", "security_log", "capability_issuance_idempotency"].flatMap((t) => [`role lacks SELECT on ${t}`, `role lacks INSERT on ${t}`]),
+          "role lacks USAGE on sequence security_log_id_seq",
+        ].sort(),
+      );
+      expect(await violations(LOGIN_ROLE)).toEqual([]);
+      expect(await violations("authority_app")).toEqual([]);
+    } finally {
+      try {
+        await noInheritApp.end();
+      } finally {
+        try {
+          await owner.query(`DROP OWNED BY ${setGroup}`);
+          await owner.query(`DROP OWNED BY ${setLogin}`);
+        } finally {
+          await owner.query(`DROP ROLE IF EXISTS ${setLogin}`);
+          await owner.query(`DROP ROLE IF EXISTS ${setGroup}`);
+        }
+      }
+    }
+  });
+
   it("the check flags a login role that was granted UPDATE directly, or owns the journal", async () => {
     await rolledBack(owner, async (c) => {
       await c.query("CREATE ROLE p2a_bad NOLOGIN IN ROLE authority_app");

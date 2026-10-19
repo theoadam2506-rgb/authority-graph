@@ -27,9 +27,37 @@ SELECT violation FROM (
     CROSS JOIN unnest(ARRAY['UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) AS p(priv)
     WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1) AND has_table_privilege($1, t.name, p.priv)
   UNION ALL
-  SELECT format('role holds a column-level UPDATE on %s', t.name)
+  SELECT format('role holds a column-level %s on %s', p.priv, t.name)
     FROM unnest(ARRAY['authority_events', 'security_log', 'capability_issuance_idempotency']) AS t(name)
-    WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1) AND has_any_column_privilege($1, t.name, 'UPDATE')
+    CROSS JOIN unnest(ARRAY['UPDATE', 'REFERENCES']) AS p(priv)
+    WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1) AND has_any_column_privilege($1, t.name, p.priv)
+  UNION ALL
+  -- SET ROLE paths. A NOINHERIT login role inherits nothing, yet can still
+  -- `SET ROLE` to any role it is a member of with the SET option and act with
+  -- that role's privileges (own and inherited by it). So every role reachable
+  -- through `pg_has_role(login, r, 'SET')` is checked for the dangerous
+  -- privileges, column-level ones included. A privilege the login role
+  -- already holds directly or by inheritance is reported by the rules above
+  -- and not repeated here.
+  SELECT format('role can SET ROLE to %s, which holds %s on %s', r.rolname, p.priv, t.name)
+    FROM pg_roles r
+    CROSS JOIN unnest(ARRAY['authority_events', 'security_log', 'capability_issuance_idempotency']) AS t(name)
+    CROSS JOIN unnest(ARRAY['UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) AS p(priv)
+    WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)
+      AND r.rolname <> $1
+      AND pg_has_role($1, r.oid, 'SET')
+      AND has_table_privilege(r.oid, t.name, p.priv)
+      AND NOT has_table_privilege($1, t.name, p.priv)
+  UNION ALL
+  SELECT format('role can SET ROLE to %s, which holds a column-level %s on %s', r.rolname, p.priv, t.name)
+    FROM pg_roles r
+    CROSS JOIN unnest(ARRAY['authority_events', 'security_log', 'capability_issuance_idempotency']) AS t(name)
+    CROSS JOIN unnest(ARRAY['UPDATE', 'REFERENCES']) AS p(priv)
+    WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)
+      AND r.rolname <> $1
+      AND pg_has_role($1, r.oid, 'SET')
+      AND has_any_column_privilege(r.oid, t.name, p.priv)
+      AND NOT has_any_column_privilege($1, t.name, p.priv)
   UNION ALL
   SELECT format('role lacks %s on %s', p.priv, t.name)
     FROM unnest(ARRAY['authority_events', 'security_log', 'capability_issuance_idempotency']) AS t(name)
