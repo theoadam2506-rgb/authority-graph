@@ -1,0 +1,332 @@
+{
+  "vector_id": "authority-graph/I6/approval-bound-to-action-instance",
+  "version": 1,
+  "status": "AUTHORITY_CANDIDATE_NOT_AGENTCREDS_CONFORMANCE",
+  "description": "A1 and A2 share fingerprint, requester and invoked delegation D1; they differ only by action_id. P1 is granted for A1 only; P2 later for A2. P1 never authorizes, is consumed by, or yields a capability for A2. Surfaces INVOKED, RECORDED and ISSUANCE are asserted separately.",
+  "notes": [
+    "Candidate produced by Authority; the AgentCreds schema has not been validated against it.",
+    "action_id is never part of action.parameters.",
+    "No claim is made about concurrent execution admission or atomic consumption before effect."
+  ],
+  "events": [
+    {
+      "event_id": "evt-1",
+      "schema_version": 1,
+      "occurred_at": "2025-01-01T00:00:01.000Z",
+      "principal_id": "theo",
+      "event_type": "DELEGATION_CREATED",
+      "payload": {
+        "delegation_id": "D1",
+        "grantor_principal_id": "theo",
+        "grantor_type": "HUMAN_ROOT",
+        "grantee_principal_id": "agent-a",
+        "capabilities": [
+          {
+            "resource": "purchase_order",
+            "action": "create"
+          }
+        ],
+        "can_delegate": false,
+        "expires_at": {
+          "kind": "no_expiry"
+        },
+        "thresholds": {
+          "automatic_max_amount": {
+            "value": 100,
+            "currency": "EUR"
+          },
+          "approval_max_amount": {
+            "value": 1000,
+            "currency": "EUR"
+          }
+        },
+        "parent_delegation_id": null
+      },
+      "sequence": 1,
+      "authority_time": "2025-01-01T00:00:00.000Z",
+      "recorded_at": "2025-01-01T00:00:00.000Z",
+      "assurance_level": "ASSERTED_UNVERIFIED"
+    },
+    {
+      "event_id": "evt-2",
+      "schema_version": 1,
+      "occurred_at": "2025-01-01T00:00:02.000Z",
+      "principal_id": "agent-a",
+      "event_type": "ACTION_REQUESTED",
+      "payload": {
+        "action_id": "A1",
+        "requesting_principal_id": "agent-a",
+        "delegation_id": "D1",
+        "capability_requested": {
+          "resource": "purchase_order",
+          "action": "create"
+        },
+        "parameters": {
+          "kind": "monetary",
+          "amount": {
+            "value": 500,
+            "currency": "EUR"
+          }
+        }
+      },
+      "sequence": 2,
+      "authority_time": "2025-01-01T00:00:01.000Z",
+      "recorded_at": "2025-01-01T00:00:01.000Z",
+      "assurance_level": "ASSERTED_UNVERIFIED"
+    },
+    {
+      "event_id": "evt-3",
+      "schema_version": 1,
+      "occurred_at": "2025-01-01T00:00:03.000Z",
+      "principal_id": "agent-a",
+      "event_type": "ACTION_REQUESTED",
+      "payload": {
+        "action_id": "A2",
+        "requesting_principal_id": "agent-a",
+        "delegation_id": "D1",
+        "capability_requested": {
+          "resource": "purchase_order",
+          "action": "create"
+        },
+        "parameters": {
+          "kind": "monetary",
+          "amount": {
+            "value": 500,
+            "currency": "EUR"
+          }
+        }
+      },
+      "sequence": 3,
+      "authority_time": "2025-01-01T00:00:02.000Z",
+      "recorded_at": "2025-01-01T00:00:02.000Z",
+      "assurance_level": "ASSERTED_UNVERIFIED"
+    },
+    {
+      "event_id": "evt-4",
+      "schema_version": 1,
+      "occurred_at": "2025-01-01T00:00:04.000Z",
+      "principal_id": "agent-a",
+      "event_type": "APPROVAL_REQUESTED",
+      "payload": {
+        "approval_id": "P1",
+        "action_id": "A1",
+        "requested_from_principal_id": "theo",
+        "policy_reason_code": "AMOUNT_BAND_APPROVAL"
+      },
+      "sequence": 4,
+      "authority_time": "2025-01-01T00:00:03.000Z",
+      "recorded_at": "2025-01-01T00:00:03.000Z",
+      "assurance_level": "ASSERTED_UNVERIFIED"
+    },
+    {
+      "event_id": "evt-5",
+      "schema_version": 1,
+      "occurred_at": "2025-01-01T00:00:05.000Z",
+      "principal_id": "theo",
+      "event_type": "APPROVAL_GRANTED",
+      "payload": {
+        "approval_id": "P1",
+        "action_id": "A1",
+        "approving_principal_id": "theo"
+      },
+      "sequence": 5,
+      "authority_time": "2025-01-01T00:00:04.000Z",
+      "recorded_at": "2025-01-01T00:00:04.000Z",
+      "assurance_level": "ASSERTED_UNVERIFIED"
+    },
+    {
+      "event_id": "evt-6",
+      "schema_version": 1,
+      "occurred_at": "2025-01-01T00:00:06.000Z",
+      "principal_id": "agent-a",
+      "event_type": "ACTION_EXECUTED",
+      "payload": {
+        "action_id": "A2",
+        "executed_by_principal_id": "agent-a",
+        "action_fingerprint": "f8cffaf478e296e9c714c6b5a1997fd1fd3abc456aa65e59e8fd924268dbef91",
+        "decision_sequence": 5,
+        "authority_chain_ref": [
+          {
+            "kind": "delegation",
+            "delegation_id": "D1"
+          },
+          {
+            "kind": "approval",
+            "approval_id": "P1"
+          }
+        ],
+        "execution_result": "EXECUTED_FOR_TEST"
+      },
+      "sequence": 6,
+      "authority_time": "2025-01-01T00:00:05.000Z",
+      "recorded_at": "2025-01-01T00:00:05.000Z",
+      "assurance_level": "ASSERTED_UNVERIFIED"
+    },
+    {
+      "event_id": "evt-7",
+      "schema_version": 1,
+      "occurred_at": "2025-01-01T00:00:07.000Z",
+      "principal_id": "agent-a",
+      "event_type": "APPROVAL_REQUESTED",
+      "payload": {
+        "approval_id": "P2",
+        "action_id": "A2",
+        "requested_from_principal_id": "theo",
+        "policy_reason_code": "AMOUNT_BAND_APPROVAL"
+      },
+      "sequence": 7,
+      "authority_time": "2025-01-01T00:00:06.000Z",
+      "recorded_at": "2025-01-01T00:00:06.000Z",
+      "assurance_level": "ASSERTED_UNVERIFIED"
+    },
+    {
+      "event_id": "evt-8",
+      "schema_version": 1,
+      "occurred_at": "2025-01-01T00:00:08.000Z",
+      "principal_id": "theo",
+      "event_type": "APPROVAL_GRANTED",
+      "payload": {
+        "approval_id": "P2",
+        "action_id": "A2",
+        "approving_principal_id": "theo"
+      },
+      "sequence": 8,
+      "authority_time": "2025-01-01T00:00:07.000Z",
+      "recorded_at": "2025-01-01T00:00:07.000Z",
+      "assurance_level": "ASSERTED_UNVERIFIED"
+    }
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "surface": "INVOKED",
+      "action_id": "A1",
+      "events_through": 5,
+      "at": {
+        "sequence": 5,
+        "authority_time": "2025-01-01T00:00:05.000Z"
+      },
+      "expect": {
+        "outcome": "AUTHORIZED",
+        "chain": [
+          "D1"
+        ],
+        "approvalId": "P1"
+      },
+      "note": "A1 with P1"
+    },
+    {
+      "step": 2,
+      "surface": "INVOKED",
+      "action_id": "A2",
+      "events_through": 5,
+      "at": {
+        "sequence": 5,
+        "authority_time": "2025-01-01T00:00:05.000Z"
+      },
+      "expect": {
+        "outcome": "REQUIRES_APPROVAL",
+        "viaDelegation": "D1"
+      },
+      "note": "A2 with only P1 on the log"
+    },
+    {
+      "step": 3,
+      "surface": "RECORDED",
+      "action_id": "A2",
+      "events_through": 6,
+      "at": {
+        "sequence": 6,
+        "authority_time": "2025-01-01T00:00:06.000Z"
+      },
+      "expect": {
+        "outcome": "REQUIRES_APPROVAL",
+        "viaDelegation": "D1"
+      },
+      "note": "forged ACTION_EXECUTED for A2 citing D1 and P1"
+    },
+    {
+      "step": 4,
+      "surface": "INVOKED",
+      "action_id": "A1",
+      "events_through": 6,
+      "at": {
+        "sequence": 6,
+        "authority_time": "2025-01-01T00:00:06.000Z"
+      },
+      "expect": {
+        "outcome": "AUTHORIZED",
+        "chain": [
+          "D1"
+        ],
+        "approvalId": "P1"
+      },
+      "note": "P1 not consumed by the invalid execution"
+    },
+    {
+      "step": 5,
+      "surface": "ISSUANCE",
+      "action_id": "A2",
+      "events_through": 5,
+      "authority_time": "2025-01-01T00:20:00.000Z",
+      "expect": {
+        "ok": false,
+        "reason": "NOT_AUTHORIZED",
+        "decision_outcome": "REQUIRES_APPROVAL"
+      },
+      "note": "no CAPABILITY_ISSUED is created"
+    },
+    {
+      "step": 6,
+      "surface": "ISSUANCE",
+      "action_id": "A2",
+      "events_through": 6,
+      "authority_time": "2025-01-01T00:20:00.000Z",
+      "expect": {
+        "ok": false,
+        "reason": "NOT_AUTHORIZED",
+        "decision_outcome": "REQUIRES_APPROVAL"
+      },
+      "note": "same refusal after the forged execution; no CAPABILITY_ISSUED is created"
+    },
+    {
+      "step": 7,
+      "surface": "INVOKED",
+      "action_id": "A2",
+      "events_through": 8,
+      "at": {
+        "sequence": 8,
+        "authority_time": "2025-01-01T00:00:08.000Z"
+      },
+      "expect": {
+        "outcome": "AUTHORIZED",
+        "chain": [
+          "D1"
+        ],
+        "approvalId": "P2"
+      },
+      "note": "after P2 bound to A2"
+    },
+    {
+      "step": 8,
+      "surface": "ISSUANCE",
+      "action_id": "A2",
+      "events_through": 8,
+      "authority_time": "2025-01-01T00:20:00.000Z",
+      "expect": {
+        "ok": true,
+        "granted_chain_ref": [
+          {
+            "kind": "delegation",
+            "delegation_id": "D1"
+          },
+          {
+            "kind": "approval",
+            "approval_id": "P2"
+          }
+        ]
+      },
+      "note": "capability references P2, never P1"
+    }
+  ]
+}

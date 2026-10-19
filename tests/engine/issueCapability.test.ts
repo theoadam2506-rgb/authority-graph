@@ -19,6 +19,7 @@ import { isEventType, toDraft, type AuthorityEvent, type CanonicalStore, type Ca
 import { actionId, capabilityId, clientIdempotencyKey, enforcementPointId, iso8601, monetaryParameters, schemaVersion, sequenceNumber, thresholds, type PrincipalId } from "../../src/domain/types.js";
 import type { IssueCapabilityCommand } from "../../src/domain/capabilityCommand.js";
 import { evt, principal } from "../fixtures/ids.js";
+import { I6_AGENT, i6Through } from "../fixtures/i6InstanceBinding.js";
 import { EUR, PURCHASE_ORDER_CREATE, THEO, actionRequest, approvalGrant, approvalRequest, rootDelegation, sequentialClock, subDelegation } from "../fixtures/scenarios.js";
 
 const AGENT = principal("issue-capability-agent");
@@ -680,3 +681,46 @@ describe("issueCapability — C9-order-2: a request that clears C9 but exceeds c
   });
 });
 
+
+describe("issueCapability — I6: an approval bound to A1 never yields a capability for a fingerprint-identical A2", () => {
+  // tests/fixtures/i6InstanceBinding.ts: A1/A2 differ only by action_id; P1 is for A1, P2 (event 8) for A2; event 6 is a forged ACTION_EXECUTED for A2 citing [D1, P1].
+  const issueFor = (store: CanonicalStore, id: string) =>
+    issueCapability(store, authenticated(I6_AGENT), { action_id: actionId(id), enforcement_point_id: EP }, makeDependencies(), AUTHORITY_TIME);
+  const storeThrough = (n: number) => ingestAll(i6Through(n).map(toDraft), sequentialClock).canonicalStore;
+
+  it("refuses A2 with only P1 (NOT_AUTHORIZED/REQUIRES_APPROVAL), whether or not the forged execution is on the log, and persists nothing", () => {
+    for (const store of [storeThrough(5), storeThrough(6)]) {
+      const before = store.length;
+      const result = issueFor(store, "A2");
+      expect(result).toMatchObject({ ok: false, reason: "NOT_AUTHORIZED", decision: { outcome: "REQUIRES_APPROVAL" } });
+      expect(result).not.toHaveProperty("capability");
+      expect(store).toHaveLength(before);
+      expect(store.filter((e) => e.event_type === "CAPABILITY_ISSUED")).toHaveLength(0);
+    }
+  });
+
+  it("still issues for A1 on P1 after the forged execution (P1 not consumed), and the A1 capability never references A2's approval", () => {
+    const result = issueFor(storeThrough(6), "A1");
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected ok:true");
+    }
+    expect(result.capability.granted_chain_ref).toEqual([
+      { kind: "delegation", delegation_id: "D1" },
+      { kind: "approval", approval_id: "P1" },
+    ]);
+  });
+
+  it("after P2 bound to A2, issues for A2 with [D1, P2] — never P1", () => {
+    const result = issueFor(storeThrough(8), "A2");
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected ok:true");
+    }
+    expect(result.capability.action_id).toBe("A2");
+    expect(result.capability.granted_chain_ref).toEqual([
+      { kind: "delegation", delegation_id: "D1" },
+      { kind: "approval", approval_id: "P2" },
+    ]);
+  });
+});
