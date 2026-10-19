@@ -125,7 +125,7 @@ recipient=<LEN>:<recipient>
   they are: no trimming, no case folding, no Unicode normalization.
   `EUR`, `eur` and `EUR ` are three different currencies.
 - **`amount`.** The decimal representation of `amount.value` (a
-  non-negative integer: no sign, no leading zero, `0` for zero).
+  non-negative safe integer: no sign, no leading zero, `0` for zero).
 - **Encoding and digest.** The string is encoded in UTF-8, hashed with
   SHA-256, and written as 64 lowercase hexadecimal characters. The result is
   `action_fingerprint`. This function is pure and deterministic (I2): the

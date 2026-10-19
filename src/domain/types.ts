@@ -189,8 +189,8 @@ export interface Money {
 }
 
 export function money(value: number, currency: string): Money {
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`Money.value must be a non-negative integer, got ${value}`);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Money.value must be a non-negative safe integer, got ${value}`);
   }
   requireNonEmpty(currency, "Money.currency");
   return { value, currency };
@@ -256,7 +256,7 @@ export function isWellFormedMoney(candidate: unknown): candidate is Money {
     return false;
   }
   const { value, currency } = candidate as { readonly value?: unknown; readonly currency?: unknown };
-  return typeof value === "number" && typeof currency === "string" && currency.length > 0;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && typeof currency === "string" && currency.length > 0;
 }
 
 /**

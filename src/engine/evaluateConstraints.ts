@@ -164,6 +164,11 @@ export function remainingBudget(delegationId: DelegationId, totalBudget: Money, 
     if (request === undefined) {
       continue;
     }
+    // An old imported/persisted request can predate current ingress checks.
+    // It must never debit another action's budget or make its evaluation throw.
+    if (!isWellFormedActionParameters(request.payload.parameters)) {
+      continue;
+    }
     // I20 (extended, PROMPT 6f): citing D somewhere in the array is not
     // enough — the debit must be demonstrably tied to the delegation
     // actually INVOKED by this execution's own ACTION_REQUESTED, cited in
