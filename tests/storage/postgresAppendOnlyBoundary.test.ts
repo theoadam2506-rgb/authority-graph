@@ -10,6 +10,7 @@
  * owner can still modify the journal. Nothing here claims otherwise.
  */
 import { Pool, type PoolClient } from "pg";
+import { isolatedSchema } from "./pgTestSchema.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -42,9 +43,12 @@ if (!databaseAvailable) {
 }
 
 const read = (name: string): string => readFileSync(fileURLToPath(new URL(`../../src/storage/${name}`, import.meta.url)), "utf8");
-const SCHEMA_SQL = read("schema.sql");
 const ROLES_SQL = read("roles.sql");
 const CHECK_SQL = read("append_only_check.sql");
+
+// Issue #13: this file owns one schema; every connection (owner or login role) is pinned to it.
+const iso = isolatedSchema(TEST_DATABASE_URL, "boundary");
+const SEARCH_PATH_OPTIONS = `-c search_path=${iso.schema}`;
 
 function loginUrl(): string {
   const url = new URL(TEST_DATABASE_URL);
@@ -66,8 +70,8 @@ async function rolledBack(owner: Pool, fn: (client: PoolClient) => Promise<void>
 }
 
 describe.skipIf(!databaseAvailable)("P2A — PostgreSQL append-only role boundary", () => {
-  const owner = new Pool({ connectionString: TEST_DATABASE_URL });
-  const app = new Pool({ connectionString: loginUrl() });
+  const owner = iso.pool;
+  const app = new Pool({ connectionString: loginUrl(), options: SEARCH_PATH_OPTIONS });
   const violations = async (role: string): Promise<string[]> => (await owner.query<{ violation: string }>(CHECK_SQL, [role])).rows.map((r) => r.violation);
   const expectDenied = (promise: Promise<unknown>): Promise<void> => expect(promise).rejects.toMatchObject({ code: "42501" });
 
@@ -77,8 +81,10 @@ describe.skipIf(!databaseAvailable)("P2A — PostgreSQL append-only role boundar
 
   beforeAll(async () => {
     createdAuthorityApp = (await owner.query("SELECT 1 FROM pg_roles WHERE rolname = 'authority_app'")).rowCount === 0;
-    await owner.query(SCHEMA_SQL);
+    await iso.create();
     await owner.query(ROLES_SQL);
+    // roles.sql grants USAGE on `public` only; this file's tables live in its own schema.
+    await owner.query(`GRANT USAGE ON SCHEMA ${iso.schema} TO authority_app`);
     await owner.query(`DROP ROLE IF EXISTS ${LOGIN_ROLE}`);
     await owner.query(`CREATE ROLE ${LOGIN_ROLE} LOGIN PASSWORD '${LOGIN_PASSWORD}' IN ROLE authority_app`);
   });
@@ -99,7 +105,7 @@ describe.skipIf(!databaseAvailable)("P2A — PostgreSQL append-only role boundar
           await owner.query("DROP ROLE IF EXISTS authority_app");
         }
       } finally {
-        await owner.end();
+        await iso.drop();
       }
     }
   });
@@ -247,12 +253,15 @@ describe.skipIf(!databaseAvailable)("P2A — PostgreSQL append-only role boundar
   it("the check detects privileges reachable only through SET ROLE from a NOINHERIT login role", async () => {
     const setLogin = "p2a_set_login";
     const setGroup = "p2a_set_group";
-    const noInheritApp = new Pool({ connectionString: loginUrl().replace(LOGIN_ROLE, setLogin) });
+    const noInheritApp = new Pool({ connectionString: loginUrl().replace(LOGIN_ROLE, setLogin), options: SEARCH_PATH_OPTIONS });
     try {
       await owner.query(`DROP ROLE IF EXISTS ${setLogin}`);
       await owner.query(`DROP ROLE IF EXISTS ${setGroup}`);
       await owner.query(`CREATE ROLE ${setLogin} LOGIN NOINHERIT PASSWORD '${LOGIN_PASSWORD}' IN ROLE authority_app`);
       await owner.query(`CREATE ROLE ${setGroup} NOLOGIN`);
+      // In `public`, USAGE reaches every role through PUBLIC. In this file's own schema it must be granted;
+      // NOINHERIT inherits nothing, so without this the denial would be "relation does not exist", not a privilege error.
+      await owner.query(`GRANT USAGE ON SCHEMA ${iso.schema} TO ${setLogin}, ${setGroup}`);
       await owner.query(`GRANT UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON authority_events TO ${setGroup}`);
       await owner.query(`GRANT UPDATE (payload_hash), REFERENCES (payload_hash) ON security_log TO ${setGroup}`);
       await owner.query(`GRANT ${setGroup} TO ${setLogin}`);

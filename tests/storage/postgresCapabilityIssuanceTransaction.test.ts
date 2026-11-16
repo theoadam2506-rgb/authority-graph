@@ -25,8 +25,7 @@
  * Postgres itself — not this code — makes the partial state unobservable.
  */
 import { Pool } from "pg";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { isolatedSchema } from "./pgTestSchema.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PostgresEventStore } from "../../src/storage/postgresEventStore.js";
 import { PostgresCapabilityIssuanceTransaction } from "../../src/storage/postgresCapabilityIssuanceTransaction.js";
@@ -93,12 +92,11 @@ function isExecutedOk(o: { readonly outcome: string; readonly result?: { readonl
 }
 
 describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — real Postgres integration", () => {
-  const pool = new Pool({ connectionString: TEST_DATABASE_URL });
+  const iso = isolatedSchema(TEST_DATABASE_URL, "issuance");
+  const pool = iso.pool;
 
   beforeAll(async () => {
-    const schemaPath = fileURLToPath(new URL("../../src/storage/schema.sql", import.meta.url));
-    const schemaSql = readFileSync(schemaPath, "utf8");
-    await pool.query(schemaSql);
+    await iso.create();
   });
 
   beforeEach(async () => {
@@ -106,7 +104,7 @@ describe.skipIf(!databaseAvailable)("PostgresCapabilityIssuanceTransaction — r
   });
 
   afterAll(async () => {
-    await pool.end();
+    await iso.drop();
   });
 
   async function seed(drafts: readonly ReturnType<typeof toDraft>[]): Promise<void> {
