@@ -1001,8 +1001,10 @@ authority_events_redeemed_capability_id_uidx ON authority_events ((payload ->>
 'capability_id')) WHERE event_type = 'CAPABILITY_REDEEMED'`, then apply
 `schema.sql` (it then does nothing). A failed CONCURRENT build leaves an INVALID
 index that `IF NOT EXISTS` silently keeps and that enforces nothing:
-`checkRedemptionSchema(pool)` reports a missing, invalid, non-unique or
-mis-defined index and must be run after the migration. The redemption
+`checkRedemptionSchema` reports a missing, invalid, non-unique or
+mis-defined index; it is ENFORCED: every `PostgresCapabilityRedemptionTransaction`
+instance runs it before its first redemption and throws `RedemptionSchemaError`
+(nothing written, failure not cached) when the index is not in force. The redemption
 transaction's own correctness does not depend on the index (writer lock, fresh
 read, read-back); the index is the defence against writers that bypass them.
 Dropping the index is a safe rollback of the migration. Tests: the migration

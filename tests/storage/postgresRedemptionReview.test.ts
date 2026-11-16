@@ -5,11 +5,12 @@
  * backend, the clock and identity boundaries. Skipped without a database;
  * mandatory in CI.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { toDraft } from "../../src/domain/events.js";
 import { validateRedemptionEvent } from "../../src/engine/redeemCapability.js";
 import { enforcementPointId, iso8601, monetaryParameters, principalId, sequenceNumber, capability, type CapabilityId } from "../../src/domain/types.js";
-import { PostgresCapabilityRedemptionTransaction, REDEEMED_INDEX, checkRedemptionSchema } from "../../src/storage/postgresCapabilityRedemptionTransaction.js";
+import { PostgresCapabilityRedemptionTransaction, REDEEMED_INDEX, RedemptionSchemaError, checkRedemptionSchema } from "../../src/storage/postgresCapabilityRedemptionTransaction.js";
 import { EUR, THEO, actionRequest } from "../fixtures/scenarios.js";
 import { AGENT, AGENT_B_PRINCIPAL, EP, PARAMS, T, auth, harness } from "../redemption/harness.js";
 import { databaseAvailable, intercepted, pgHarness, rawInsert, type PgHarness } from "../redemption/pgHarness.js";
@@ -288,3 +289,67 @@ describe.skipIf(!available)("review 4: migration operations on a pre-existing in
 });
 
 void [EP, PARAMS, sequenceNumber];
+
+describe.skipIf(!available)("schema enforcement: the transaction refuses to run without a sound redemption index", () => {
+  const schemaSql = () => readFileSync(new URL("../../src/storage/schema.sql", import.meta.url), "utf8");
+
+  it("a missing index: redeem throws RedemptionSchemaError, writes nothing, and works as soon as the migration is applied (no cached failure)", async () => {
+    const t = await fresh();
+    try {
+      const id = await t.issue(T("09:10:00"));
+      await t.pool.query(`DROP INDEX ${REDEEMED_INDEX}`);
+      const tx = t.newRedemption();
+      const err = await tx.redeem(auth(AGENT), t.command(id), T("09:12:00")).then(() => undefined, (e: unknown) => e);
+      expect(err).toBeInstanceOf(RedemptionSchemaError);
+      expect((err as RedemptionSchemaError).problems[0]).toMatch(/missing/);
+      expect(await redeemedRows(t)).toHaveLength(0);
+      await t.pool.query(schemaSql());
+      expect((await tx.redeem(auth(AGENT), t.command(id), T("09:12:00"))).ok).toBe(true); // same instance, no restart
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("an INVALID index (failed CONCURRENTLY build) is refused too, even though IF NOT EXISTS skipped it", async () => {
+    const t = await fresh();
+    try {
+      const id = await t.issue(T("09:10:00"));
+      await t.pool.query(`DROP INDEX ${REDEEMED_INDEX}`);
+      await rawInsert(t.pool, { sequence: 900, event_id: "dup-1", event_type: "CAPABILITY_REDEEMED", principal_id: "x", payload: { capability_id: "dup-cap" } });
+      await rawInsert(t.pool, { sequence: 901, event_id: "dup-2", event_type: "CAPABILITY_REDEEMED", principal_id: "x", payload: { capability_id: "dup-cap" } });
+      await expect(t.pool.query(`CREATE UNIQUE INDEX CONCURRENTLY ${REDEEMED_INDEX} ON authority_events ((payload ->> 'capability_id')) WHERE event_type = 'CAPABILITY_REDEEMED'`)).rejects.toMatchObject({ code: "23505" });
+      await t.pool.query(schemaSql()); // silently keeps the invalid index
+      const err = await t.newRedemption().redeem(auth(AGENT), t.command(id), T("09:12:00")).then(() => undefined, (e: unknown) => e);
+      expect(err).toBeInstanceOf(RedemptionSchemaError);
+      expect((err as RedemptionSchemaError).problems.join(" ")).toMatch(/INVALID/);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("a non-unique index with the right name is refused", async () => {
+    const t = await fresh();
+    try {
+      const id = await t.issue(T("09:10:00"));
+      await t.pool.query(`DROP INDEX ${REDEEMED_INDEX}`);
+      await t.pool.query(`CREATE INDEX ${REDEEMED_INDEX} ON authority_events ((payload ->> 'capability_id')) WHERE event_type = 'CAPABILITY_REDEEMED'`);
+      await expect(t.newRedemption().redeem(auth(AGENT), t.command(id), T("09:12:00"))).rejects.toBeInstanceOf(RedemptionSchemaError);
+      expect(await redeemedRows(t)).toHaveLength(0);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("the check runs once per instance, before its first redemption, on the same connection that redeems", async () => {
+    const t = await fresh();
+    try {
+      const ids = [await t.issue(T("09:10:00")), await t.issue(T("09:10:10")), await t.issue(T("09:10:20"))];
+      let checks = 0;
+      const tx = new PostgresCapabilityRedemptionTransaction(intercepted(t.pool, { before: async (sql) => { if (sql.includes("indisvalid")) checks += 1; } }));
+      for (const id of ids) expect((await tx.redeem(auth(AGENT), t.command(id), T("09:12:00"))).ok).toBe(true);
+      expect(checks).toBe(1);
+    } finally {
+      await t.close();
+    }
+  });
+});

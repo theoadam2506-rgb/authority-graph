@@ -37,6 +37,12 @@
  * outcome; a retry reads the truth (REDEEMED earlier ⇒ ALREADY_REDEEMED, or
  * still redeemable). It never returns a success it did not observe.
  *
+ * SCHEMA ENFORCEMENT. Before its first redemption each instance verifies, with
+ * `checkRedemptionSchema`, that the redemption index is present, VALID, UNIQUE
+ * and partial on CAPABILITY_REDEEMED; otherwise `redeem` throws
+ * `RedemptionSchemaError` and writes nothing. The check is not cached on
+ * failure, so fixing the migration needs no restart.
+ *
  * Deployment requirement (node-postgres): the Pool passed in must have an
  * `error` listener (`pool.on("error", ...)`) for idle clients whose connection
  * is lost; this class guards the client it has checked out, not the pool.
@@ -58,6 +64,22 @@ import { buildCapabilityRedeemedDraft, type CapabilityRedemptionTransaction } fr
 import { insertEvent, lockAuthorityEventsTable, readFreshIngestionState } from "./postgresEventStore.js";
 
 const REDEEMED_INDEX = "authority_events_redeemed_capability_id_uidx";
+
+/**
+ * Thrown by `redeem` when the redemption index is missing, INVALID, not unique
+ * or mis-defined: the database-level backstop is not in force, so the
+ * transaction refuses to run (fail-closed) instead of redeeming without it.
+ * Apply `src/storage/schema.sql` (or rebuild the index) and retry; the refusal
+ * is not cached.
+ */
+export class RedemptionSchemaError extends Error {
+  readonly problems: readonly string[];
+  constructor(problems: readonly string[]) {
+    super(`redemption schema check failed: ${problems.join("; ")}`);
+    this.name = "RedemptionSchemaError";
+    this.problems = problems;
+  }
+}
 
 export interface PostgresRedemptionOptions {
   /** Attempt id source. Default: crypto.randomUUID(). Not an exclusion mechanism. */
@@ -85,6 +107,8 @@ export class PostgresCapabilityRedemptionTransaction implements CapabilityRedemp
   private readonly pool: Pool;
   private readonly nextAttemptId: () => number | string;
   private readonly readInfrastructureClock: () => string;
+  /** Set once the schema check has passed for this instance. A failure is never cached. */
+  private schemaVerified = false;
 
   constructor(pool: Pool, options: PostgresRedemptionOptions = {}) {
     this.pool = pool;
@@ -103,6 +127,15 @@ export class PostgresCapabilityRedemptionTransaction implements CapabilityRedemp
     };
     client.on("error", onClientError);
     try {
+      // Enforced before the first use of this instance: no redemption runs against
+      // a database whose redemption index is missing or invalid. Checked on the
+      // checked-out client (so it also sees this connection's search_path) and
+      // only until it has passed once; a failure throws and is retried next call.
+      if (!this.schemaVerified) {
+        const problems = await checkRedemptionSchema(client);
+        if (problems.length > 0) throw new RedemptionSchemaError(problems);
+        this.schemaVerified = true;
+      }
       await client.query("BEGIN");
       // Same lock domain as every other writer of authority_events.
       await lockAuthorityEventsTable(client);
@@ -192,8 +225,8 @@ export class PostgresCapabilityRedemptionTransaction implements CapabilityRedemp
  * The transaction's own correctness (lock, fresh read, read-back) does not
  * depend on the index; the index is the defence against writers that bypass them.
  */
-export async function checkRedemptionSchema(pool: Pool): Promise<string[]> {
-  const r = await pool.query<{ indisvalid: boolean; indisunique: boolean; def: string }>(
+export async function checkRedemptionSchema(db: Pick<Pool, "query"> | Pick<PoolClient, "query">): Promise<string[]> {
+  const r = await (db as Pick<Pool, "query">).query<{ indisvalid: boolean; indisunique: boolean; def: string }>(
     `SELECT i.indisvalid, i.indisunique, pg_get_indexdef(i.indexrelid) AS def
        FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
       WHERE c.relname = $1 AND i.indrelid = to_regclass('authority_events')`,
