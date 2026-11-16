@@ -26,4 +26,5 @@ fail with a permission error; the stores keep working through that role.
 
 ## Later P2 milestones
 
-Not defined yet. Nothing beyond P2A is planned or implied by this file.
+Not defined here. The Authority V1 design and its pull-request sequence are in
+[`docs/v1/`](./docs/v1/README.md); they are design documents, not commitments.

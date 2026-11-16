@@ -1,0 +1,24 @@
+# V1 threats
+
+Status: design. This table lists what V1 intends to address and what stays
+open. A row becomes a claim only when a test in this repository demonstrates
+it. The existing attacks A1 to A32 in [`THREAT_MODEL.md`](../../THREAT_MODEL.md) still apply.
+
+| Threat | Planned mitigation | Residual risk, stated |
+|---|---|---|
+| **TOCTOU** between decision and effect (the authority changes after `authorize`) | `redeem` re-checks the chain at the instant of redemption, atomically | Window between redemption and the external effect; only the target can deduplicate or re-check |
+| **Replay** of a ticket or of an attestation | Single-use redemption; ticket bound to action, agent, enforcement point and arguments digest; expiry; verifier imposes the expected context | An attestation of a past decision stays valid as a statement about the past; verifiers must check the context |
+| **Forged or altered attestation** | Canonical JCS serialization, Ed25519, a fixed algorithm (no negotiable `alg`) | Stolen signing key; key custody is the deployment's |
+| **Argument substitution** | Digest of canonical arguments compared with what is observed at redemption; non-canonicalizable arguments are rejected | Anything the application does that is not in the digested arguments |
+| **Concurrent revocation** | Total order by event sequence; redemption evaluated against the log at its own sequence | A revocation not yet written to the log cannot be honoured |
+| **Concurrent double redemption** | Atomic redemption (in memory first, then PostgreSQL under the existing writer lock) | Planned: tested in memory in PR 1; PostgreSQL behaviour only once PR 2 lands. Not demonstrated today |
+| **Dependency failure** (store, clock, signer) | Fail-closed; `UNAVAILABLE` is distinct from `DENIED` and never allowed | Availability: a failing dependency blocks actions |
+| **Log rollback, truncation, omission** | Log head hash inside the attestation; replay detects a changed log | Not detectable without an external witness; out of V1 |
+| **Bypassing the guard** | Documentation, one enforcement point recommended | Out of Authority's reach |
+| **Ticket theft** | Ticket bound to agent, enforcement point and arguments | A bearer inside the same process |
+| **Clock manipulation** | Injected clock; refusal of instants older than what the log already contains (I22) | Trust in the clock's source |
+| **Algorithm downgrade, canonicalization ambiguity** | Fixed algorithm; RFC 8785 with strict input validation (existing `canonicalizeToolArguments`) | Review pending |
+| **Prompt injection steering an agent** | Not a model defence. The enforcement point refuses actions outside the delegated authority regardless of what the model asks | The model may still misuse authority it legitimately holds |
+
+Review gate: the cryptographic components (envelope, signing, verification)
+get an independent review before any security communication about them.
