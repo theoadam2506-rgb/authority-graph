@@ -37,6 +37,10 @@
  * outcome; a retry reads the truth (REDEEMED earlier ⇒ ALREADY_REDEEMED, or
  * still redeemable). It never returns a success it did not observe.
  *
+ * Deployment requirement (node-postgres): the Pool passed in must have an
+ * `error` listener (`pool.on("error", ...)`) for idle clients whose connection
+ * is lost; this class guards the client it has checked out, not the pool.
+ *
  * Not provided (unchanged from I28/I30): anything about the external effect;
  * identity verification (AuthenticatedPrincipal is an assertion); protection
  * from a superuser, the table owner, or a writer that forges an
@@ -128,6 +132,13 @@ export class PostgresCapabilityRedemptionTransaction implements CapabilityRedemp
         return { ok: false, reason: "REDEMPTION_COLLISION" };
       }
 
+      if (Number(newEvent.sequence) !== Number(decision.redemption.decision_sequence) + 1) {
+        // The journal is not contiguous (a writer that bypassed ingestion skipped sequence numbers): the event
+        // would not sit right after the snapshot it was decided on. Fail closed, nothing written.
+        await client.query("ROLLBACK");
+        return { ok: false, reason: "CONCURRENT_WRITE_DETECTED", detail: { ticketConsumed: false } };
+      }
+
       try {
         await insertEvent(client, newEvent);
       } catch (err) {
@@ -170,6 +181,31 @@ export class PostgresCapabilityRedemptionTransaction implements CapabilityRedemp
       client.release(destroy ? true : undefined);
     }
   }
+}
+
+/**
+ * Deployment check: is the redemption index really there, valid, unique and
+ * partial on CAPABILITY_REDEEMED? `CREATE UNIQUE INDEX IF NOT EXISTS` treats an
+ * INVALID leftover (a failed CONCURRENTLY build) as existing and silently skips
+ * it, which would leave the database-level backstop unenforced. Returns the
+ * list of problems (empty when sound). Run it after applying `schema.sql`.
+ * The transaction's own correctness (lock, fresh read, read-back) does not
+ * depend on the index; the index is the defence against writers that bypass them.
+ */
+export async function checkRedemptionSchema(pool: Pool): Promise<string[]> {
+  const r = await pool.query<{ indisvalid: boolean; indisunique: boolean; def: string }>(
+    `SELECT i.indisvalid, i.indisunique, pg_get_indexdef(i.indexrelid) AS def
+       FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE c.relname = $1 AND i.indrelid = to_regclass('authority_events')`,
+    [REDEEMED_INDEX],
+  );
+  const row = r.rows[0];
+  if (row === undefined) return [`index ${REDEEMED_INDEX} is missing: apply src/storage/schema.sql`];
+  const problems: string[] = [];
+  if (!row.indisvalid) problems.push(`index ${REDEEMED_INDEX} is INVALID (a failed CONCURRENTLY build?): drop it and rebuild; it enforces nothing`);
+  if (!row.indisunique) problems.push(`index ${REDEEMED_INDEX} is not UNIQUE`);
+  if (!/WHERE \(?event_type = 'CAPABILITY_REDEEMED'/.test(row.def) || !/payload ->> 'capability_id'/.test(row.def)) problems.push(`index ${REDEEMED_INDEX} does not have the expected definition: ${row.def}`);
+  return problems;
 }
 
 export { REDEEMED_INDEX };

@@ -980,6 +980,45 @@ PostgreSQL transaction (`PostgresCapabilityRedemptionTransaction`).
     a revocation logged before the redemption denies it, one logged after
     does not undo it.
 
+**Unknown outcome and recovery (PostgreSQL).** If the connection is lost around
+COMMIT, `redeem` throws. A thrown call is an UNKNOWN outcome: no `ok` was
+observed, so the effect MUST NOT run on that call. The protocol is:
+(1) retry the same ticket; (2) `REDEEMED` means the first attempt had not
+committed: run the effect once; (3) `ALREADY_REDEEMED` means the ticket is
+consumed (by the lost attempt or by another caller, which Authority cannot
+tell apart): do NOT run the effect, authorize again (a new capability, subject
+to the capacity cost accepted in D12). The result is at-most-once
+AUTHORIZATION: a legitimate effect may be lost (liveness), Authority never
+produces a second `ok:true`. Telling the lost attempt apart from another caller
+(a per-attempt recovery token) is NOT provided in V1. Tests:
+`tests/storage/postgresRedemptionReview.test.ts` (lost acknowledgement after a
+real server-side COMMIT).
+
+**Operating the migration.** `schema.sql` is the migration and is idempotent.
+`CREATE UNIQUE INDEX` takes a lock that blocks writes while it builds; on a
+large journal build it first, by hand, with `CREATE UNIQUE INDEX CONCURRENTLY
+authority_events_redeemed_capability_id_uidx ON authority_events ((payload ->>
+'capability_id')) WHERE event_type = 'CAPABILITY_REDEEMED'`, then apply
+`schema.sql` (it then does nothing). A failed CONCURRENT build leaves an INVALID
+index that `IF NOT EXISTS` silently keeps and that enforces nothing:
+`checkRedemptionSchema(pool)` reports a missing, invalid, non-unique or
+mis-defined index and must be run after the migration. The redemption
+transaction's own correctness does not depend on the index (writer lock, fresh
+read, read-back); the index is the defence against writers that bypass them.
+Dropping the index is a safe rollback of the migration. Tests: the migration
+and `review 4` groups.
+
+**Trust boundaries (what V1 redemption trusts and does not).**
+
+| Boundary | What is trusted | What follows |
+|---|---|---|
+| Identity | `AuthenticatedPrincipal` is asserted by the caller (I17); only a mismatch with the action's requester is detected | A caller that asserts the right identity is believed. No identity is verified. |
+| Clock | `authorityTime` is injected (D4). It cannot precede the log's latest `authority_time`, but any later-or-equal value is accepted | A stale clock can redeem a ticket long after real time; a far-future value written to the log raises its high-water mark irreversibly and makes later sane-clock calls `STALE_AUTHORITY_TIME` (availability). Authority has no source of real time. |
+| Application role | The append-only role (SELECT, INSERT) cannot rewrite history, but INSERT is the right to ASSERT events | A writer with INSERT can append a coherent forged redemption: it validates (I31 checks coherence, not provenance) and takes the ticket from its holder. It cannot alter or delete it. Equivalent to its existing ability to assert any event (A31). |
+| Database owner, superuser, infrastructure | Out of scope (P2A) | They can alter or drop the journal. |
+| Lock-bypassing writers | Detected, not prevented: primary key and unique index refuse collisions; a sequence gap or a taken sequence makes redemption fail closed | They can place events at chosen sequences; log order, as ingested, defines authority. |
+| External effect | Not covered | `REDEEMED` authorizes; it does not make the effect happen, happen once, or be undone. |
+
 Redemption outcomes (what each result means for the ticket and for the log):
 
 | Result | Event written | Ticket consumed | Effect may run | Caller should |
@@ -988,7 +1027,8 @@ Redemption outcomes (what each result means for the ticket and for the log):
 | `CAPABILITY_NOT_FOUND`, `CAPABILITY_NOT_VALID`, `REQUESTER_MISMATCH`, `WRONG_ENFORCEMENT_POINT`, `EXPIRED`, `ARGUMENTS_MISMATCH`, `AUTHORITY_NO_LONGER_VALID`, `STALE_AUTHORITY_TIME` | no | no | no | fix the cause or authorize again |
 | `ALREADY_REDEEMED`, `REDEMPTION_COLLISION` | no (by this call) | yes, by another call | no | not retry; this call never authorized the effect |
 | `CONCURRENT_WRITE_DETECTED` (in memory) | yes, but not at `decision_sequence + 1` | yes | **no** | authorize again (may hit `CAPACITY_EXCEEDED`) |
-| `CONCURRENT_WRITE_DETECTED` (PostgreSQL, lock-bypassing writer) | no (rolled back) | no | **no** | retry; the decision is re-made on the new journal |
+| `CONCURRENT_WRITE_DETECTED` (PostgreSQL: a lock-bypassing writer took the sequence, or the journal has a gap) | no (rolled back) | no | **no** | retry; the decision is re-made on the new journal |
+| exception (PostgreSQL: connection lost, outcome unknown) | unknown | unknown | **no** | retry (see "Unknown outcome and recovery") |
 
 Known limits, stated plainly: a forged `CAPABILITY_REDEEMED` written straight
 into the store (see THREAT_MODEL A37) can burn a ticket but can never grant

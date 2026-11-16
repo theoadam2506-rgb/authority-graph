@@ -55,6 +55,8 @@ export async function pgHarness(options: PgHarnessOptions = {}): Promise<PgHarne
   await iso.create();
   const extraPools: Pool[] = [];
   const pool = iso.pool;
+  // node-postgres requires a pool-level error listener for idle clients that lose their connection (the app's job).
+  pool.on("error", () => undefined);
   let clockTime = T("09:00:00");
   const store = new PostgresEventStore(pool, { authorityTime: () => clockTime });
   const issuance = new PostgresCapabilityIssuanceTransaction(pool);
@@ -69,6 +71,7 @@ export async function pgHarness(options: PgHarnessOptions = {}): Promise<PgHarne
   let counter = 0;
   const newPool = (): Pool => {
     const p = new Pool({ connectionString: iso.connectionString, options: `-c search_path=${iso.schema}` });
+    p.on("error", () => undefined);
     extraPools.push(p);
     return p;
   };
@@ -101,3 +104,53 @@ export async function pgHarness(options: PgHarnessOptions = {}): Promise<PgHarne
 }
 
 export { enforcementPointId };
+
+// ---------------------------------------------------------------------------
+// Fault-injection helpers shared by the review tests.
+// ---------------------------------------------------------------------------
+import type { PoolClient, QueryResult } from "pg";
+
+export interface Interceptor {
+  /** Runs before a statement is sent. */
+  before?: (sql: string, client: PoolClient) => Promise<void>;
+  /** Runs after a statement succeeded on the server, before its result is returned to the caller. */
+  after?: (sql: string, client: PoolClient) => Promise<void>;
+  /** May replace a statement's result. */
+  override?: (sql: string) => QueryResult | undefined;
+}
+
+/** A Pool whose connections run hooks around each statement: the only way to act BETWEEN two statements of one transaction. */
+export function intercepted(real: Pool, hooks: Interceptor): Pool {
+  return {
+    async connect() {
+      const client = await real.connect();
+      return new Proxy(client, {
+        get(target, prop) {
+          if (prop === "query") {
+            return async (...args: unknown[]) => {
+              const first = args[0];
+              const sql = typeof first === "string" ? first : (first as { text?: string }).text ?? "";
+              await hooks.before?.(sql, target);
+              const replaced = hooks.override?.(sql);
+              if (replaced !== undefined) return replaced;
+              const result = await (target.query as (...a: unknown[]) => Promise<QueryResult>)(...args);
+              await hooks.after?.(sql, target);
+              return result;
+            };
+          }
+          const value = (target as unknown as Record<string | symbol, unknown>)[prop];
+          return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+        },
+      });
+    },
+  } as unknown as Pool;
+}
+
+export async function rawInsert(pool: Pool, row: { sequence: number; event_id: string; event_type: string; principal_id: string; payload: unknown; authority_time?: string }): Promise<void> {
+  const at = row.authority_time ?? "2025-01-01T09:11:00Z";
+  await pool.query(
+    `INSERT INTO authority_events (sequence, event_id, event_type, principal_id, schema_version, occurred_at, authority_time, recorded_at, assurance_level, payload)
+     VALUES ($1, $2, $3, $4, 1, $6, $6, now(), 'ASSERTED_UNVERIFIED', $5)`,
+    [row.sequence, row.event_id, row.event_type, row.principal_id, JSON.stringify(row.payload), at],
+  );
+}
