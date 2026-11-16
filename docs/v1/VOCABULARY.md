@@ -9,8 +9,8 @@
 | **Ticket** | A `CAPABILITY_ISSUED` event: a decision made durable for one exact action (`action_id`, fingerprint), one enforcement point, with an expiry. **exists today** |
 | **Redemption** | Planned. The atomic, single-use consumption of a ticket immediately before the effect, re-checking that authority still holds at that instant. |
 | **Enforcement point** | The component that actually performs, or refuses, the effect. Authority never executes anything. |
-| **Attestation** | Planned. A canonical JSON document (RFC 8785) signed with Ed25519 by a key the deployment supplies, stating what an Authority instance decided. |
-| **Verification by replay** | Planned. Recomputing the decision from an exported event log and comparing it with the attestation. Possible because the engine is deterministic. |
+| **Attestation** | **exists today for issuances and redemptions** (PR 3, `src/proof`, [`ATTESTATIONS.md`](./ATTESTATIONS.md)). A canonical JSON document (RFC 8785) signed with Ed25519 by a key the deployment supplies, stating that an event is in a journal with a given chain head. It is not a statement that the decision was right. |
+| **Verification by replay** | Planned (PR 4, "L3"). Recomputing the decision from an exported event log and comparing it with the attestation. Possible because the engine is deterministic. |
 | **Authority Proof** | The name of the component. Its artifacts are called *attestations*; we avoid "proof" for them because it suggests more than they establish. |
 
 ## What an attestation says, and what nobody can prove

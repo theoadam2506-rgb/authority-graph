@@ -1,0 +1,143 @@
+{
+  "format": "authority-attestation-vectors/v1",
+  "trusted_keys": "trusted-keys.json",
+  "note": "Every case is verified with verifyAttestation(text, { keys, expected }). `expected_result` and `failing_check` are what a conforming verifier must report. validly-signed-lie passes by design: see its description.",
+  "cases": [
+    {
+      "file": "issuance.json",
+      "description": "A genuine issuance attestation, verified at L2 with the expected context.",
+      "expected_context": {
+        "enforcement_point_id": "ep-proof-1",
+        "capability_id": "cap-proof-1",
+        "kind": "ISSUANCE",
+        "at": "2025-01-01T09:11:00.000Z"
+      },
+      "expected_result": "CONSISTENT_L2"
+    },
+    {
+      "file": "redemption.json",
+      "description": "A genuine redemption attestation, verified at L2 with the expected context.",
+      "expected_context": {
+        "enforcement_point_id": "ep-proof-1",
+        "capability_id": "cap-proof-1",
+        "kind": "REDEMPTION"
+      },
+      "expected_result": "CONSISTENT_L2"
+    },
+    {
+      "file": "negative/duplicate-key.json",
+      "description": "A duplicate object key: refused, never resolved by 'last one wins'.",
+      "expected_result": "REJECTED",
+      "failing_check": "L0.JSON_STRICT"
+    },
+    {
+      "file": "negative/number-fraction.json",
+      "description": "head_sequence written as 5.0: not an exact integer.",
+      "expected_result": "REJECTED",
+      "failing_check": "L0.JSON_STRICT"
+    },
+    {
+      "file": "negative/number-unsafe.json",
+      "description": "head_sequence beyond 2^53: not exactly representable.",
+      "expected_result": "REJECTED",
+      "failing_check": "L0.JSON_STRICT"
+    },
+    {
+      "file": "negative/unknown-member-top.json",
+      "description": "An unknown member at the top level: refused at every level of the envelope.",
+      "expected_result": "REJECTED",
+      "failing_check": "L0.SCHEMA"
+    },
+    {
+      "file": "negative/unknown-member-statement.json",
+      "description": "An unknown member inside the statement.",
+      "expected_result": "REJECTED",
+      "failing_check": "L0.SCHEMA"
+    },
+    {
+      "file": "negative/alg-none.json",
+      "description": "alg is fixed: 'none' is refused.",
+      "expected_result": "REJECTED",
+      "failing_check": "L0.SCHEMA"
+    },
+    {
+      "file": "negative/tampered-capability-id.json",
+      "description": "A well-formed edit of a signed field: the signature no longer verifies.",
+      "expected_result": "REJECTED",
+      "failing_check": "L1.SIGNATURE"
+    },
+    {
+      "file": "negative/tampered-signature-bit.json",
+      "description": "One bit of the signature flipped.",
+      "expected_result": "REJECTED",
+      "failing_check": "L1.SIGNATURE"
+    },
+    {
+      "file": "negative/kind-swapped.json",
+      "description": "An ISSUANCE relabelled REDEMPTION: refused (closed schema per kind).",
+      "expected_result": "REJECTED",
+      "failing_check": "L0.SCHEMA"
+    },
+    {
+      "file": "negative/unknown-key.json",
+      "description": "Signed by a key the verifier does not trust (RFC 8032 test 2 key).",
+      "expected_result": "REJECTED",
+      "failing_check": "L1.KEY_KNOWN"
+    },
+    {
+      "file": "negative/wrong-enforcement-point.json",
+      "description": "Genuine redemption, but the verifier expects another enforcement point: refused at L2.",
+      "expected_result": "REJECTED",
+      "failing_check": "L2.CONTEXT",
+      "expected_context": {
+        "enforcement_point_id": "ep-other",
+        "capability_id": "cap-proof-1",
+        "kind": "REDEMPTION"
+      }
+    },
+    {
+      "file": "negative/redemption-without-expected-enforcement-point.json",
+      "description": "A REDEMPTION cannot be verified at L2 without the expected enforcement point.",
+      "expected_result": "REJECTED",
+      "failing_check": "L2.CONTEXT",
+      "expected_context": {
+        "capability_id": "cap-proof-1"
+      }
+    },
+    {
+      "file": "negative/expected-at-not-canonical.json",
+      "description": "The verifier's expected.at is a date without time or milliseconds: the expected context is refused rather than guessed.",
+      "expected_result": "REJECTED",
+      "failing_check": "L2.EXPECTED_VALID",
+      "expected_context": {
+        "enforcement_point_id": "ep-proof-1",
+        "capability_id": "cap-proof-1",
+        "kind": "ISSUANCE",
+        "at": "2025-01-01T09:11:00Z"
+      }
+    },
+    {
+      "file": "negative/expected-at-on-redemption.json",
+      "description": "Freshness (expected.at) applies to an ISSUANCE only: refused for a REDEMPTION.",
+      "expected_result": "REJECTED",
+      "failing_check": "L2.CONTEXT",
+      "expected_context": {
+        "enforcement_point_id": "ep-proof-1",
+        "capability_id": "cap-proof-1",
+        "kind": "REDEMPTION",
+        "at": "2025-01-01T09:11:00.000Z"
+      }
+    },
+    {
+      "file": "negative/validly-signed-lie.json",
+      "description": "NOT A VALIDATION: the key holder signed a statement no journal supports. It is consistent with itself and with the expected context, so L1 and L2 pass. L0-L2 never validate the decision (L3, a later change, re-derives it).",
+      "expected_result": "CONSISTENT_L2",
+      "expected_context": {
+        "enforcement_point_id": "ep-proof-1",
+        "capability_id": "cap-proof-1",
+        "kind": "REDEMPTION",
+        "principal_id": "someone-who-never-acted"
+      }
+    }
+  ]
+}

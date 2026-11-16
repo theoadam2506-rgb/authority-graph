@@ -1,0 +1,328 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/theoadam2506-rgb/authority-graph/proof/attestation.schema.json",
+  "title": "authority-attestation/v1",
+  "description": "Closed schema of an Authority attestation. Describes the SHAPE only: a document that matches is not thereby signed, true or authentic. Normative text: docs/v1/ATTESTATIONS.md. A test keeps this file in step with src/proof/attestation.ts.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/issuance"
+    },
+    {
+      "$ref": "#/$defs/redemption"
+    }
+  ],
+  "$defs": {
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "const": "authority-graph"
+        },
+        "protocol_version": {
+          "const": 1
+        },
+        "event_schema_version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "id",
+        "protocol_version",
+        "event_schema_version"
+      ]
+    },
+    "journal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scheme": {
+          "const": "authority-journal-chain/v1"
+        },
+        "head_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "head_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "scheme",
+        "head_sequence",
+        "head_hash"
+      ]
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "alg": {
+          "const": "Ed25519"
+        },
+        "key_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "sig": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        }
+      },
+      "required": [
+        "alg",
+        "key_id",
+        "sig"
+      ]
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "authority_time": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        }
+      },
+      "required": [
+        "sequence",
+        "event_id",
+        "authority_time"
+      ]
+    },
+    "chainDelegation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "delegation"
+        },
+        "delegation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "delegation_id"
+      ]
+    },
+    "chainApproval": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "approval"
+        },
+        "approval_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        }
+      },
+      "required": [
+        "kind",
+        "approval_id"
+      ]
+    },
+    "issuanceStatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/event"
+        },
+        "capability_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "action_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "action_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "principal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "decision_sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "enforcement_point_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "granted_chain_ref": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/chainDelegation"
+              },
+              {
+                "$ref": "#/$defs/chainApproval"
+              }
+            ]
+          }
+        },
+        "expires_at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        }
+      },
+      "required": [
+        "event",
+        "capability_id",
+        "action_id",
+        "action_fingerprint",
+        "principal_id",
+        "decision_sequence",
+        "enforcement_point_id",
+        "granted_chain_ref",
+        "expires_at"
+      ]
+    },
+    "redemptionStatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/event"
+        },
+        "capability_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "action_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "action_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "principal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "decision_sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "enforcement_point_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        }
+      },
+      "required": [
+        "event",
+        "capability_id",
+        "action_id",
+        "action_fingerprint",
+        "principal_id",
+        "decision_sequence",
+        "enforcement_point_id"
+      ]
+    },
+    "issuance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "proof_version": {
+          "const": "authority-attestation/v1"
+        },
+        "kind": {
+          "const": "ISSUANCE"
+        },
+        "engine": {
+          "$ref": "#/$defs/engine"
+        },
+        "statement": {
+          "$ref": "#/$defs/issuanceStatement"
+        },
+        "journal": {
+          "$ref": "#/$defs/journal"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      },
+      "required": [
+        "proof_version",
+        "kind",
+        "engine",
+        "statement",
+        "journal",
+        "signature"
+      ]
+    },
+    "redemption": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "proof_version": {
+          "const": "authority-attestation/v1"
+        },
+        "kind": {
+          "const": "REDEMPTION"
+        },
+        "engine": {
+          "$ref": "#/$defs/engine"
+        },
+        "statement": {
+          "$ref": "#/$defs/redemptionStatement"
+        },
+        "journal": {
+          "$ref": "#/$defs/journal"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      },
+      "required": [
+        "proof_version",
+        "kind",
+        "engine",
+        "statement",
+        "journal",
+        "signature"
+      ]
+    }
+  }
+}

@@ -1,6 +1,6 @@
 # Architecture
 
-Status: design. **exists today** and **planned** are marked.
+Status: design. **exists today** and **planned** are marked. Authority Proof's attestations and L0 to L2 verification exist today (PR 3, see [`ATTESTATIONS.md`](./ATTESTATIONS.md)); L3 replay, the command and the SDK are planned.
 
 ```
  AI agent / tool gateway
