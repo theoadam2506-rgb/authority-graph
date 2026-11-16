@@ -1,6 +1,6 @@
 # Architecture
 
-Status: design. **exists today** and **planned** are marked. Authority Proof's attestations and L0 to L2 verification exist today (PR 3, see [`ATTESTATIONS.md`](./ATTESTATIONS.md)); L3 replay, the command and the SDK are planned.
+Status: experimental. **exists today** and **planned** are marked. Authority Core (including single-use redemption in memory and on PostgreSQL), Authority Proof (attestations, verification L0 to L3 and the `authority proof` commands, see [`ATTESTATIONS.md`](./ATTESTATIONS.md)) and the Conformance Lab exist today. The SDK is planned and not started. Nothing has been independently reviewed.
 
 ```
  AI agent / tool gateway
@@ -15,14 +15,14 @@ Status: design. **exists today** and **planned** are marked. Authority Proof's a
            | decisions, events                | attestations
            v                                  v
  +---------------------------+     +-----------------------------+
- | Authority Core            |     | Authority Proof (planned)   |
+ | Authority Core            |     | Authority Proof (exists)    |
  | src/engine, src/storage   |---->| JCS + Ed25519 envelope      |
  | exists today              |     | log head hash (computed on  |
  | + CAPABILITY_REDEEMED     |     | export), verify, replay     |
  +-------------+-------------+     +-----------------------------+
                ^
  +-------------+-------------+
- | Conformance Lab           |  targets: simulated, OPA, SDK-guarded service (planned)
+ | Conformance Lab           |  targets: simulated, OPA (exist); SDK-guarded service (planned)
  | exists today (V0)         |
  +---------------------------+
 ```
@@ -46,7 +46,7 @@ The SQL schema needs no change for it: `authority_events.event_type` is
 (`src/storage/schema.sql`). The PostgreSQL transaction adds an additive, idempotent partial unique index on
 redeemed `capability_id` in `schema.sql` (the migration).
 
-## The cycle of a sensitive action (planned)
+## The cycle of a sensitive action (the transactions exist; the SDK that orchestrates them is planned)
 
 1. **authorize.** The application asks for a decision bound to this exact
    call: tool name, canonical arguments digest, amount, recipient. If the

@@ -1,25 +1,28 @@
 # Authority V1: design documents
 
-> **Status: design only.** Nothing described in these documents is
-> implemented unless it is explicitly marked **exists today** and points to the
-> code or test that shows it. Everything else is **planned** and may change.
-> No security guarantee is claimed for anything planned.
+> **Status: experimental, partly implemented.** Nothing described in these
+> documents is implemented unless it is explicitly marked **exists today** and
+> points to the code or test that shows it. Everything else is **planned** and
+> may change. **No independent review or audit of Authority, including
+> Authority Proof, has been carried out** (the cryptographic review, D9, is
+> prepared and not started), and no security guarantee is claimed for any of it.
+> Not published to npm; not ready for production.
 
 Authority V1 turns the existing deterministic engine into something an
 application can call before a sensitive action. It has four components:
 
 | Component | Role | State |
 |---|---|---|
-| **Authority Core** | Deterministic engine: delegations, revocations, restrictions, budgets, explainable decisions | **exists today** (`src/engine`, `src/storage`); V1 adds one event, `CAPABILITY_REDEEMED` (planned) |
-| **Authority Proof** | Canonical, signed attestations of issuances and redemptions; offline verification L0 to L2 | **exists today** (`src/proof`, [`ATTESTATIONS.md`](./ATTESTATIONS.md)); L3 replay and the command are planned |
-| **Authority SDK** | In-process TypeScript API to check authorization before an action | planned |
+| **Authority Core** | Deterministic engine: delegations, revocations, restrictions, budgets, explainable decisions; capability issuance; single-use redemption (`CAPABILITY_REDEEMED`) in memory and on PostgreSQL | **exists today** (`src/engine`, `src/storage`); redemption merged in PRs 1 and 2 |
+| **Authority Proof** | Canonical, signed attestations of issuances and redemptions; offline verification L0 to L3 (L3 replays a journal you supply); `authority proof verify` and `authority proof head` | **exists today** (`src/proof`, [`ATTESTATIONS.md`](./ATTESTATIONS.md)), merged in PRs 3 and 4; not independently reviewed; the `corroborate` command is deferred |
+| **Authority SDK** | In-process TypeScript API to check authorization before an action | **planned, not started** |
 | **Authority Conformance Lab** | Compares an external authorization system with the engine | **exists today** (V0, `src/conformance`, [`docs/CONFORMANCE.md`](../CONFORMANCE.md)) |
 
 Reading order:
 
 1. [`ARCHITECTURE.md`](./ARCHITECTURE.md): components, the authorize / redeem / report cycle, what each step does and does not guarantee.
 2. [`ATTESTATIONS.md`](./ATTESTATIONS.md): the attestation format, signing input, journal hash, keys, verification levels and limits.
-3. [`CRYPTO_REVIEW.md`](./CRYPTO_REVIEW.md): the brief for the independent cryptographic review (D9), not started.
+3. [`CRYPTO_REVIEW.md`](./CRYPTO_REVIEW.md) and [`D9_REVIEW_PACK.md`](./D9_REVIEW_PACK.md): the brief and the proposal for the independent cryptographic review (D9), prepared and **not started**.
 4. [`VOCABULARY.md`](./VOCABULARY.md): the words we use, and the explicit line between what an attestation says and what nobody can prove.
 5. [`THREATS.md`](./THREATS.md): V1 threats and mitigations, with residual risk stated.
 6. [`DECISIONS.md`](./DECISIONS.md): decisions taken, and decisions still open.
