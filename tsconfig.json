@@ -3,21 +3,29 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2022"],
-    "types": ["node"],
-
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true,
-
     "esModuleInterop": true,
     "isolatedModules": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "tests", "demo", "examples"]
+  "include": [
+    "src",
+    "tests",
+    "demo",
+    "examples",
+    "scripts/generate-proof-vectors.ts"
+  ]
 }

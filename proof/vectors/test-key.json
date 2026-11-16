@@ -1,0 +1,17 @@
+{
+  "note": "RFC 8032 section 7.1 TEST 1. The private key is public knowledge: this key protects nothing and must never be trusted for real attestations.",
+  "private_jwk": {
+    "kty": "OKP",
+    "crv": "Ed25519",
+    "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+    "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+  },
+  "public_jwk": {
+    "kty": "OKP",
+    "crv": "Ed25519",
+    "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+  },
+  "key_id": "If4x36FUomFia_hUBG_SJxt77UtqvkWqWId-9H-XIbk",
+  "seed_hex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+  "public_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+}

@@ -1,0 +1,137 @@
+[
+  {
+    "event_id": "evt-1",
+    "schema_version": 1,
+    "occurred_at": "2025-01-01T00:00:01.000Z",
+    "principal_id": "theo",
+    "event_type": "DELEGATION_CREATED",
+    "payload": {
+      "delegation_id": "d-proof",
+      "grantor_principal_id": "theo",
+      "grantor_type": "HUMAN_ROOT",
+      "grantee_principal_id": "agent-a",
+      "capabilities": [
+        {
+          "resource": "purchase_order",
+          "action": "create"
+        }
+      ],
+      "can_delegate": false,
+      "expires_at": {
+        "kind": "no_expiry"
+      },
+      "thresholds": {
+        "automatic_max_amount": {
+          "value": 2000,
+          "currency": "EUR"
+        },
+        "approval_max_amount": {
+          "value": 2000,
+          "currency": "EUR"
+        }
+      },
+      "parent_delegation_id": null
+    },
+    "sequence": 1,
+    "authority_time": "2025-01-01T09:00:00.000Z",
+    "recorded_at": "2025-01-01T12:00:00.000Z",
+    "assurance_level": "ASSERTED_UNVERIFIED"
+  },
+  {
+    "event_id": "evt-2",
+    "schema_version": 1,
+    "occurred_at": "2025-01-01T00:00:02.000Z",
+    "principal_id": "agent-a",
+    "event_type": "ACTION_REQUESTED",
+    "payload": {
+      "action_id": "act-proof",
+      "requesting_principal_id": "agent-a",
+      "delegation_id": "d-proof",
+      "capability_requested": {
+        "resource": "purchase_order",
+        "action": "create"
+      },
+      "parameters": {
+        "kind": "monetary",
+        "amount": {
+          "value": 1800,
+          "currency": "EUR"
+        },
+        "fingerprint_scheme_version": 2,
+        "arguments_digest": "29d2806e6239c02cf146d099709b7f4103ddd5e941c4f2ee25e9c489f67f3bad"
+      }
+    },
+    "sequence": 2,
+    "authority_time": "2025-01-01T09:00:00.000Z",
+    "recorded_at": "2025-01-01T12:00:01.000Z",
+    "assurance_level": "ASSERTED_UNVERIFIED"
+  },
+  {
+    "event_id": "capability-issued:cap-proof-1:act-proof",
+    "schema_version": 1,
+    "occurred_at": "2025-01-01T09:10:00.000Z",
+    "principal_id": "agent-a",
+    "event_type": "CAPABILITY_ISSUED",
+    "payload": {
+      "capability_id": "cap-proof-1",
+      "action_id": "act-proof",
+      "action_fingerprint": "d192db7f3875d58097673e72a1e97fcd51b1cc55bed3f3435d06af94f57c524a",
+      "decision_sequence": 2,
+      "granted_chain_ref": [
+        {
+          "kind": "delegation",
+          "delegation_id": "d-proof"
+        }
+      ],
+      "enforcement_point_id": "ep-proof-1",
+      "expires_at": "2025-01-01T09:15:00.000Z"
+    },
+    "sequence": 3,
+    "authority_time": "2025-01-01T09:10:00.000Z",
+    "recorded_at": "2025-01-01T12:00:02.000Z",
+    "assurance_level": "ASSERTED_UNVERIFIED"
+  },
+  {
+    "event_id": "capability-redeemed:cap-proof-1:attempt-1",
+    "schema_version": 1,
+    "occurred_at": "2025-01-01T09:12:00.000Z",
+    "principal_id": "agent-a",
+    "event_type": "CAPABILITY_REDEEMED",
+    "payload": {
+      "capability_id": "cap-proof-1",
+      "action_id": "act-proof",
+      "action_fingerprint": "d192db7f3875d58097673e72a1e97fcd51b1cc55bed3f3435d06af94f57c524a",
+      "decision_sequence": 3,
+      "enforcement_point_id": "ep-proof-1"
+    },
+    "sequence": 4,
+    "authority_time": "2025-01-01T09:12:00.000Z",
+    "recorded_at": "2025-01-01T12:00:03.000Z",
+    "assurance_level": "ASSERTED_UNVERIFIED"
+  },
+  {
+    "event_id": "capability-issued:cap-proof-2:act-proof",
+    "schema_version": 1,
+    "occurred_at": "2025-01-01T09:13:00.000Z",
+    "principal_id": "agent-a",
+    "event_type": "CAPABILITY_ISSUED",
+    "payload": {
+      "capability_id": "cap-proof-2",
+      "action_id": "act-proof",
+      "action_fingerprint": "d192db7f3875d58097673e72a1e97fcd51b1cc55bed3f3435d06af94f57c524a",
+      "decision_sequence": 4,
+      "granted_chain_ref": [
+        {
+          "kind": "delegation",
+          "delegation_id": "d-proof"
+        }
+      ],
+      "enforcement_point_id": "ep-proof-1",
+      "expires_at": "2025-01-01T09:18:00.000Z"
+    },
+    "sequence": 5,
+    "authority_time": "2025-01-01T09:13:00.000Z",
+    "recorded_at": "2025-01-01T12:00:04.000Z",
+    "assurance_level": "ASSERTED_UNVERIFIED"
+  }
+]

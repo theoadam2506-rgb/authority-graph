@@ -1,0 +1,13 @@
+{
+  "format": "authority-trusted-keys/v1",
+  "keys": [
+    {
+      "jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+      },
+      "label": "RFC 8032 test vector 1 (TEST ONLY: its private key is public)"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "scheme": "authority-journal-chain/v1",
+  "head_sequence": 5,
+  "head_hash": "1ec1cd938b3a65bfa19cf3c191571deb6394be2fff3a173e8db70630e8da7493",
+  "prefix_heads": [
+    {
+      "head_sequence": 1,
+      "head_hash": "bfcb1c59640f4d0395d906793f6e70f28d2c0a8defd5b64a3dfc3f9f243b0066"
+    },
+    {
+      "head_sequence": 2,
+      "head_hash": "4aeb00c9a50ed02ebcccc7a02bf60af781d0b39de7e028e02d6c170851ec5d54"
+    },
+    {
+      "head_sequence": 3,
+      "head_hash": "0dd8244795be33902c6f4881f6ccebf6af68148c09e0ba57ebf65fa841554044"
+    },
+    {
+      "head_sequence": 4,
+      "head_hash": "4884b389b9aa8dbb71d4ca319b26761253e12eeec857bb6eb0c35a7734c0eb56"
+    },
+    {
+      "head_sequence": 5,
+      "head_hash": "1ec1cd938b3a65bfa19cf3c191571deb6394be2fff3a173e8db70630e8da7493"
+    }
+  ]
+}

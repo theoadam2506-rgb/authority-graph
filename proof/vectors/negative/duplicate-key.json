@@ -1,0 +1,33 @@
+{
+  "proof_version": "authority-attestation/v1",
+  "kind": "REDEMPTION",
+  "kind": "ISSUANCE",
+  "engine": {
+    "id": "authority-graph",
+    "protocol_version": 1,
+    "event_schema_version": 1
+  },
+  "statement": {
+    "event": {
+      "sequence": 4,
+      "event_id": "capability-redeemed:cap-proof-1:attempt-1",
+      "authority_time": "2025-01-01T09:12:00.000Z"
+    },
+    "capability_id": "cap-proof-1",
+    "action_id": "act-proof",
+    "action_fingerprint": "d192db7f3875d58097673e72a1e97fcd51b1cc55bed3f3435d06af94f57c524a",
+    "principal_id": "agent-a",
+    "decision_sequence": 3,
+    "enforcement_point_id": "ep-proof-1"
+  },
+  "journal": {
+    "scheme": "authority-journal-chain/v1",
+    "head_sequence": 5,
+    "head_hash": "1ec1cd938b3a65bfa19cf3c191571deb6394be2fff3a173e8db70630e8da7493"
+  },
+  "signature": {
+    "alg": "Ed25519",
+    "key_id": "If4x36FUomFia_hUBG_SJxt77UtqvkWqWId-9H-XIbk",
+    "sig": "AR0TX_bnJ9oBry5sMX_epw1dMgI-vacMaWY7P1Azx_HNCIEw3QkBg1ADuRYqzEmIMQIg-QJ960FJoUWj13tsAg"
+  }
+}

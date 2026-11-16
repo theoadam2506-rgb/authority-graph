@@ -17,6 +17,15 @@
 | D11 | PostgreSQL test isolation (issue #13) is fixed with one schema per test file before any storage work. |
 | D12 | Capacity accounting is unchanged in V1. The capacity cost of a ticket consumed by `CONCURRENT_WRITE_DETECTED` is accepted as an availability trade-off, documented, and never presented as a guarantee about external effects. |
 | D13 | PostgreSQL redemption (PR 2) uses one atomic SQL transaction, a fresh read of the log, a uniqueness constraint on redemptions and an explicit check that the current transaction inserted the event. It reuses the backend-agnostic contract suite and completes the planned PostgreSQL tests. No npm package is published and Authority Proof is not started before this lands. |
+| D14 | PR 3 attests ISSUANCE and REDEMPTION only; DECISION attestations and attested refusals are deferred. |
+| D15 | The journal hash covers the complete canonical event, `recorded_at` included; the format is frozen (`docs/v1/ATTESTATIONS.md`). |
+| D16 | Keys are Ed25519 JWK only in V1. |
+| D17 | Unknown members are refused at every level of the envelope. |
+| D18 | `enforcement_point_id` is mandatory for a REDEMPTION; L2 verifies the expected context and L0 to L2 never claim to validate the decision. |
+| D19 | The engine is identified by a fixed id plus protocol and event-schema versions, not by a hash of `SPEC.md`. |
+| D20 | PR 3 is signing, L0 to L2 verification, the hash chain and vectors; PR 4 is L3 replay and the command. |
+| D21 | An independent cryptographic review follows PR 3, before any communication about security guarantees. |
+| D22 | Two prospect interviews run in parallel and do not block the work. |
 
 ## Still open
 
