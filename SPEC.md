@@ -922,6 +922,18 @@ transaction exists in this version.
     stays engaged (I29), so re-authorizing the same action against a
     `total_budget` may be refused `CAPACITY_EXCEEDED`; the effect must not be
     performed.
+
+    **Accepted V1 trade-off (availability, decided by the project owner).**
+    A ticket consumed this way keeps its capacity engaged (I29): capacity
+    accounting is deliberately NOT changed in V1. The cost is availability, not
+    safety: under a `total_budget`, re-authorizing the same action after a
+    `CONCURRENT_WRITE_DETECTED` may be refused `CAPACITY_EXCEEDED` until the
+    budget is adjusted by other means. Nothing here, or anywhere in redemption,
+    guarantees that an external effect happens, happens once, or does not
+    happen: redemption bounds authorizations only. Revisiting the accounting
+    (for example releasing capacity for a redemption that fails I31) is a
+    possible later change, with its own invariant and tests, and is not
+    promised.
 31. **I31: A `CAPABILITY_REDEEMED` event authorizes the effect only if it
     validates.** `validateRedemptionEvent` states the coherence between the
     three notions of "when": `decision_sequence` (the log prefix the decision
