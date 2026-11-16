@@ -14,13 +14,11 @@ that is exploitable and not yet fixed. Report it privately instead:
 1. **GitHub private vulnerability reporting (primary channel).** Where it is
    enabled for this repository, the **Security** tab shows a **Report a
    vulnerability** button. Use it. If the button is not there, private
-   reporting is not enabled yet: use the fallback below.
-2. **Fallback while private reporting is not enabled.** Open a public issue
-   titled "Security contact request" that contains **no technical detail**
-   (no description of the flaw, no reproduction, no affected component). The
-   maintainer will reply there to arrange a private channel. No email address
-   is published as a security channel because none is confirmed to be
-   monitored.
+   reporting is not enabled yet: use email.
+2. **Email.** Write to `security@authority-graph.com`. The maintainer tested
+   delivery to this address from an external mailbox on 2026-11-16. It is
+   read by one person, so no response time is promised (see below). Do not
+   put exploit details in a public issue while waiting.
 
 ## What to include
 
