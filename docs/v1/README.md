@@ -19,11 +19,12 @@ Reading order:
 
 1. [`ARCHITECTURE.md`](./ARCHITECTURE.md): components, the authorize / redeem / report cycle, what each step does and does not guarantee.
 2. [`ATTESTATIONS.md`](./ATTESTATIONS.md): the attestation format, signing input, journal hash, keys, verification levels and limits.
-3. [`VOCABULARY.md`](./VOCABULARY.md): the words we use, and the explicit line between what an attestation says and what nobody can prove.
-4. [`THREATS.md`](./THREATS.md): V1 threats and mitigations, with residual risk stated.
-5. [`DECISIONS.md`](./DECISIONS.md): decisions taken, and decisions still open.
-6. [`ROADMAP.md`](./ROADMAP.md): the sequence of independent pull requests and their acceptance criteria.
-7. [`EDITION.md`](./EDITION.md): what stays community (Apache-2.0) and what may be offered separately. Draft, pending legal review.
+3. [`CRYPTO_REVIEW.md`](./CRYPTO_REVIEW.md): the brief for the independent cryptographic review (D9), not started.
+4. [`VOCABULARY.md`](./VOCABULARY.md): the words we use, and the explicit line between what an attestation says and what nobody can prove.
+5. [`THREATS.md`](./THREATS.md): V1 threats and mitigations, with residual risk stated.
+6. [`DECISIONS.md`](./DECISIONS.md): decisions taken, and decisions still open.
+7. [`ROADMAP.md`](./ROADMAP.md): the sequence of independent pull requests and their acceptance criteria.
+8. [`EDITION.md`](./EDITION.md): what stays community (Apache-2.0) and what may be offered separately. Draft, pending legal review.
 
 Constraints that bind every V1 change:
 
