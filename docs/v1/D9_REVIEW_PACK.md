@@ -119,6 +119,6 @@ First message, draft:
 ## 7. Open points for the owner
 
 1. Which scenario to pursue first (recommendation: Scenario 1 informal contacts for A questions in parallel with a quote request for Scenario 2; spend only after explicit approval).
-2. Whether `security@authority-graph.com` in `SECURITY.md` is monitored; GitHub private vulnerability reporting must be enabled in the repository settings by the owner (cannot be done from here).
+2. GitHub private vulnerability reporting must be enabled in the repository settings by the owner (cannot be done from here). Until then `SECURITY.md` points to a no-detail "Security contact request" issue. No email address is published as a security channel because none is confirmed to be monitored; add one only after confirming it.
 3. Name, pseudonym or anonymity preferences for credits in findings.
 4. A date after which, absent a reviewer, the public wording stays "not independently reviewed".

@@ -11,10 +11,16 @@ that answer.
 Do not open a public issue, pull request or discussion for a vulnerability
 that is exploitable and not yet fixed. Report it privately instead:
 
-1. **GitHub private vulnerability reporting (preferred).** If it is enabled
-   for this repository, the **Security** tab shows a **Report a
-   vulnerability** button. Use it.
-2. **Email.** Otherwise, write to `security@authority-graph.com`.
+1. **GitHub private vulnerability reporting (primary channel).** Where it is
+   enabled for this repository, the **Security** tab shows a **Report a
+   vulnerability** button. Use it. If the button is not there, private
+   reporting is not enabled yet: use the fallback below.
+2. **Fallback while private reporting is not enabled.** Open a public issue
+   titled "Security contact request" that contains **no technical detail**
+   (no description of the flaw, no reproduction, no affected component). The
+   maintainer will reply there to arrange a private channel. No email address
+   is published as a security channel because none is confirmed to be
+   monitored.
 
 ## What to include
 
