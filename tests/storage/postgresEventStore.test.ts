@@ -12,8 +12,7 @@
  * that file's own docstring for the gating rationale.
  */
 import { Pool } from "pg";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { isolatedSchema } from "./pgTestSchema.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { toDraft } from "../../src/domain/events.js";
 import { sequenceNumber } from "../../src/domain/types.js";
@@ -44,11 +43,11 @@ if (!databaseAvailable) {
 }
 
 describe.skipIf(!databaseAvailable)("PostgresEventStore — real Postgres, sequence continuity and uniqueness (mirrors InMemoryEventStore's own contract tests)", () => {
-  const pool = new Pool({ connectionString: TEST_DATABASE_URL });
+  const iso = isolatedSchema(TEST_DATABASE_URL, "event_store");
+  const pool = iso.pool;
 
   beforeAll(async () => {
-    const schemaPath = fileURLToPath(new URL("../../src/storage/schema.sql", import.meta.url));
-    await pool.query(readFileSync(schemaPath, "utf8"));
+    await iso.create();
   });
 
   beforeEach(async () => {
@@ -56,7 +55,7 @@ describe.skipIf(!databaseAvailable)("PostgresEventStore — real Postgres, seque
   });
 
   afterAll(async () => {
-    await pool.end();
+    await iso.drop();
   });
 
   it("numbers a second append() batch continuing from the first, never restarting at 1", async () => {
