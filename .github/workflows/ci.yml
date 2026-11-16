@@ -76,6 +76,10 @@ jobs:
           tests/storage/postgresEventStore.test.ts
           tests/storage/postgresCapabilityIssuanceTransaction.test.ts
           tests/storage/postgresAppendOnlyBoundary.test.ts
+          tests/storage/postgresCapabilityRedemptionTransaction.test.ts
+          tests/storage/postgresRedemptionProcesses.test.ts
+          tests/storage/postgresRedemptionReview.test.ts
+          tests/redemption/redemptionContract.postgres.test.ts
           --reporter=default
           --reporter=json
           --outputFile.json=vitest-postgres.json

@@ -16,7 +16,12 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { toDraft } from "../../src/domain/events.js";
 import { PostgresEventStore } from "../../src/storage/postgresEventStore.js";
-import { AGENT_A, AGENT_B, MALLORY, PURCHASE_ORDER_CREATE, THEO, rootDelegation, sequentialClock } from "../fixtures/scenarios.js";
+import { PostgresCapabilityIssuanceTransaction } from "../../src/storage/postgresCapabilityIssuanceTransaction.js";
+import { PostgresCapabilityRedemptionTransaction } from "../../src/storage/postgresCapabilityRedemptionTransaction.js";
+import { buildCapabilityRedeemedDraft } from "../../src/storage/capabilityRedemptionTransaction.js";
+import { validateRedemptionEvent } from "../../src/engine/redeemCapability.js";
+import { actionId, capabilityId, clientIdempotencyKey, enforcementPointId, iso8601, monetaryParameters, money, sequenceNumber, thresholds } from "../../src/domain/types.js";
+import { AGENT_A, AGENT_B, MALLORY, PURCHASE_ORDER_CREATE, THEO, actionRequest, rootDelegation, sequentialClock } from "../fixtures/scenarios.js";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgresql://postgres:postgres@127.0.0.1:5432/authority_graph_test";
 const LOGIN_ROLE = "authority_login_p2a_test";
@@ -179,6 +184,60 @@ describe.skipIf(!databaseAvailable)("P2A — PostgreSQL append-only role boundar
       ),
     );
     expect((await owner.query("SELECT payload FROM authority_events")).rows).toEqual([{ payload: { v: 1 } }]);
+  });
+
+  it("the application role can REDEEM a capability (SELECT and INSERT only), and afterwards still cannot rewrite the redemption row", async () => {
+    const t = (hhmmss: string) => iso8601(`2025-01-01T${hhmmss}.000Z`);
+    const seedStore = new PostgresEventStore(owner, { authorityTime: () => t("09:00:00") });
+    await seedStore.append([
+      toDraft(rootDelegation({ sequence: 1, id: "d-app-redeem", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT_A, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(money(2000, "EUR"), money(2000, "EUR")) })),
+      toDraft(actionRequest({ sequence: 2, id: "act-app-redeem", requester: AGENT_A, delegationId: "d-app-redeem", parameters: monetaryParameters(money(500, "EUR")) })),
+    ]);
+    const issued = await new PostgresCapabilityIssuanceTransaction(owner).issue(
+      { principalId: AGENT_A }, clientIdempotencyKey("k-app"), { action_id: actionId("act-app-redeem"), enforcement_point_id: enforcementPointId("ep-app") },
+      { nextCapabilityId: () => capabilityId("cap-app"), expiresAt: (x) => iso8601(new Date(Date.parse(x) + 300_000).toISOString()) }, t("09:10:00"),
+    );
+    expect(issued).toMatchObject({ outcome: "EXECUTED", result: { ok: true } });
+
+    // The application role redeems: it needs SELECT (fresh read) and INSERT (the event), nothing else.
+    const result = await new PostgresCapabilityRedemptionTransaction(app).redeem(
+      { principalId: AGENT_A },
+      { capability_id: capabilityId("cap-app"), enforcement_point_id: enforcementPointId("ep-app"), observed_capability: PURCHASE_ORDER_CREATE, observed_parameters: monetaryParameters(money(500, "EUR")) },
+      t("09:12:00"),
+    );
+    expect(result.ok).toBe(true);
+    expect((await owner.query("SELECT count(*) AS c FROM authority_events WHERE event_type = 'CAPABILITY_REDEEMED'")).rows[0].c).toBe("1");
+    await expectDenied(app.query("UPDATE authority_events SET payload = '{}' WHERE event_type = 'CAPABILITY_REDEEMED'"));
+    await expectDenied(app.query("DELETE FROM authority_events WHERE event_type = 'CAPABILITY_REDEEMED'"));
+    expect(await violations(LOGIN_ROLE)).toEqual([]);
+  });
+
+  it("TRUST BOUNDARY: the application role cannot rewrite history but CAN assert events; a coherent forged redemption it appends validates, so INSERT is the right to assert (documented residual)", async () => {
+    const t = (hhmmss: string) => iso8601(`2025-01-01T${hhmmss}.000Z`);
+    const seedStore = new PostgresEventStore(owner, { authorityTime: () => t("09:00:00") });
+    await seedStore.append([
+      toDraft(rootDelegation({ sequence: 1, id: "d-app-forge", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT_A, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, amountThresholds: thresholds(money(2000, "EUR"), money(2000, "EUR")) })),
+      toDraft(actionRequest({ sequence: 2, id: "act-app-forge", requester: AGENT_A, delegationId: "d-app-forge", parameters: monetaryParameters(money(500, "EUR")) })),
+    ]);
+    const issued = await new PostgresCapabilityIssuanceTransaction(owner).issue(
+      { principalId: AGENT_A }, clientIdempotencyKey("k-forge"), { action_id: actionId("act-app-forge"), enforcement_point_id: enforcementPointId("ep-forge") },
+      { nextCapabilityId: () => capabilityId("cap-forge"), expiresAt: (x) => iso8601(new Date(Date.parse(x) + 300_000).toISOString()) }, t("09:10:00"),
+    );
+    if (issued.outcome !== "EXECUTED" || !issued.result.ok) throw new Error("fixture");
+    const events = await new PostgresEventStore(owner, { authorityTime: () => t("09:12:00") }).getEvents();
+    const ticket = issued.result.capability;
+    // A writer holding INSERT (the application role) crafts a COHERENT redemption event for a ticket it does not own.
+    const forged = buildCapabilityRedeemedDraft({ principalId: AGENT_A }, t("09:12:00"), { capability_id: ticket.capability_id, action_id: ticket.action_id, action_fingerprint: ticket.action_fingerprint, decision_sequence: sequenceNumber(events.length), enforcement_point_id: ticket.enforcement_point_id }, "forged-by-app");
+    const out = await new PostgresEventStore(app, { authorityTime: () => t("09:12:00") }).append([forged]);
+    expect(out.outcomes[0]?.accepted).toBe(true); // the append-only boundary does not stop it: INSERT is allowed
+    const after = await new PostgresEventStore(owner, { authorityTime: () => t("09:12:00") }).getEvents();
+    const row = after.find((e) => e.event_type === "CAPABILITY_REDEEMED");
+    if (row === undefined || row.event_type !== "CAPABILITY_REDEEMED") throw new Error("forged row missing");
+    expect(validateRedemptionEvent(after, row)).toEqual({ ok: true }); // validity is coherence, not provenance
+    // The legitimate holder is then refused: the forger burned (in fact took) the ticket. It cannot rewrite it:
+    const legit = await new PostgresCapabilityRedemptionTransaction(owner).redeem({ principalId: AGENT_A }, { capability_id: ticket.capability_id, enforcement_point_id: enforcementPointId("ep-forge"), observed_capability: PURCHASE_ORDER_CREATE, observed_parameters: monetaryParameters(money(500, "EUR")) }, t("09:13:00"));
+    expect(legit).toEqual({ ok: false, reason: "ALREADY_REDEEMED" });
+    await expectDenied(app.query("UPDATE authority_events SET payload = '{}' WHERE event_type = 'CAPABILITY_REDEEMED'"));
   });
 
   it("the application role cannot escalate: no SET ROLE to the owner, no column-level grant, no role changes", async () => {

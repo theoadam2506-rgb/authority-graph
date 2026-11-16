@@ -18,6 +18,8 @@ import type { IssueCapabilityDependencies } from "../../src/engine/issueCapabili
 import { AGENT_A, EUR, PURCHASE_ORDER_CREATE, THEO, actionRequest, rootDelegation, revokeDelegation } from "../fixtures/scenarios.js";
 
 export const AGENT = AGENT_A;
+import { AGENT_B } from "../fixtures/scenarios.js";
+export const AGENT_B_PRINCIPAL = AGENT_B;
 export const EP = enforcementPointId("ep-redeem-1");
 export const T = (hhmmss: string): Iso8601 => iso8601(`2025-01-01T${hhmmss}.000Z`);
 export const auth = (principalId: PrincipalId): AuthenticatedPrincipal => ({ principalId });

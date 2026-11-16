@@ -77,6 +77,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS authority_events_capability_id_uidx
   ON authority_events ((payload ->> 'capability_id'))
   WHERE event_type = 'CAPABILITY_ISSUED';
 
+-- V1 (PR 2): at most one CAPABILITY_REDEEMED row per capability, enforced by
+-- the database itself. Like the capability_id index above, it is computed from
+-- the existing JSONB payload (no denormalized column, no second source of
+-- truth) and is the LAST-RESORT guarantee: the redemption transaction already
+-- reads the log under the writer lock and refuses a second redemption; this
+-- index turns any path that bypasses both (a raw INSERT, a writer that does not
+-- take the lock) into a unique violation instead of a second row. Additive and
+-- idempotent: IF NOT EXISTS, no existing row is touched, and an installation
+-- that holds no CAPABILITY_REDEEMED rows (every installation before V1) accepts
+-- it. Re-applying this file is the migration.
+CREATE UNIQUE INDEX IF NOT EXISTS authority_events_redeemed_capability_id_uidx
+  ON authority_events ((payload ->> 'capability_id'))
+  WHERE event_type = 'CAPABILITY_REDEEMED';
+
 -- PR4B-3B: idempotency persistence for the ISSUE_CAPABILITY command. This
 -- table is NOT part of the append-only canonical journal above — it
 -- records the OUTCOME of a command (successful or rejected), not an
