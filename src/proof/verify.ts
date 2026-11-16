@@ -21,7 +21,7 @@
  * of what is not established.
  */
 import { SIGNING_PREFIX, signingBytes, validateAttestationStructure, type Attestation, type AttestationKind } from "./attestation.js";
-import { base64urlDecodeExact } from "./encoding.js";
+import { base64urlDecodeExact, isCanonicalInstant, isLowerHex64 } from "./encoding.js";
 import { keyIdOf, verifyEd25519, type TrustedKeys } from "./keys.js";
 import { parseStrictJson, parseStrictJsonBytes, StrictJsonError } from "./strictJson.js";
 
@@ -77,6 +77,45 @@ export const NOT_ESTABLISHED: readonly string[] = [
   "who the signer is: a key_id names a public key, not a person or an organization",
   "that the effect happened, or happened once",
 ];
+
+
+const EXPECTED_FIELDS = ["kind", "capability_id", "action_id", "action_fingerprint", "principal_id", "enforcement_point_id", "journal_head_hash", "journal_head_sequence", "at"] as const;
+const isExpectedIdentifier = (v: unknown): boolean => typeof v === "string" && v.length >= 1 && v.length <= 256 && !/[\u0000-\u001f\u007f]/.test(v);
+
+/**
+ * The expected context is validated as strictly as the attestation itself. A
+ * verifier's own mistake must never turn into a silent pass:
+ *  - an unknown member (a typo such as `enforcement_pont_id`) would bind nothing
+ *    while looking like a bound context, so it is refused;
+ *  - `at` must be a canonical UTC instant `YYYY-MM-DDTHH:mm:ss.sssZ` that
+ *    round-trips through a date: no date-only, no offset, no missing milliseconds,
+ *    no lowercase, no impossible date (2025-02-30), no 24:00, no number, no null;
+ *  - hashes are 64 lowercase hex, the sequence a safe integer >= 1, identifiers
+ *    1 to 256 characters without control characters.
+ * Returns the problems (empty when the context is well formed).
+ */
+export function validateExpectedContext(expected: unknown): string[] {
+  const problems: string[] = [];
+  if (typeof expected !== "object" || expected === null || Array.isArray(expected)) return ["the expected context must be an object"];
+  const e = expected as Record<string, unknown>;
+  for (const k of Object.keys(e)) if (!(EXPECTED_FIELDS as readonly string[]).includes(k)) problems.push(`unknown expected member ${JSON.stringify(k)}`);
+  for (const [k, v] of Object.entries(e)) {
+    if (!(EXPECTED_FIELDS as readonly string[]).includes(k)) continue;
+    if (v === undefined) continue; // an absent value binds nothing and is treated as absent
+    if (k === "at") {
+      if (typeof v !== "string" || !isCanonicalInstant(v)) problems.push(`expected.at must be a canonical UTC instant YYYY-MM-DDTHH:mm:ss.sssZ, got ${JSON.stringify(v)}`);
+    } else if (k === "kind") {
+      if (v !== "ISSUANCE" && v !== "REDEMPTION") problems.push(`expected.kind must be "ISSUANCE" or "REDEMPTION", got ${JSON.stringify(v)}`);
+    } else if (k === "journal_head_hash" || k === "action_fingerprint") {
+      if (typeof v !== "string" || !isLowerHex64(v)) problems.push(`expected.${k} must be 64 lowercase hex characters`);
+    } else if (k === "journal_head_sequence") {
+      if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) problems.push("expected.journal_head_sequence must be an integer >= 1");
+    } else if (!isExpectedIdentifier(v)) {
+      problems.push(`expected.${k} must be an identifier (1 to 256 characters, no control characters)`);
+    }
+  }
+  return problems;
+}
 
 const instantMs = (iso: string): number => Date.parse(iso);
 
@@ -166,6 +205,12 @@ export function verifyAttestation(input: string | Uint8Array, options: VerifyOpt
     add("L2.EXPECTED", 2, "NOT_CHECKED", "no expected context was supplied");
     return finish({ L0: "PASS", L1: "PASS", L2: "NOT_CHECKED" }, { attestation: a, key });
   }
+  const malformed = validateExpectedContext(expected);
+  if (malformed.length > 0) {
+    add("L2.EXPECTED_VALID", 2, "FAIL", malformed.join("; "));
+    return finish({ L0: "PASS", L1: "PASS", L2: "FAIL" }, { attestation: a, key });
+  }
+  add("L2.EXPECTED_VALID", 2, "PASS");
   const problems: string[] = [];
   const bound = (Object.keys(expected) as (keyof ExpectedContext)[]).filter((k) => expected[k] !== undefined);
   if (bound.length === 0) problems.push("the expected context is empty: it binds nothing");

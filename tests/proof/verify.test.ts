@@ -3,7 +3,7 @@ import { canonicalizeToolArguments } from "../../src/domain/canonicalJson.js";
 import { SIGNING_PREFIX, attestIssuance, attestRedemption, signingBytes, type Attestation } from "../../src/proof/attestation.js";
 import { base64urlEncode } from "../../src/proof/encoding.js";
 import { generateDevelopmentKeyPair, createEd25519Signer, keyIdOf, type TrustedKeys } from "../../src/proof/keys.js";
-import { NOT_ESTABLISHED, verifyAttestation, type ExpectedContext } from "../../src/proof/verify.js";
+import { NOT_ESTABLISHED, validateExpectedContext, verifyAttestation, type ExpectedContext } from "../../src/proof/verify.js";
 import { EP, TEST_KEY_ID, TEST_PRIVATE_JWK, TEST_PUBLIC_JWK, buildFixture, testKeys, testSigner } from "./fixture.js";
 
 async function samples() {
@@ -336,6 +336,120 @@ describe("L2: the expected context", () => {
   it("L2 is not evaluated when L1 failed (a forged document never gets a context verdict)", async () => {
     const { redemption } = await samples();
     const r = verifyAttestation(JSON.stringify({ ...redemption, statement: { ...redemption.statement, capability_id: "tampered" } }), { keys: testKeys(), expected: { enforcement_point_id: EP, capability_id: "tampered" } });
+    expect(r.levels).toEqual({ L0: "PASS", L1: "FAIL", L2: "NOT_CHECKED" });
+  });
+});
+
+describe("L2: the expected context is validated as strictly as the attestation (no silent pass from a verifier's own mistake)", () => {
+  const detail = (r: { checks: readonly { id: string; detail?: string }[] }) => r.checks.find((c) => c.id === "L2.EXPECTED_VALID")?.detail ?? "";
+
+  it("a canonical expected.at is accepted: valid strictly before expires_at on an ISSUANCE", async () => {
+    const { issuance, issuanceText } = await samples();
+    const r = verifyAttestation(issuanceText, { keys: testKeys(), expected: { capability_id: issuance.statement.capability_id, at: "2025-01-01T09:11:00.000Z" } });
+    expect(r.result).toBe("CONSISTENT_L2");
+    expect(check(r, "L2.EXPECTED_VALID")).toBe("PASS");
+  });
+
+  it.each([
+    ["a date without a time", "2025-01-01"],
+    ["no milliseconds", "2025-01-01T09:11:00Z"],
+    ["one millisecond digit", "2025-01-01T09:11:00.0Z"],
+    ["four millisecond digits", "2025-01-01T09:11:00.0000Z"],
+    ["a numeric offset", "2025-01-01T10:11:00.000+01:00"],
+    ["a zero offset instead of Z", "2025-01-01T09:11:00.000+00:00"],
+    ["no zone designator", "2025-01-01T09:11:00.000"],
+    ["a lowercase t", "2025-01-01t09:11:00.000Z"],
+    ["a lowercase z", "2025-01-01T09:11:00.000z"],
+    ["a space instead of T", "2025-01-01 09:11:00.000Z"],
+    ["an impossible date (30 February)", "2025-02-30T09:11:00.000Z"],
+    ["an impossible month", "2025-13-01T09:11:00.000Z"],
+    ["hour 24", "2025-01-01T24:00:00.000Z"],
+    ["a leap second", "2025-12-31T23:59:60.000Z"],
+    ["leading whitespace", " 2025-01-01T09:11:00.000Z"],
+    ["trailing whitespace", "2025-01-01T09:11:00.000Z "],
+    ["an extended year", "+012025-01-01T09:11:00.000Z"],
+    ["an empty string", ""],
+    ["a word", "now"],
+    ["a numeric string", "1735722660000"],
+    ["a number", 1735722660000],
+    ["null", null],
+    ["a boolean", true],
+    ["an object", {}],
+    ["an array", ["2025-01-01T09:11:00.000Z"]],
+  ])("expected.at = %s is refused as invalid, not guessed", async (_name, at) => {
+    const { issuance, issuanceText } = await samples();
+    const r = verifyAttestation(issuanceText, { keys: testKeys(), expected: { capability_id: issuance.statement.capability_id, at } as unknown as ExpectedContext });
+    expect(r.result).toBe("REJECTED");
+    expect(r.levels).toEqual({ L0: "PASS", L1: "PASS", L2: "FAIL" });
+    expect(check(r, "L2.EXPECTED_VALID")).toBe("FAIL");
+    expect(detail(r)).toMatch(/expected\.at must be a canonical UTC instant/);
+  });
+
+  it("an invalid expected.at is reported as invalid on a REDEMPTION too (never silently ignored)", async () => {
+    const { redemptionText } = await samples();
+    const r = verifyAttestation(redemptionText, { keys: testKeys(), expected: { enforcement_point_id: EP, at: "2025-01-01" } as ExpectedContext });
+    expect(r.result).toBe("REJECTED");
+    expect(check(r, "L2.EXPECTED_VALID")).toBe("FAIL");
+  });
+
+  it("a canonical expected.at on a REDEMPTION is still refused (freshness is ISSUANCE-only)", async () => {
+    const { redemptionText } = await samples();
+    const r = verifyAttestation(redemptionText, { keys: testKeys(), expected: { enforcement_point_id: EP, at: "2025-01-01T09:11:00.000Z" } });
+    expect(r.result).toBe("REJECTED");
+    expect(check(r, "L2.EXPECTED_VALID")).toBe("PASS");
+    expect(r.checks.find((c) => c.id === "L2.CONTEXT")?.detail).toMatch(/applies to ISSUANCE only/);
+  });
+
+  it("an undefined expected.at binds nothing and is treated as absent (the object is not refused for it)", async () => {
+    const { redemptionText } = await samples();
+    expect(verifyAttestation(redemptionText, { keys: testKeys(), expected: { enforcement_point_id: EP, at: undefined } as unknown as ExpectedContext }).result).toBe("CONSISTENT_L2");
+  });
+
+  it.each([
+    ["enforcement_pont_id (a typo)", { enforcement_pont_id: EP }],
+    ["a member of the attestation instead of the context", { journal: "x" }],
+    ["a snake/camel mix-up", { enforcementPointId: EP }],
+  ])("an unknown expected member (%s) is refused: a typo must not look like a bound context", async (_name, expected) => {
+    const { issuanceText } = await samples();
+    const r = verifyAttestation(issuanceText, { keys: testKeys(), expected: expected as unknown as ExpectedContext });
+    expect(r.result).toBe("REJECTED");
+    expect(detail(r)).toMatch(/unknown expected member/);
+  });
+
+  it.each([
+    ["journal_head_hash in uppercase", { journal_head_hash: "AB".repeat(32) }],
+    ["journal_head_hash too short", { journal_head_hash: "ab" }],
+    ["action_fingerprint not hex", { action_fingerprint: "z".repeat(64) }],
+    ["journal_head_sequence zero", { journal_head_sequence: 0 }],
+    ["journal_head_sequence fractional", { journal_head_sequence: 1.5 }],
+    ["journal_head_sequence as a string", { journal_head_sequence: "5" }],
+    ["journal_head_sequence NaN", { journal_head_sequence: Number.NaN }],
+    ["kind DECISION", { kind: "DECISION" }],
+    ["an empty identifier", { capability_id: "" }],
+    ["a non-string identifier", { action_id: 5 }],
+    ["an identifier with a control character", { principal_id: "a\u0000b" }],
+    ["an over-long identifier", { enforcement_point_id: "x".repeat(257) }],
+  ])("%s is refused as an invalid expected context", async (_name, bad) => {
+    const { issuanceText } = await samples();
+    const r = verifyAttestation(issuanceText, { keys: testKeys(), expected: { capability_id: "c", ...bad } as unknown as ExpectedContext });
+    expect(r.result).toBe("REJECTED");
+    expect(check(r, "L2.EXPECTED_VALID")).toBe("FAIL");
+  });
+
+  it.each([[null], [[]], ["x"], [5]])("an expected context that is not an object (%j) is refused", async (bad) => {
+    const { issuanceText } = await samples();
+    const r = verifyAttestation(issuanceText, { keys: testKeys(), expected: bad as unknown as ExpectedContext });
+    expect(r.result).not.toBe("CONSISTENT_L2");
+  });
+
+  it("validateExpectedContext is exported and agrees: canonical contexts have no problem", () => {
+    expect(validateExpectedContext({ at: "2025-01-01T09:11:00.000Z", enforcement_point_id: EP, journal_head_sequence: 5, journal_head_hash: "ab".repeat(32) })).toEqual([]);
+    expect(validateExpectedContext({ at: "2025-01-01" }).length).toBe(1);
+  });
+
+  it("an invalid expected context is never evaluated when L1 already failed (no verdict for a forged document)", async () => {
+    const { redemption } = await samples();
+    const r = verifyAttestation(JSON.stringify({ ...redemption, statement: { ...redemption.statement, capability_id: "tampered" } }), { keys: testKeys(), expected: { at: "nope" } as unknown as ExpectedContext });
     expect(r.levels).toEqual({ L0: "PASS", L1: "FAIL", L2: "NOT_CHECKED" });
   });
 });

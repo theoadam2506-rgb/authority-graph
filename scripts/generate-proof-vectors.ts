@@ -100,6 +100,8 @@ export async function generate(): Promise<Map<string, string>> {
   const lie = clone(redemption) as unknown as Record<string, any>;
   lie.statement.principal_id = "someone-who-never-acted";
   lie.journal.head_hash = "ab".repeat(32);
+  neg("expected-at-not-canonical", "The verifier's expected.at is a date without time or milliseconds: the expected context is refused rather than guessed.", pretty(issuance), { expected_result: "REJECTED", failing_check: "L2.EXPECTED_VALID" }, { ...ctxIss, at: "2025-01-01T09:11:00Z" });
+  neg("expected-at-on-redemption", "Freshness (expected.at) applies to an ISSUANCE only: refused for a REDEMPTION.", pretty(redemption), { expected_result: "REJECTED", failing_check: "L2.CONTEXT" }, { ...ctxRed, at: "2025-01-01T09:11:00.000Z" });
   neg("validly-signed-lie", "NOT A VALIDATION: the key holder signed a statement no journal supports. It is consistent with itself and with the expected context, so L1 and L2 pass. L0-L2 never validate the decision (L3, a later change, re-derives it).", await resign(lie), { expected_result: "CONSISTENT_L2" }, { ...ctxRed, principal_id: "someone-who-never-acted" });
 
   files.set("expected.json", pretty({

@@ -80,7 +80,7 @@ different history (see "Limits").
 |---|---|---|
 | L0 form | strict JSON (no duplicate keys, only exact integers, no lone surrogates, bounded size and depth), closed schema, canonical encodings, the statement is consistent with itself (`head_sequence >= event.sequence`, `decision_sequence == event.sequence - 1`, `expires_at` after the event) | |
 | L1 signature | fixed algorithm, `key_id` among **the verifier's** trusted keys, key window and revocation, Ed25519 over the signing input | `CONSISTENT_L1` |
-| L2 context | the verifier's expected kind, capability, action, fingerprint, principal, enforcement point (required for REDEMPTION), journal head, and for an ISSUANCE an explicit instant at which it must not be expired. An empty expected context is refused, never passed vacuously | `CONSISTENT_L2` |
+| L2 context | the verifier's expected kind, capability, action, fingerprint, principal, enforcement point (required for REDEMPTION), journal head, and for an ISSUANCE an explicit instant at which it must not be expired. An empty expected context is refused, never passed vacuously. The expected context is itself validated as strictly as the attestation: unknown members (a typo would bind nothing), a non-canonical `at` (date-only, no milliseconds, an offset, lowercase, an impossible date, `24:00`, a number, `null`), a malformed hash, sequence or identifier are refused (`L2.EXPECTED_VALID`), never guessed. `at` applies to an ISSUANCE only and is refused for a REDEMPTION | `CONSISTENT_L2` |
 
 A failure at a level leaves the following levels `NOT_CHECKED`. The overall
 result is `REJECTED`, `CONSISTENT_L1` or `CONSISTENT_L2`; there is no plain

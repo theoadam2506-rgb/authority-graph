@@ -105,6 +105,30 @@
       }
     },
     {
+      "file": "negative/expected-at-not-canonical.json",
+      "description": "The verifier's expected.at is a date without time or milliseconds: the expected context is refused rather than guessed.",
+      "expected_result": "REJECTED",
+      "failing_check": "L2.EXPECTED_VALID",
+      "expected_context": {
+        "enforcement_point_id": "ep-proof-1",
+        "capability_id": "cap-proof-1",
+        "kind": "ISSUANCE",
+        "at": "2025-01-01T09:11:00Z"
+      }
+    },
+    {
+      "file": "negative/expected-at-on-redemption.json",
+      "description": "Freshness (expected.at) applies to an ISSUANCE only: refused for a REDEMPTION.",
+      "expected_result": "REJECTED",
+      "failing_check": "L2.CONTEXT",
+      "expected_context": {
+        "enforcement_point_id": "ep-proof-1",
+        "capability_id": "cap-proof-1",
+        "kind": "REDEMPTION",
+        "at": "2025-01-01T09:11:00.000Z"
+      }
+    },
+    {
       "file": "negative/validly-signed-lie.json",
       "description": "NOT A VALIDATION: the key holder signed a statement no journal supports. It is consistent with itself and with the expected context, so L1 and L2 pass. L0-L2 never validate the decision (L3, a later change, re-derives it).",
       "expected_result": "CONSISTENT_L2",
