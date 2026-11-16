@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "authority": "tsx src/cli/authority.ts",
     "demo": "tsx demo/run.ts",
-    "quickstart": "tsx examples/quickstart.ts"
+    "quickstart": "tsx examples/quickstart.ts",
+    "conformance": "tsx src/conformance/cli.ts"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
