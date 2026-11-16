@@ -1,7 +1,7 @@
 # V1 threats
 
-Status: design. This table lists what V1 intends to address and what stays
-open. A row becomes a claim only when a test in this repository demonstrates
+Status: experimental, not independently reviewed. This table lists what V1
+addresses and what stays open; rows marked planned are not implemented. A row becomes a claim only when a test in this repository demonstrates
 it. The existing attacks A1 to A32 in [`THREAT_MODEL.md`](../../THREAT_MODEL.md) still apply.
 
 | Threat | Mitigation (exists today unless marked planned) | Residual risk, stated |
