@@ -215,6 +215,38 @@ export class AttestationRefusedError extends Error {
   }
 }
 
+
+type IssuedEvent = Extract<CanonicalStore[number], { readonly event_type: "CAPABILITY_ISSUED" }>;
+type RedeemedEvent = Extract<CanonicalStore[number], { readonly event_type: "CAPABILITY_REDEEMED" }>;
+
+/** The statement an attestation makes about an issuance event. Shared by the builder and by L3, so they cannot drift. */
+export function issuanceStatementOf(event: IssuedEvent): IssuanceStatement {
+  return {
+    event: { sequence: Number(event.sequence), event_id: String(event.event_id), authority_time: String(event.authority_time) },
+    capability_id: String(event.payload.capability_id),
+    action_id: String(event.payload.action_id),
+    action_fingerprint: String(event.payload.action_fingerprint),
+    principal_id: String(event.principal_id),
+    decision_sequence: Number(event.payload.decision_sequence),
+    enforcement_point_id: String(event.payload.enforcement_point_id),
+    granted_chain_ref: event.payload.granted_chain_ref.map((l): ChainLink => (l.kind === "delegation" ? { kind: "delegation", delegation_id: String(l.delegation_id) } : { kind: "approval", approval_id: String(l.approval_id) })),
+    expires_at: String(event.payload.expires_at),
+  };
+}
+
+/** The statement an attestation makes about a redemption event. */
+export function redemptionStatementOf(event: RedeemedEvent): RedemptionStatement {
+  return {
+    event: { sequence: Number(event.sequence), event_id: String(event.event_id), authority_time: String(event.authority_time) },
+    capability_id: String(event.payload.capability_id),
+    action_id: String(event.payload.action_id),
+    action_fingerprint: String(event.payload.action_fingerprint),
+    principal_id: String(event.principal_id),
+    decision_sequence: Number(event.payload.decision_sequence),
+    enforcement_point_id: String(event.payload.enforcement_point_id),
+  };
+}
+
 function headOf(store: CanonicalStore) {
   try {
     return journalHead(store);
@@ -246,17 +278,7 @@ export async function attestIssuance(store: CanonicalStore, capabilityId: string
     proof_version: ATTESTATION_VERSION,
     kind: "ISSUANCE",
     engine: engineIdentity,
-    statement: {
-      event: { sequence: Number(event.sequence), event_id: String(event.event_id), authority_time: String(event.authority_time) },
-      capability_id: String(event.payload.capability_id),
-      action_id: String(event.payload.action_id),
-      action_fingerprint: String(event.payload.action_fingerprint),
-      principal_id: String(event.principal_id),
-      decision_sequence: Number(event.payload.decision_sequence),
-      enforcement_point_id: String(event.payload.enforcement_point_id),
-      granted_chain_ref: event.payload.granted_chain_ref.map((l): ChainLink => (l.kind === "delegation" ? { kind: "delegation", delegation_id: String(l.delegation_id) } : { kind: "approval", approval_id: String(l.approval_id) })),
-      expires_at: String(event.payload.expires_at),
-    },
+    statement: issuanceStatementOf(event),
     journal: { scheme: JOURNAL_HASH_SCHEME, head_sequence: head.head_sequence, head_hash: head.head_hash },
   } as const;
   return (await signAndSeal(unsigned as unknown as Omit<Attestation, "signature">, signer)) as IssuanceAttestation;
@@ -273,15 +295,7 @@ export async function attestRedemption(store: CanonicalStore, capabilityId: stri
     proof_version: ATTESTATION_VERSION,
     kind: "REDEMPTION",
     engine: engineIdentity,
-    statement: {
-      event: { sequence: Number(event.sequence), event_id: String(event.event_id), authority_time: String(event.authority_time) },
-      capability_id: String(event.payload.capability_id),
-      action_id: String(event.payload.action_id),
-      action_fingerprint: String(event.payload.action_fingerprint),
-      principal_id: String(event.principal_id),
-      decision_sequence: Number(event.payload.decision_sequence),
-      enforcement_point_id: String(event.payload.enforcement_point_id),
-    },
+    statement: redemptionStatementOf(event),
     journal: { scheme: JOURNAL_HASH_SCHEME, head_sequence: head.head_sequence, head_hash: head.head_hash },
   } as const;
   return (await signAndSeal(unsigned as unknown as Omit<Attestation, "signature">, signer)) as RedemptionAttestation;

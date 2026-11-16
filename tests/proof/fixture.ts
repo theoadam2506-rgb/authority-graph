@@ -12,7 +12,8 @@ import { InMemoryCapabilityIssuanceTransaction } from "../../src/storage/capabil
 import { InMemoryCapabilityRedemptionTransaction } from "../../src/storage/capabilityRedemptionTransaction.js";
 import { base64urlEncode } from "../../src/proof/encoding.js";
 import { createEd25519Signer, keyIdOf, parsePublicJwk, type Ed25519PrivateJwk, type Ed25519PublicJwk, type ProofSigner, type TrustedKeys } from "../../src/proof/keys.js";
-import { EUR, PURCHASE_ORDER_CREATE, THEO, actionRequest, rootDelegation } from "../fixtures/scenarios.js";
+import { buildCapabilityRedeemedDraft } from "../../src/storage/capabilityRedemptionTransaction.js";
+import { EUR, PURCHASE_ORDER_CREATE, THEO, actionRequest, revokeDelegation, rootDelegation } from "../fixtures/scenarios.js";
 
 /** RFC 8032 section 7.1, TEST 1. Public knowledge: never a real key. */
 export const RFC8032_TEST1 = {
@@ -46,11 +47,20 @@ export interface ProofFixture {
 }
 
 /** Journal: 1 delegation, 2 action, 3 issued (cap-proof-1), 4 redeemed (cap-proof-1), 5 issued (cap-proof-2, never redeemed). */
-export async function buildFixture(): Promise<ProofFixture> {
+export interface FixtureOptions {
+  /** Appends, after event 5, a revocation of the delegation by its grantor (event 6, 09:14:00). */
+  readonly revocation?: boolean;
+  /** Also appends a coherent-looking redemption of cap-proof-2 AFTER the revocation (event 7): forged, written around the transaction. Implies revocation. */
+  readonly forgedRedemptionAfterRevocation?: boolean;
+  /** Replaces the action amount (a different, still valid history of the same length). */
+  readonly amount?: number;
+}
+
+export async function buildFixture(options: FixtureOptions = {}): Promise<ProofFixture> {
   let seedTime = T("09:00:00");
   let recorded = 0;
   const store = new InMemoryEventStore({ authorityTime: () => seedTime }, undefined, () => new Date(Date.parse("2025-01-01T12:00:00.000Z") + 1000 * recorded++).toISOString());
-  const params = monetaryParameters(EUR(1800), undefined, argumentsDigest(TOOL_ARGS));
+  const params = monetaryParameters(EUR(options.amount ?? 1800), undefined, argumentsDigest(TOOL_ARGS));
   const seed = await store.append([
     toDraft(rootDelegation({ sequence: 1, id: "d-proof", grantor: THEO, grantorType: "HUMAN_ROOT", grantee: AGENT as never, capabilities: [PURCHASE_ORDER_CREATE], canDelegate: false, expires: noExpiry, amountThresholds: thresholds(EUR(2000), EUR(2000)) })),
     toDraft(actionRequest({ sequence: 2, id: "act-proof", requester: AGENT as never, delegationId: "d-proof", parameters: params })),
@@ -70,5 +80,17 @@ export async function buildFixture(): Promise<ProofFixture> {
   const redeemed = await redemption.redeem({ principalId: AGENT as never }, { capability_id: first, enforcement_point_id: enforcementPointId(EP), observed_capability: capability("purchase_order", "create"), observed_parameters: params }, T("09:12:00"));
   if (!redeemed.ok) throw new Error(`fixture redemption failed: ${JSON.stringify(redeemed)}`);
   const second = await issue("k2", "09:13:00");
+  if (options.revocation === true || options.forgedRedemptionAfterRevocation === true) {
+    const r = await store.append([toDraft(revokeDelegation({ sequence: 99, targetId: "d-proof", issuedBy: THEO }))], T("09:14:00"));
+    if (!r.outcomes[0]?.accepted) throw new Error("fixture revocation rejected");
+  }
+  if (options.forgedRedemptionAfterRevocation === true) {
+    const events = await store.getEvents();
+    const issued = events.find((e) => e.event_type === "CAPABILITY_ISSUED" && e.payload.capability_id === second);
+    if (issued === undefined || issued.event_type !== "CAPABILITY_ISSUED") throw new Error("fixture: second ticket missing");
+    const forged = buildCapabilityRedeemedDraft({ principalId: AGENT as never }, T("09:15:00"), { capability_id: second, action_id: issued.payload.action_id, action_fingerprint: issued.payload.action_fingerprint, decision_sequence: events.length as never, enforcement_point_id: issued.payload.enforcement_point_id }, "forged");
+    const w = await store.append([forged], T("09:15:00"));
+    if (!w.outcomes[0]?.accepted) throw new Error("fixture forged redemption rejected");
+  }
   return { events: await store.getEvents(), capabilityId: first, redeemedCapabilityId: first, unredeemedCapabilityId: second };
 }

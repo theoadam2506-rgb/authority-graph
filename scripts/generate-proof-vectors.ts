@@ -104,6 +104,51 @@ export async function generate(): Promise<Map<string, string>> {
   neg("expected-at-on-redemption", "Freshness (expected.at) applies to an ISSUANCE only: refused for a REDEMPTION.", pretty(redemption), { expected_result: "REJECTED", failing_check: "L2.CONTEXT" }, { ...ctxRed, at: "2025-01-01T09:11:00.000Z" });
   neg("validly-signed-lie", "NOT A VALIDATION: the key holder signed a statement no journal supports. It is consistent with itself and with the expected context, so L1 and L2 pass. L0-L2 never validate the decision (L3, a later change, re-derives it).", await resign(lie), { expected_result: "CONSISTENT_L2" }, { ...ctxRed, principal_id: "someone-who-never-acted" });
 
+  // ---------------- L3 vectors: journals, anchors, and expected replay outcomes ----------------
+  const withSuffix = await buildFixture({ revocation: true });
+  const divergent = await buildFixture({ amount: 1700 });
+  const events = f.events;
+  const reordered = [...events];
+  [reordered[2], reordered[3]] = [reordered[3]!, reordered[2]!];
+  const corruptedSuffix = JSON.parse(JSON.stringify(withSuffix.events)) as Record<string, unknown>[];
+  corruptedSuffix[5] = { ...corruptedSuffix[5]!, sequence: 9 };
+  const head5 = journalHead(events);
+  files.set("journals/journal.json", pretty(events));
+  files.set("journals/with-valid-suffix.json", pretty(withSuffix.events));
+  files.set("journals/truncated.json", pretty(events.slice(0, 4)));
+  files.set("journals/reordered.json", pretty(reordered));
+  files.set("journals/divergent-same-length.json", pretty(divergent.events));
+  files.set("journals/invalid-suffix.json", pretty(corruptedSuffix));
+  const heads = (...hs: { head_sequence: number; head_hash: string; label?: string }[]) => pretty({ format: "authority-trusted-heads/v1", heads: hs });
+  files.set("trusted-heads.json", heads({ head_sequence: 5, head_hash: head5.head_hash, label: "head recorded by the verifier (its independence is NOT established by this tool)" }));
+  files.set("trusted-heads-below-head.json", heads({ head_sequence: 3, head_hash: journalHead(events, 3).head_hash }));
+  files.set("trusted-heads-wrong-hash.json", heads({ head_sequence: 5, head_hash: "ab".repeat(32) }));
+  files.set("trusted-heads-beyond-journal.json", heads({ head_sequence: 9, head_hash: "cd".repeat(32) }));
+  files.set("trusted-keys-revoked-always.json", pretty({ format: "authority-trusted-keys/v1", keys: [{ jwk: TEST_PUBLIC_JWK, revoked_from: "ALWAYS" }] }));
+
+  interface L3Case { name: string; description: string; attestation: string; journal: string; trusted_keys: string; trusted_heads?: string; scope?: "full" | "prefix"; expected_result: "REJECTED" | "CONSISTENT_L3"; failing_check?: string; anchored: boolean; anchor_status?: string; later_revocations?: number }
+  const l3: L3Case[] = [];
+  const c3 = (c: Omit<L3Case, "trusted_keys"> & { trusted_keys?: string }): void => void l3.push({ trusted_keys: "trusted-keys.json", ...c });
+  c3({ name: "redemption-replays", description: "Genuine redemption against its journal: CONSISTENT_L3, NOT anchored (nothing ties the journal to the signer's system).", attestation: "redemption.json", journal: "journals/journal.json", expected_result: "CONSISTENT_L3", anchored: false, anchor_status: "NONE_SUPPLIED" });
+  c3({ name: "issuance-replays", description: "Genuine issuance against its journal.", attestation: "issuance.json", journal: "journals/journal.json", expected_result: "CONSISTENT_L3", anchored: false, anchor_status: "NONE_SUPPLIED" });
+  c3({ name: "redemption-anchored", description: "With an anchor the verifier supplied that covers the attested prefix: anchored. Independence of the anchor is never established by the tool.", attestation: "redemption.json", journal: "journals/journal.json", trusted_heads: "trusted-heads.json", expected_result: "CONSISTENT_L3", anchored: true, anchor_status: "COVERS_ATTESTED_PREFIX" });
+  c3({ name: "anchor-below-attested-head", description: "An anchor that matches but is earlier than the attested head covers only part of it: not anchored.", attestation: "redemption.json", journal: "journals/journal.json", trusted_heads: "trusted-heads-below-head.json", expected_result: "CONSISTENT_L3", anchored: false, anchor_status: "BELOW_ATTESTED_HEAD" });
+  c3({ name: "longer-journal-valid-suffix", description: "A longer valid journal with the same prefix: CONSISTENT_L3; the later revocation is listed for information only.", attestation: "redemption.json", journal: "journals/with-valid-suffix.json", expected_result: "CONSISTENT_L3", anchored: false, later_revocations: 1 });
+  c3({ name: "invalid-suffix-full-scope", description: "The attested prefix is sound but the journal provided does not replay after it: refused under the default (full) scope.", attestation: "redemption.json", journal: "journals/invalid-suffix.json", expected_result: "REJECTED", failing_check: "L3.FULL_REPLAY", anchored: false });
+  c3({ name: "invalid-suffix-prefix-scope", description: "The same journal under the explicit prefix-only scope: the suffix is NOT validated and the report says so.", attestation: "redemption.json", journal: "journals/invalid-suffix.json", scope: "prefix", expected_result: "CONSISTENT_L3", anchored: false });
+  c3({ name: "truncated-journal", description: "A journal shorter than the attested head.", attestation: "redemption.json", journal: "journals/truncated.json", expected_result: "REJECTED", failing_check: "L3.PREFIX_REPLAY", anchored: false });
+  c3({ name: "reordered-journal", description: "Two events swapped: does not replay.", attestation: "redemption.json", journal: "journals/reordered.json", expected_result: "REJECTED", failing_check: "L3.PREFIX_REPLAY", anchored: false });
+  c3({ name: "divergent-journal-same-length", description: "Another valid history of the same length: internally consistent, but not the journal this attests.", attestation: "redemption.json", journal: "journals/divergent-same-length.json", expected_result: "REJECTED", failing_check: "L3.HEAD", anchored: false });
+  c3({ name: "anchor-wrong-hash", description: "The verifier's anchor does not match the journal: divergent or rewritten.", attestation: "redemption.json", journal: "journals/journal.json", trusted_heads: "trusted-heads-wrong-hash.json", expected_result: "REJECTED", failing_check: "L3.ANCHOR", anchored: false });
+  c3({ name: "anchor-beyond-journal", description: "The verifier's anchor is beyond the journal's length: truncated relative to the anchor.", attestation: "redemption.json", journal: "journals/journal.json", trusted_heads: "trusted-heads-beyond-journal.json", expected_result: "REJECTED", failing_check: "L3.ANCHOR", anchored: false });
+  c3({ name: "revoked-key-always", description: "The key is revoked ALWAYS: REJECTED at L1 even though the statement matches the journal and an anchor covers it. L3 is not run.", attestation: "redemption.json", journal: "journals/journal.json", trusted_heads: "trusted-heads.json", trusted_keys: "trusted-keys-revoked-always.json", expected_result: "REJECTED", failing_check: "L1.KEY_STATUS", anchored: false });
+  c3({ name: "validly-signed-lie-refused-by-replay", description: "A signed statement with a head no journal supports passes L1 and L2 but is refused by the deterministic replay.", attestation: "negative/validly-signed-lie.json", journal: "journals/journal.json", expected_result: "REJECTED", failing_check: "L3.HEAD", anchored: false });
+  files.set("expected-l3.json", pretty({
+    format: "authority-attestation-l3-vectors/v1",
+    note: "Each case is run as: verifyAttestationL3(attestation, { keys: trusted_keys, journal, trustedHeads?, scope? }) or the CLI equivalent (authority proof verify <attestation> --keys <trusted_keys> --journal <journal> [--trusted-heads <file>] [--scope prefix] --json). 'anchored' says only that a supplied anchor matches and covers the attested prefix; it never says the anchor is independent.",
+    cases: l3,
+  }));
+
   files.set("expected.json", pretty({
     format: "authority-attestation-vectors/v1",
     trusted_keys: "trusted-keys.json",

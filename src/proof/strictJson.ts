@@ -135,6 +135,19 @@ export function parseStrictJson(text: string, limits: StrictJsonLimits = DEFAULT
         break;
       }
       if (c < 0x20) fail("SYNTAX", "raw control character in string");
+      if (c !== 0x5c) {
+        // Copy the whole run of ordinary characters at once (same result as one by one, much cheaper on large inputs).
+        let j = i + 1;
+        while (j < text.length) {
+          const d = text.charCodeAt(j);
+          if (d === 0x22 || d === 0x5c || d < 0x20) break;
+          j += 1;
+        }
+        out += text.slice(i, j);
+        i = j;
+        if (out.length > limits.maxStringLength) fail("TOO_LONG", `string longer than ${limits.maxStringLength}`, start);
+        continue;
+      }
       if (c === 0x5c) {
         const e = text[i + 1];
         i += 2;
@@ -157,9 +170,6 @@ export function parseStrictJson(text: string, limits: StrictJsonLimits = DEFAULT
           default:
             fail("SYNTAX", "invalid escape", i - 2);
         }
-      } else {
-        out += text[i];
-        i += 1;
       }
       if (out.length > limits.maxStringLength) fail("TOO_LONG", `string longer than ${limits.maxStringLength}`, start);
     }

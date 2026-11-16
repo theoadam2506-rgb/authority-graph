@@ -9,6 +9,7 @@ import { canonicalizeToolArguments } from "../../src/domain/canonicalJson.js";
 import { attestIssuance, attestRedemption } from "../../src/proof/attestation.js";
 import { journalHead } from "../../src/proof/journalHash.js";
 import { verifyAttestation } from "../../src/proof/verify.js";
+import { verifyAttestationL3 } from "../../src/proof/replay.js";
 import { PostgresEventStore, insertEvent } from "../../src/storage/postgresEventStore.js";
 import { EP, buildFixture, testKeys, testSigner } from "../proof/fixture.js";
 import { databaseAvailable } from "../redemption/pgHarness.js";
@@ -39,6 +40,11 @@ describe.skipIf(!available)("journal hash and attestations over PostgreSQL", () 
       expect(postgres).toBe(memory);
       expect(JSON.stringify(await attestIssuance(back, f.capabilityId, testSigner()))).toBe(JSON.stringify(await attestIssuance(f.events, f.capabilityId, testSigner())));
       expect(verifyAttestation(postgres, { keys: testKeys(), expected: { enforcement_point_id: EP, journal_head_hash: journalHead(f.events).head_hash } }).result).toBe("CONSISTENT_L2");
+      // L3 over the journal as PostgreSQL returns it: same verdict as over the in-memory journal.
+      const l3 = verifyAttestationL3(postgres, { keys: testKeys(), journal: JSON.stringify(back) });
+      expect(l3.result).toBe("CONSISTENT_L3");
+      expect(l3.anchored).toBe(false);
+      expect(JSON.stringify(l3)).toBe(JSON.stringify(verifyAttestationL3(memory, { keys: testKeys(), journal: JSON.stringify(f.events) })));
     } finally {
       await iso.drop();
     }

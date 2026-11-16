@@ -26,6 +26,12 @@
 | D20 | PR 3 is signing, L0 to L2 verification, the hash chain and vectors; PR 4 is L3 replay and the command. |
 | D21 | An independent cryptographic review follows PR 3, before any communication about security guarantees. |
 | D22 | Two prospect interviews run in parallel and do not block the work. |
+| D23 | L3 result is `CONSISTENT_L3` plus an `anchored` flag; anchoring never asserts independence of the anchor. |
+| D24 | The `corroborate` command is deferred until after the D9 crypto review. |
+| D25 | Trusted anchors use the strict, closed format `authority-trusted-heads/v1`. |
+| D26 | Replay is limited to 10,000 events without modifying the engine; limit revisited from measurements (`proof:bench`). |
+| D27 | Revocations after the attested head are reported as information only. |
+| D28 | Report format `authority-proof-verify-report/v1`; the CLI is routed as `authority proof ...` in the existing entry point. D9 review runs in two passes: PR 3 crypto, then L3 replay. |
 
 ## Still open
 

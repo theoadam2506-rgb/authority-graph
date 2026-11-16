@@ -1,0 +1,9 @@
+{
+  "format": "authority-trusted-heads/v1",
+  "heads": [
+    {
+      "head_sequence": 5,
+      "head_hash": "abababababababababababababababababababababababababababababababab"
+    }
+  ]
+}

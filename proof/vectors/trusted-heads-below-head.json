@@ -1,0 +1,9 @@
+{
+  "format": "authority-trusted-heads/v1",
+  "heads": [
+    {
+      "head_sequence": 3,
+      "head_hash": "0dd8244795be33902c6f4881f6ccebf6af68148c09e0ba57ebf65fa841554044"
+    }
+  ]
+}

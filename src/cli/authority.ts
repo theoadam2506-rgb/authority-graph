@@ -407,6 +407,15 @@ export async function runExplain(argv: readonly string[]): Promise<{ readonly ex
 }
 
 async function main(argv: readonly string[]): Promise<number> {
+  // `authority proof ...`: attestation verification (src/proof/cli.ts). Routed before the
+  // `explain` argument parsing, which is untouched.
+  if (argv[0] === "proof") {
+    const { runProofCli } = await import("../proof/cli.js");
+    const result = await runProofCli(argv.slice(1));
+    if (result.stdout !== "") process.stdout.write(result.stdout);
+    if (result.stderr !== "") process.stderr.write(result.stderr);
+    return result.exitCode;
+  }
   const { exitCode, output } = await runExplain(argv);
   if (exitCode === 0) {
     process.stdout.write(output);

@@ -1,0 +1,151 @@
+{
+  "format": "authority-attestation-l3-vectors/v1",
+  "note": "Each case is run as: verifyAttestationL3(attestation, { keys: trusted_keys, journal, trustedHeads?, scope? }) or the CLI equivalent (authority proof verify <attestation> --keys <trusted_keys> --journal <journal> [--trusted-heads <file>] [--scope prefix] --json). 'anchored' says only that a supplied anchor matches and covers the attested prefix; it never says the anchor is independent.",
+  "cases": [
+    {
+      "trusted_keys": "trusted-keys.json",
+      "name": "redemption-replays",
+      "description": "Genuine redemption against its journal: CONSISTENT_L3, NOT anchored (nothing ties the journal to the signer's system).",
+      "attestation": "redemption.json",
+      "journal": "journals/journal.json",
+      "expected_result": "CONSISTENT_L3",
+      "anchored": false,
+      "anchor_status": "NONE_SUPPLIED"
+    },
+    {
+      "trusted_keys": "trusted-keys.json",
+      "name": "issuance-replays",
+      "description": "Genuine issuance against its journal.",
+      "attestation": "issuance.json",
+      "journal": "journals/journal.json",
+      "expected_result": "CONSISTENT_L3",
+      "anchored": false,
+      "anchor_status": "NONE_SUPPLIED"
+    },
+    {
+      "trusted_keys": "trusted-keys.json",
+      "name": "redemption-anchored",
+      "description": "With an anchor the verifier supplied that covers the attested prefix: anchored. Independence of the anchor is never established by the tool.",
+      "attestation": "redemption.json",
+      "journal": "journals/journal.json",
+      "trusted_heads": "trusted-heads.json",
+      "expected_result": "CONSISTENT_L3",
+      "anchored": true,
+      "anchor_status": "COVERS_ATTESTED_PREFIX"
+    },
+    {
+      "trusted_keys": "trusted-keys.json",
+      "name": "anchor-below-attested-head",
+      "description": "An anchor that matches but is earlier than the attested head covers only part of it: not anchored.",
+      "attestation": "redemption.json",
+      "journal": "journals/journal.json",
+      "trusted_heads": "trusted-heads-below-head.json",
+      "expected_result": "CONSISTENT_L3",
+      "anchored": false,
+      "anchor_status": "BELOW_ATTESTED_HEAD"
+    },
+    {
+      "trusted_keys": "trusted-keys.json",
+      "name": "longer-journal-valid-suffix",
+      "description": "A longer valid journal with the same prefix: CONSISTENT_L3; the later revocation is listed for information only.",
+      "attestation": "redemption.json",
+      "journal": "journals/with-valid-suffix.json",
+      "expected_result": "CONSISTENT_L3",
+      "anchored": false,
+      "later_revocations": 1
+    },
+    {
+      "trusted_keys": "trusted-keys.json",
+      "name": "invalid-suffix-full-scope",
+      "description": "The attested prefix is sound but the journal provided does not replay after it: refused under the default (full) scope.",
+      "attestation": "redemption.json",
+      "journal": "journals/invalid-suffix.json",
+      "expected_result": "REJECTED",
+      "failing_check": "L3.FULL_REPLAY",
+      "anchored": false
+    },
+    {
+      "trusted_keys": "trusted-keys.json",
+      "name": "invalid-suffix-prefix-scope",
+      "description": "The same journal under the explicit prefix-only scope: the suffix is NOT validated and the report says so.",
+      "attestation": "redemption.json",
+      "journal": "journals/invalid-suffix.json",
+      "scope": "prefix",
+      "expected_result": "CONSISTENT_L3",
+      "anchored": false
+    },
+    {
+      "trusted_keys": "trusted-keys.json",
+      "name": "truncated-journal",
+      "description": "A journal shorter than the attested head.",
+      "attestation": "redemption.json",
+      "journal": "journals/truncated.json",
+      "expected_result": "REJECTED",
+      "failing_check": "L3.PREFIX_REPLAY",
+      "anchored": false
+    },
+    {
+      "trusted_keys": "trusted-keys.json",
+      "name": "reordered-journal",
+      "description": "Two events swapped: does not replay.",
+      "attestation": "redemption.json",
+      "journal": "journals/reordered.json",
+      "expected_result": "REJECTED",
+      "failing_check": "L3.PREFIX_REPLAY",
+      "anchored": false
+    },
+    {
+      "trusted_keys": "trusted-keys.json",
+      "name": "divergent-journal-same-length",
+      "description": "Another valid history of the same length: internally consistent, but not the journal this attests.",
+      "attestation": "redemption.json",
+      "journal": "journals/divergent-same-length.json",
+      "expected_result": "REJECTED",
+      "failing_check": "L3.HEAD",
+      "anchored": false
+    },
+    {
+      "trusted_keys": "trusted-keys.json",
+      "name": "anchor-wrong-hash",
+      "description": "The verifier's anchor does not match the journal: divergent or rewritten.",
+      "attestation": "redemption.json",
+      "journal": "journals/journal.json",
+      "trusted_heads": "trusted-heads-wrong-hash.json",
+      "expected_result": "REJECTED",
+      "failing_check": "L3.ANCHOR",
+      "anchored": false
+    },
+    {
+      "trusted_keys": "trusted-keys.json",
+      "name": "anchor-beyond-journal",
+      "description": "The verifier's anchor is beyond the journal's length: truncated relative to the anchor.",
+      "attestation": "redemption.json",
+      "journal": "journals/journal.json",
+      "trusted_heads": "trusted-heads-beyond-journal.json",
+      "expected_result": "REJECTED",
+      "failing_check": "L3.ANCHOR",
+      "anchored": false
+    },
+    {
+      "trusted_keys": "trusted-keys-revoked-always.json",
+      "name": "revoked-key-always",
+      "description": "The key is revoked ALWAYS: REJECTED at L1 even though the statement matches the journal and an anchor covers it. L3 is not run.",
+      "attestation": "redemption.json",
+      "journal": "journals/journal.json",
+      "trusted_heads": "trusted-heads.json",
+      "expected_result": "REJECTED",
+      "failing_check": "L1.KEY_STATUS",
+      "anchored": false
+    },
+    {
+      "trusted_keys": "trusted-keys.json",
+      "name": "validly-signed-lie-refused-by-replay",
+      "description": "A signed statement with a head no journal supports passes L1 and L2 but is refused by the deterministic replay.",
+      "attestation": "negative/validly-signed-lie.json",
+      "journal": "journals/journal.json",
+      "expected_result": "REJECTED",
+      "failing_check": "L3.HEAD",
+      "anchored": false
+    }
+  ]
+}
