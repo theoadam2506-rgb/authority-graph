@@ -135,7 +135,7 @@ function looksLikeEmail(value: string): boolean {
   return value.includes("@");
 }
 
-type BusinessId = { readonly kind: "delegation_id" | "action_id" | "approval_id" | "capability_id"; readonly value: string };
+type BusinessId = { readonly kind: "delegation_id" | "action_id" | "approval_id" | "capability_id" | "redeemed_capability_id"; readonly value: string };
 
 /**
  * PR4B-3A — `capability_id` joins this same, already-generic mechanism.
@@ -160,6 +160,12 @@ function businessIdOf(event: EventBody): BusinessId | undefined {
   }
   if (event.event_type === "CAPABILITY_ISSUED") {
     return { kind: "capability_id", value: event.payload.capability_id };
+  }
+  // V1: a distinct kind from `capability_id`, otherwise a redemption would
+  // collide with the very CAPABILITY_ISSUED it consumes. Exactly one
+  // CAPABILITY_REDEEMED per capability_id, whatever its event_id (I28).
+  if (event.event_type === "CAPABILITY_REDEEMED") {
+    return { kind: "redeemed_capability_id", value: event.payload.capability_id };
   }
   return undefined;
 }

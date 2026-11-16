@@ -15,6 +15,8 @@
 | D9 | The cryptographic components get an independent review before any security communication. |
 | D10 | A new event type is added additively; the SQL schema is compatible (`event_type` is unconstrained `TEXT`, payload is `JSONB`). Whether `schema_version` changes is settled in the redemption PR, with a stated rationale. |
 | D11 | PostgreSQL test isolation (issue #13) is fixed with one schema per test file before any storage work. |
+| D12 | Capacity accounting is unchanged in V1. The capacity cost of a ticket consumed by `CONCURRENT_WRITE_DETECTED` is accepted as an availability trade-off, documented, and never presented as a guarantee about external effects. |
+| D13 | PostgreSQL redemption (PR 2) uses one atomic SQL transaction, a fresh read of the log, a uniqueness constraint on redemptions and an explicit check that the current transaction inserted the event. It reuses the backend-agnostic contract suite and completes the planned PostgreSQL tests. No npm package is published and Authority Proof is not started before this lands. |
 
 ## Still open
 

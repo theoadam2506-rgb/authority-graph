@@ -11,7 +11,7 @@
  * a second, caller-supplied copy of a fact an immutable event already
  * carries).
  */
-import type { ActionId, ClientIdempotencyKey, EnforcementPointId, PrincipalId } from "./types.js";
+import type { ActionId, ActionParameters, Capability, CapabilityId, ClientIdempotencyKey, EnforcementPointId, PrincipalId } from "./types.js";
 
 /**
  * The business command. Notably absent, on purpose (see the design report,
@@ -60,4 +60,20 @@ export interface ScopedIdempotencyKey {
 export interface IssueCapabilityCommandEnvelope {
   readonly command: IssueCapabilityCommand;
   readonly idempotency: ScopedIdempotencyKey;
+}
+
+/**
+ * V1 — the command a caller submits to redeem a capability just before the
+ * effect. `observed_capability`/`observed_parameters` are what the
+ * enforcement point is ABOUT to execute, as it observed them; redemption is
+ * refused unless their fingerprint equals the ticket's. They are compared,
+ * never trusted: the ticket's own fingerprint is what Authority issued.
+ * Binding to the tool arguments themselves requires parameters carrying an
+ * `arguments_digest` (fingerprint scheme v2); scheme v1 does not bind them.
+ */
+export interface RedeemCapabilityCommand {
+  readonly capability_id: CapabilityId;
+  readonly enforcement_point_id: EnforcementPointId;
+  readonly observed_capability: Capability;
+  readonly observed_parameters: ActionParameters;
 }

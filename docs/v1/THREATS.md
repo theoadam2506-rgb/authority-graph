@@ -19,6 +19,7 @@ it. The existing attacks A1 to A32 in [`THREAT_MODEL.md`](../../THREAT_MODEL.md)
 | **Clock manipulation** | Injected clock; refusal of instants older than what the log already contains (I22) | Trust in the clock's source |
 | **Algorithm downgrade, canonicalization ambiguity** | Fixed algorithm; RFC 8785 with strict input validation (existing `canonicalizeToolArguments`) | Review pending |
 | **Prompt injection steering an agent** | Not a model defence. The enforcement point refuses actions outside the delegated authority regardless of what the model asks | The model may still misuse authority it legitimately holds |
+| **Ticket consumed by a concurrent write** (`CONCURRENT_WRITE_DETECTED`) | Redemption fails closed: nothing is authorized, the event is recognisable (I31), the caller authorizes again | Availability trade-off accepted for V1: the consumed ticket keeps its capacity engaged, so re-authorizing under a `total_budget` may be refused (`CAPACITY_EXCEEDED`). Capacity accounting is unchanged in V1; no claim is made about the external effect |
 
 Review gate: the cryptographic components (envelope, signing, verification)
 get an independent review before any security communication about them.

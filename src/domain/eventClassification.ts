@@ -1,5 +1,5 @@
 /**
- * PR4B-1 — classifies the 9 current event types along one axis: who is
+ * PR4B-1 — classifies the 10 current event types along one axis: who is
  * allowed to ASSERT this kind of fact. This is deliberately NOT the same
  * axis as "does Authority trust this fact" (EVIDENCE vs ACCOUNTING, already
  * established for ACTION_EXECUTED/CAPABILITY_ISSUED elsewhere in this
@@ -13,13 +13,13 @@ import type { AuthorityEventType, DraftAuthorityEvent } from "./events.js";
 /**
  * Event types that ONLY Authority itself may ever produce the content of —
  * never a source's own assertion, however sincere. Today this is exactly
- * one type; it will grow (CAPABILITY_REDEEMED, and later others) as more
+ * two types (CAPABILITY_ISSUED and, since V1, CAPABILITY_REDEEMED); it may grow as more
  * of the capability lifecycle is built, but never by reclassifying an
  * existing externally-asserted type into this union — see
  * ExternallyAssertedEventType's docstring on why that temptation must be
  * resisted for ACTION_EXECUTED specifically.
  */
-export type AuthorityGeneratedEventType = "CAPABILITY_ISSUED";
+export type AuthorityGeneratedEventType = "CAPABILITY_ISSUED" | "CAPABILITY_REDEEMED";
 
 /**
  * Event types a source is permitted to ASSERT. "Permitted to assert" is

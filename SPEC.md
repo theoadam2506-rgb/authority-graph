@@ -841,6 +841,128 @@ this decision permanently.
     currency) is `UNKNOWN` (C22). Test: `tests/adversarial/unit-binding.test.ts`
     and `tests/domain/actionFingerprint.test.ts`.
 
+## Capability redemption (V1): I26 through I31
+
+These invariants concern a second write command, **redemption**
+(`redeemCapability` and `InMemoryCapabilityRedemptionTransaction`): consuming a
+capability (`CAPABILITY_ISSUED`) immediately before the effect, after
+re-checking that the authority behind it still holds. Like issuance, it is a
+COMMAND -> DECISION -> EVENT DATA path and not a third read operation. It
+decides about **authority**, never about the effect: it cannot make an
+external effect happen at most once, it does not verify identity, and it
+cannot see a revocation that is not yet in the log. Only the in-memory
+transaction exists in this version.
+
+26. **I26: A ticket is redeemable only as the exact grant that was issued.**
+    The `CAPABILITY_ISSUED` must exist and still be a coherent grant of the
+    canonical history (the same validation issuance output is subject to; a
+    ticket written around the transaction is `CAPABILITY_NOT_VALID`). The
+    authenticated requester must equal the `requesting_principal_id` of the
+    immutable `ACTION_REQUESTED`, never a value taken from the command
+    (`REQUESTER_MISMATCH`). The enforcement point must equal the ticket's
+    (`WRONG_ENFORCEMENT_POINT`). The capability and parameters the enforcement
+    point is about to execute are *compared*, never trusted: their fingerprint
+    must equal the ticket's (`ARGUMENTS_MISMATCH`). Tool arguments are bound
+    only when the action's parameters carry an `arguments_digest`
+    (fingerprint scheme V2); with scheme V1 only capability, amount, currency
+    and recipient are bound. Tests: `tests/redemption/redeemCapability.test.ts`.
+27. **I27: Redemption re-checks the authority at its own instant.** The invoked
+    delegation is re-resolved over the whole canonical log at the explicit
+    `authorityTime` of the command; if the result is not `AUTHORIZED` (revoked
+    since issuance, expired, a link lost) redemption is
+    `AUTHORITY_NO_LONGER_VALID`, carrying the engine's own decision. The
+    ticket's own window follows the expiration convention: `authorityTime <
+    expires_at` is valid, `authorityTime >= expires_at` is `EXPIRED`. An
+    `authorityTime` strictly older than an `authority_time` already in the log
+    is `STALE_AUTHORITY_TIME` (same rule as I22). The refusal precedence is
+    fixed: not found, not valid, requester, stale instant, enforcement point,
+    already redeemed, expired, arguments, authority.
+28. **I28: Single use.** At most one `CAPABILITY_REDEEMED` exists per
+    `capability_id`. The kernel refuses a second (`ALREADY_REDEEMED`); and
+    independently, ingestion refuses it as a business-id collision of kind
+    `redeemed_capability_id` whatever its `event_id`. Every redemption attempt
+    carries its own `event_id`: otherwise two racing attempts decided on the
+    same snapshot would build identical drafts, I8 would accept the second as
+    an idempotent duplicate, and both callers would be told "redeemed".
+    Uniqueness of that attempt id is however only a second line of defence:
+    the in-memory transaction serializes every redemption over one store
+    OBJECT with a per-store mutex, so correctness does not rest on any
+    identifier (its default attempt counter is unique within one process
+    lifetime only, restarts at 1, and is private to that module).
+    **Persistent stores** (the future PostgreSQL implementation) must obtain
+    exclusion from the database itself, never from an application-generated
+    id: (a) decide and write under the existing writer lock after a fresh read
+    of the log; (b) a partial unique index on the redeemed `capability_id` as a
+    backstop that raises a refusal, never a second row; (c) report success only
+    if THIS transaction inserted the row (a conflict, an I8-style duplicate or
+    a no-op insert is never success); (d) treat a unique violation as
+    "already redeemed". The reusable suite
+    `tests/redemption/redemptionContract.ts` states these as executable
+    properties (colliding attempt ids, independent redeemers, restart, raw
+    duplicate writes). Tests: `tests/redemption/redemptionTransaction.test.ts`,
+    `tests/redemption/redemptionReview.test.ts` and the contract run.
+29. **I29: Redemption changes no existing decision and releases no capacity.**
+    `authorityAt`, `explainAction` and `remainingCapacity` give identical
+    answers with or without `CAPABILITY_REDEEMED` events in the log: a
+    redeemed capability stays engaged. A log containing the new event replays
+    through `replayCanonicalStore`.
+30. **I30: Redemption fails closed under a concurrent write.** If any other
+    event is appended between the snapshot redemption decided on and its own
+    append (so that its event is not at `decision_sequence + 1`), redemption is
+    reported `CONCURRENT_WRITE_DETECTED`, never `REDEEMED`. The event exists
+    (the log is append-only), so the ticket is consumed: the caller must obtain
+    a new capability. This is deliberately conservative (a harmless concurrent
+    write has the same outcome). A refused redemption otherwise writes nothing.
+    If the store refuses the instant (`STALE_AUTHORITY_TIME`, the store's own
+    monotone clock), nothing is consumed. The result carries
+    `detail.ticketConsumed = true` and the `redemptionSequence` of the event
+    that was written. Consequences, stated plainly: the ticket cannot be
+    retried (`ALREADY_REDEEMED`); the event is recognisable because its
+    sequence is not `decision_sequence + 1`; the capacity the ticket engaged
+    stays engaged (I29), so re-authorizing the same action against a
+    `total_budget` may be refused `CAPACITY_EXCEEDED`; the effect must not be
+    performed.
+
+    **Accepted V1 trade-off (availability, decided by the project owner).**
+    A ticket consumed this way keeps its capacity engaged (I29): capacity
+    accounting is deliberately NOT changed in V1. The cost is availability, not
+    safety: under a `total_budget`, re-authorizing the same action after a
+    `CONCURRENT_WRITE_DETECTED` may be refused `CAPACITY_EXCEEDED` until the
+    budget is adjusted by other means. Nothing here, or anywhere in redemption,
+    guarantees that an external effect happens, happens once, or does not
+    happen: redemption bounds authorizations only. Revisiting the accounting
+    (for example releasing capacity for a redemption that fails I31) is a
+    possible later change, with its own invariant and tests, and is not
+    promised.
+31. **I31: A `CAPABILITY_REDEEMED` event authorizes the effect only if it
+    validates.** `validateRedemptionEvent` states the coherence between the
+    three notions of "when": `decision_sequence` (the log prefix the decision
+    was made on) must equal `event.sequence - 1`; the event's `authority_time`
+    (the explicit instant, equal to the command's `authorityTime`) must not
+    precede the ticket's issuance and must be strictly before its
+    `expires_at`; the ticket must be a valid grant and the first redemption of
+    its `capability_id`; its action, fingerprint and enforcement point must
+    equal the ticket's; and the invoked authority must be `AUTHORIZED` over
+    the log visible at `decision_sequence` at that instant. A redemption event
+    failing this may still have consumed the ticket (the log is append-only)
+    but authorizes nothing. Ordering at an identical instant follows the log:
+    a revocation logged before the redemption denies it, one logged after
+    does not undo it.
+
+Redemption outcomes (what each result means for the ticket and for the log):
+
+| Result | Event written | Ticket consumed | Effect may run | Caller should |
+|---|---|---|---|---|
+| `REDEEMED` | yes, at `decision_sequence + 1` | yes | yes | perform the effect, once |
+| `CAPABILITY_NOT_FOUND`, `CAPABILITY_NOT_VALID`, `REQUESTER_MISMATCH`, `WRONG_ENFORCEMENT_POINT`, `EXPIRED`, `ARGUMENTS_MISMATCH`, `AUTHORITY_NO_LONGER_VALID`, `STALE_AUTHORITY_TIME` | no | no | no | fix the cause or authorize again |
+| `ALREADY_REDEEMED`, `REDEMPTION_COLLISION` | no (by this call) | yes, by another call | no | not retry; this call never authorized the effect |
+| `CONCURRENT_WRITE_DETECTED` | yes, but not at `decision_sequence + 1` | yes | **no** | authorize again (may hit `CAPACITY_EXCEEDED`) |
+
+Known limits, stated plainly: a forged `CAPABILITY_REDEEMED` written straight
+into the store (see THREAT_MODEL A37) can burn a ticket but can never grant
+authority, and `validateRedemptionEvent` (I31) tells it apart; the effect after redemption is not covered; only the in-memory
+transaction exists, so the PostgreSQL behaviour is not demonstrated.
+
 ## I6 — action-instance approval binding
 
 This section states, as a normative scenario, one consequence of I6 ("an
