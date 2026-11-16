@@ -29,7 +29,7 @@
 | D23 | L3 result is `CONSISTENT_L3` plus an `anchored` flag; anchoring never asserts independence of the anchor. |
 | D24 | The `corroborate` command is deferred until after the D9 crypto review. |
 | D25 | Trusted anchors use the strict, closed format `authority-trusted-heads/v1`. |
-| D26 | Replay is limited to 10,000 events without modifying the engine; limit revisited from measurements (`proof:bench`). |
+| D26 | Replay is limited to 10,000 events without modifying the engine. Measured: 10,000 events verify end to end in about 7 s and 277 MB; 20,000 in about 29 s (`proof:bench`, `docs/v1/ATTESTATIONS.md`). The ceiling stays at 10,000. |
 | D27 | Revocations after the attested head are reported as information only. |
 | D28 | Report format `authority-proof-verify-report/v1`; the CLI is routed as `authority proof ...` in the existing entry point. D9 review runs in two passes: PR 3 crypto, then L3 replay. |
 

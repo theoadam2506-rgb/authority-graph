@@ -15,7 +15,8 @@
     "quickstart": "tsx examples/quickstart.ts",
     "conformance": "tsx src/conformance/cli.ts",
     "proof:vectors": "tsx scripts/generate-proof-vectors.ts",
-    "proof:bench": "tsx scripts/bench-replay.ts"
+    "proof:bench": "tsx scripts/bench-replay.ts",
+    "proof:bench:smoke": "tsx scripts/bench-replay.ts --smoke --budget 60"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

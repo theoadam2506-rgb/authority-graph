@@ -425,12 +425,12 @@ describe("L3: reading the journal strictly and within bounds", () => {
     expect(verify(b.redemption, new TextEncoder().encode(b.journal)).result).toBe("CONSISTENT_L3");
   });
 
-  it("the replay limit refuses a journal above it, and states the limit is provisional", async () => {
+  it("the replay limit refuses a journal above it, and states the limit comes from measurements", async () => {
     const b = await base();
     const r = verify(b.redemption, b.journal, { maxEvents: 4 });
     expect(r.result).toBe("REJECTED");
     expect(failing(r)).toBe("L3.JOURNAL_READ");
-    expect(r.checks.find((c) => c.id === "L3.JOURNAL_READ")?.detail).toMatch(/provisional/);
+    expect(r.checks.find((c) => c.id === "L3.JOURNAL_READ")?.detail).toMatch(/ceiling set from measurements/);
     expect(DEFAULT_MAX_REPLAY_EVENTS).toBe(10_000);
   });
 

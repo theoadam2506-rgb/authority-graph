@@ -35,6 +35,15 @@ jobs:
 
       - run: npm run quickstart
 
+      # The published proof vectors must be what the generator produces now.
+      - name: Check the proof vectors are up to date
+        run: npm run proof:vectors -- --check
+
+      # Small journals, per-size time budget: fails if the replay benchmark
+      # cannot run, errors, or exceeds its budget. Not a performance gate.
+      - name: Replay benchmark smoke test
+        run: npm run proof:bench:smoke
+
       - name: Check the README demo excerpt against the real demo output
         run: node scripts/check-readme-demo-excerpt.mjs
 

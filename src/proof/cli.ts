@@ -205,7 +205,7 @@ async function headCommand(argv: readonly string[]): Promise<CliResult> {
     throw new InputError(`journal: ${e instanceof StrictJsonError ? e.message : "unreadable"}`);
   }
   if (!Array.isArray(raw)) throw new InputError("journal: must be a JSON array of events");
-  if (raw.length > maxEvents) throw new InputError(`journal: ${raw.length} events, above the replay limit of ${maxEvents} (provisional)`);
+  if (raw.length > maxEvents) throw new InputError(`journal: ${raw.length} events, above the replay limit of ${maxEvents} (measured ceiling, docs/v1/ATTESTATIONS.md; override with --max-events)`);
   let head;
   try {
     head = journalHead(raw as unknown as CanonicalStore, upTo);

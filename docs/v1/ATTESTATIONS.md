@@ -133,13 +133,34 @@ until the independent cryptographic review (D9) has covered PR 3.
 
 ### Replay cost and limits
 
-Engine replay copies state per event, so cost is quadratic. The limit is
+Engine replay copies state per event, so cost grows faster than linearly
+(roughly x4 per doubling once past a few thousand events). The limit is
 `DEFAULT_MAX_REPLAY_EVENTS = 10_000` (override with `--max-events`); a larger
-journal is refused, not truncated. Measurements: `npm run proof:bench`.
-Results on the development container (one run, read the ratios):
-500 events 46 ms; 1,000 100 ms; 2,000 284 ms; 5,000 1.9 s (RSS about 270 MB).
-The engine is deliberately not modified in this PR; a faster replay needs its
-own arbitration.
+journal is refused, not truncated, with an explicit message.
+
+Measured with `npm run proof:bench -- 1000 2000 5000 10000 20000 --budget 300`
+(one run, Node 22, development container; each size in its own process, peak
+RSS includes the synthetic journal; "L3 end-to-end" is the strict JSON read of
+the journal plus `verifyAttestationL3`, what the CLI does):
+
+| events | replay | L3 end-to-end | peak RSS |
+|---:|---:|---:|---:|
+| 1,000 | 97 ms | 156 ms | 99 MB |
+| 2,000 | 335 ms | 339 ms | 119 MB |
+| 5,000 | 1.5 s | 1.9 s | 191 MB |
+| 10,000 | 6.1 s | 6.9 s | 277 MB |
+| 20,000 | 27.5 s | 28.6 s | 389 MB |
+
+Why 10,000: a verification at the ceiling takes about 7 s and under 300 MB on
+a developer machine, which is acceptable for an offline, on-demand check. At
+20,000 it takes about 29 s and the cost keeps quadrupling, which is not; so the
+ceiling is not raised. Memory is not the binding constraint, time is. These
+numbers are one machine and one synthetic journal shape (issuance events):
+read the ratios, not the absolutes, and lower `--max-events` for a constrained
+environment. The engine is deliberately not modified in this PR; a faster
+replay (incremental state) needs its own arbitration. CI runs
+`npm run proof:bench:smoke` (200 and 500 events, 60 s budget) only to prove the
+script runs; it is not a performance gate.
 
 ### Limits that remain at L3
 

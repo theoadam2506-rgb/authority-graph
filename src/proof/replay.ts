@@ -51,9 +51,9 @@ import { NOT_ESTABLISHED, verifyAttestation, type Check, type CheckStatus, type 
 export const REPORT_VERSION = "authority-proof-verify-report/v1";
 
 /**
- * PROVISIONAL default bound on the number of events replayed. The replay in the
+ * Default bound on the number of events replayed. The replay in the
  * engine copies its state per event (quadratic); the limit is set from
- * measurements (docs/v1/ATTESTATIONS.md, "Replay cost") and will be revisited.
+ * measurements (docs/v1/ATTESTATIONS.md, "Replay cost") (10,000 events: about 7 s, 277 MB).
  */
 export const DEFAULT_MAX_REPLAY_EVENTS = 10_000;
 export const DEFAULT_MAX_JOURNAL_BYTES = 128 * 1024 * 1024;
@@ -243,7 +243,7 @@ export function verifyAttestationL3(input: string | Uint8Array, options: L3Optio
   }
   if (!Array.isArray(raw)) return fail("L3.JOURNAL_READ", "the journal must be a JSON array of events");
   eventsProvided = raw.length;
-  if (raw.length > maxEvents) return fail("L3.JOURNAL_READ", `the journal has ${raw.length} events, above the replay limit of ${maxEvents} (provisional; see docs/v1/ATTESTATIONS.md, "Replay cost")`);
+  if (raw.length > maxEvents) return fail("L3.JOURNAL_READ", `the journal has ${raw.length} events, above the replay limit of ${maxEvents} (a ceiling set from measurements; override with maxEvents; see docs/v1/ATTESTATIONS.md, "Replay cost")`);
   add("L3.JOURNAL_READ", "PASS", `${raw.length} events read strictly`);
 
   // ---- L3.PREFIX_REPLAY (and, for the full scope, the full replay it comes from) ----
