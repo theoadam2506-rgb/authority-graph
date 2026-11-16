@@ -534,8 +534,8 @@ node scripts/check-postgres-report.mjs vitest-postgres.json
 ```
 
 The second command fails unless every PostgreSQL test that ran passed (none
-skipped, failed or todo, at least 30 passed, and the three original files
-present). CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs
+skipped, failed or todo, at least 92 passed, and each of the eight suites
+above present with at least one passed test). CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs
 all of the above: the first block on Node 20 and 22 (with the proof-vectors
 check and a replay benchmark smoke test), the PostgreSQL block on Node 20
 against a `postgres:16` service.
