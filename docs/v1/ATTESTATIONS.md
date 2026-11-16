@@ -1,9 +1,10 @@
 # Attestations (`authority-attestation/v1`)
 
-Status: **exists today** in `src/proof/` (PR 3): format, signing, journal hash
-chain, offline verification levels L0 to L2, test vectors. **Not yet**: L3
-(re-deriving the decision from a journal) and the `authority proof verify`
-command (PR 4); an independent cryptographic review (D9) has not happened.
+Status: **exists today** in `src/proof/` (PRs 3 and 4): format, signing, journal
+hash chain, offline verification levels L0 to L2, L3 (re-deriving the decision
+from a journal you supply), the `authority proof verify` and `head` commands,
+test vectors. **Not yet**: the `corroborate` command (deferred), and the
+independent cryptographic review (D9), which is prepared and has not started.
 Nothing here is a security guarantee until that review is done.
 
 ## What this is, and is not
@@ -128,8 +129,8 @@ key can claim any time before its revocation. A journal anchored before the
 compromise turns "when was this signed" into "is the statement true against a
 history fixed before the compromise". That needs an anchor independent of the
 signer, and still does not prove signing time, suffix completeness or
-identity. `ALWAYS` revocations are never bypassed. The command is deferred
-until the independent cryptographic review (D9) has covered PR 3.
+identity. `ALWAYS` revocations are never bypassed. The `corroborate` command is
+deferred until the independent cryptographic review (D9) has covered PR 3.
 
 ### Replay cost and limits
 
