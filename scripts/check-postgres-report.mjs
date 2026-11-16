@@ -9,6 +9,7 @@
  * exit code would be green without running a single PostgreSQL test.
  *
  * Usage: node scripts/check-postgres-report.mjs <vitest-json-report>
+ *        node scripts/check-postgres-report.mjs --list-required
  *
  * Plain Node, no dependency. The report shape it reads is the one produced by
  * Vitest's built-in `json` reporter (checked against Vitest 2.1.9).
@@ -16,20 +17,31 @@
 import { readFileSync } from "node:fs";
 
 /**
- * Floor on the number of passed PostgreSQL tests. 30 is the number of
- * PostgreSQL tests since the append-only role boundary was added (3 in
- * postgresEventStore.test.ts, 15 in postgresCapabilityIssuanceTransaction.test.ts,
- * 12 in postgresAppendOnlyBoundary.test.ts); the guard started at 17.
- * New tests may raise the real count; `numPassedTests === numTotalTests`
- * covers them. Never lower this floor silently.
+ * Floor on the number of passed PostgreSQL tests: the count of the eight
+ * required suites below (3 + 15 + 14 + 21 + 2 + 28 + 1 + 8 = 92). Raised from 30
+ * when the five redemption and proof suites were added to the job: the guard
+ * used to require only the first three files, so dropping any of the later five
+ * from the CI command went unnoticed. New tests may raise the real count;
+ * `numPassedTests === numTotalTests` covers them. Never lower this floor
+ * silently.
  */
-const MIN_PASSED_TESTS = 30;
+const MIN_PASSED_TESTS = 92;
 
-/** The test files the PostgreSQL job must run, relative to the repository root. */
+/**
+ * The test files the PostgreSQL job must run, relative to the repository root.
+ * This list must equal the files named by the "Run the PostgreSQL tests" step of
+ * `.github/workflows/ci.yml`; a test (tests/scripts/check-postgres-report.test.ts)
+ * fails when they differ, and `--list-required` prints it for that purpose.
+ */
 const REQUIRED_TEST_FILES = [
   "tests/storage/postgresEventStore.test.ts",
   "tests/storage/postgresCapabilityIssuanceTransaction.test.ts",
   "tests/storage/postgresAppendOnlyBoundary.test.ts",
+  "tests/storage/postgresCapabilityRedemptionTransaction.test.ts",
+  "tests/storage/postgresRedemptionProcesses.test.ts",
+  "tests/storage/postgresRedemptionReview.test.ts",
+  "tests/storage/postgresJournalHash.test.ts",
+  "tests/redemption/redemptionContract.postgres.test.ts",
 ];
 
 const COUNT_FIELDS = ["numTotalTests", "numPassedTests", "numFailedTests", "numPendingTests", "numTodoTests"];
@@ -125,9 +137,13 @@ function checkReportFile(reportPath) {
 }
 
 function main(argv) {
+  if (argv.length === 1 && argv[0] === "--list-required") {
+    process.stdout.write(`${REQUIRED_TEST_FILES.join("\n")}\n`);
+    return 0;
+  }
   const reportPath = argv[0];
   if (reportPath === undefined || argv.length !== 1) {
-    process.stderr.write("usage: node scripts/check-postgres-report.mjs <vitest-json-report>\n");
+    process.stderr.write("usage: node scripts/check-postgres-report.mjs <vitest-json-report> | --list-required\n");
     return 2;
   }
   const errors = checkReportFile(reportPath);
