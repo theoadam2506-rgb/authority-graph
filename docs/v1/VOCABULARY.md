@@ -7,10 +7,10 @@
 | **Decision** | The engine's answer to "may this agent do this now?": `AUTHORIZED`, `DENIED`, `REQUIRES_APPROVAL` or `UNKNOWN`, with a reason code. **exists today** |
 | **Prospective question** | `authorityAt`: would compatible authority exist right now? It is **not** permission to execute a particular action instance. **exists today** (README, "Execution decisions are instance-bound") |
 | **Ticket** | A `CAPABILITY_ISSUED` event: a decision made durable for one exact action (`action_id`, fingerprint), one enforcement point, with an expiry. **exists today** |
-| **Redemption** | Planned. The atomic, single-use consumption of a ticket immediately before the effect, re-checking that authority still holds at that instant. |
+| **Redemption** | **exists today** (PRs 1 and 2: in memory and on PostgreSQL). The atomic, single-use consumption of a ticket immediately before the effect, re-checking that authority still holds at that instant. |
 | **Enforcement point** | The component that actually performs, or refuses, the effect. Authority never executes anything. |
 | **Attestation** | **exists today for issuances and redemptions** (PR 3, `src/proof`, [`ATTESTATIONS.md`](./ATTESTATIONS.md)). A canonical JSON document (RFC 8785) signed with Ed25519 by a key the deployment supplies, stating that an event is in a journal with a given chain head. It is not a statement that the decision was right. |
-| **Verification by replay** | Planned (PR 4, "L3"). Recomputing the decision from an exported event log and comparing it with the attestation. Possible because the engine is deterministic. |
+| **Verification by replay** | **exists today** (PR 4, "L3", `authority proof verify`; not independently reviewed). Recomputing the decision from an exported event log and comparing it with the attestation. Possible because the engine is deterministic. |
 | **Authority Proof** | The name of the component. Its artifacts are called *attestations*; we avoid "proof" for them because it suggests more than they establish. |
 
 ## What an attestation says, and what nobody can prove

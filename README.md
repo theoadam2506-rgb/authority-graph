@@ -2,6 +2,11 @@
 
 [![CI](https://github.com/theoadam2506-rgb/authority-graph/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/theoadam2506-rgb/authority-graph/actions/workflows/ci.yml)
 
+> **Status: experimental.** Not published to npm, not ready for production, and
+> **not independently reviewed or audited**. The V0 engine is complete and
+> V1 is under construction: see [Status](#status) for exactly what exists and
+> what is planned.
+
 An AI agent executes an action. Six months later, nobody can say exactly what
 human authority covered it at that moment, or why. This engine answers that
 question deterministically, from an append-only log of events: delegation,
@@ -347,7 +352,9 @@ action was legitimate at sequence 8, back when it ran.
 
 ## What it doesn't do
 
-- **No signatures, no verified identity.** V0 has no signature scheme.
+- **No signed events, no verified identity.** Events have no signature
+  scheme. (Authority Proof, below, signs *attestations about* events; it does
+  not sign or authenticate the events themselves.)
   Every event, from every source, carries
   `assurance_level: "ASSERTED_UNVERIFIED"`, always. An "authorized"
   decision means *the log contains events asserting a chain of grants, none
@@ -380,7 +387,21 @@ action was legitimate at sequence 8, back when it ran.
   remaining budget at any later sequence honestly reflects the overspend
   (negative if necessary), and `explain()` reports it rather than hiding it.
   V0 identifies the inconsistency after the fact; it does not prevent it
-  beforehand.
+  beforehand. This statement concerns plain `authorityAt` / `explainAction`
+  decisions. Capability issuance and single-use redemption run as transactions
+  (see the capability-issuance section below and invariants I26 to I31 in
+  [`SPEC.md`](./SPEC.md)); they do not change what is said here about
+  concurrent plain decisions.
+- **Authority Proof does not establish the journal's authenticity or
+  completeness.** `authority proof verify` replays a journal *you supply* and
+  checks that a signed statement is consistent with it. An operator can omit or
+  fabricate events consistently. A trusted anchor (`--trusted-heads`) is chosen
+  by the verifier, and its independence from the signer is **not verified**.
+  A key identifier names a key, not a person; the signing instant is the
+  signer's claim. There is no timestamping, no non-repudiation and no
+  certification, and no JWS, COSE or WIMSE conformance is claimed. Replay cost
+  is quadratic: the default ceiling is 10,000 events (about 7 s end to end on
+  a development machine). See [`docs/v1/ATTESTATIONS.md`](./docs/v1/ATTESTATIONS.md).
 
 ## Further reading
 
@@ -390,11 +411,19 @@ action was legitimate at sequence 8, back when it ran.
 - [`THREAT_MODEL.md`](./THREAT_MODEL.md): the attack table: for each
   attack, which invariant is supposed to stop it, the defense mechanism, and
   the deterministic expected result.
-- [`EVENT_MODEL.md`](./EVENT_MODEL.md): the wire-level event schema (all 9
-  event types, including `CAPABILITY_ISSUED`) and the canonical/security-log
-  ingestion split.
+- [`EVENT_MODEL.md`](./EVENT_MODEL.md): the wire-level event schema (all 10
+  event types, including `CAPABILITY_ISSUED` and `CAPABILITY_REDEEMED`) and the
+  canonical/security-log ingestion split.
+- [`docs/v1/`](./docs/v1/README.md): the V1 documents (architecture, attestation
+  format, threats, decisions, roadmap), each item marked as existing or planned.
 
 ## Independent audit
+
+> **Clarification.** This section records an adversarial review whose findings
+> were fixed and kept as regression tests. It is **not** an independent
+> external human security audit of Authority, and it does not cover Authority
+> Proof. The independent cryptographic review (decision D9) is prepared and has
+> not started. See [`SECURITY.md`](./SECURITY.md).
 
 The spec and its invariants were submitted to an independent adversarial
 audit, which found four real gaps in the implementation (not in the spec's
@@ -424,7 +453,27 @@ Apache License 2.0: see [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
 
 ## Status
 
-V0. Not published to npm, and `package.json` is marked `private`: the
+Experimental. The V0 engine is complete; V1 is under construction. Not
+published to npm, not ready for production, and not independently reviewed or
+audited. Nothing below is a security guarantee.
+
+| Component | State on `main` |
+|---|---|
+| Core engine: `authorityAt`, `explainAction`, four outcomes | **exists** (V0) |
+| Capability issuance (`CAPABILITY_ISSUED`), in memory and PostgreSQL | **exists** |
+| Single-use capability redemption (`CAPABILITY_REDEEMED`), in memory and PostgreSQL, tested with concurrent connections and separate OS processes | **exists** |
+| PostgreSQL append-only role boundary (for the application role only) | **exists** |
+| Authority Proof: signed attestations of issuances and redemptions (JCS + Ed25519), offline verification L0 to L3, `authority proof verify` and `head`, published vectors | **exists**, **not independently reviewed** |
+| Authority Conformance Lab (V0) | **exists** |
+| `corroborate` command | **deferred** until after the cryptographic review |
+| Independent cryptographic review (D9) | **prepared, not started** |
+| SDK (`authorize`, `redeem`, `guard`) | **planned, not started** |
+| npm package | **not published**; no name reserved |
+
+The roadmap and the state of each V1 pull request are in
+[`docs/v1/ROADMAP.md`](./docs/v1/ROADMAP.md). The V0 notes follow.
+
+`package.json` is marked `private`: the
 supported way to use this project today is `git clone` plus the commands in
 [Run it](#run-it) above, not a package manager install. The in-memory engine
 and the Postgres backend are both covered by the test suite described below,
@@ -462,11 +511,11 @@ npm run quickstart    # the short story from the top of this README
 node scripts/check-readme-demo-excerpt.mjs   # the README demo excerpt still matches the demo
 ```
 
-Without a reachable database, `npm test` skips the 30 PostgreSQL tests and
-still exits 0. To run them, point `TEST_DATABASE_URL` at an isolated
-PostgreSQL 16 database (the tests truncate its tables; the boundary test also
-creates roles, so connect as a superuser) and run the three files one after
-the other, then check the report:
+Without a reachable database, `npm test` skips the PostgreSQL tests and still
+exits 0. To run them, point `TEST_DATABASE_URL` at an isolated PostgreSQL 16
+database (each test file creates its own schema; the boundary test also creates
+roles, so connect as a superuser) and run the PostgreSQL files, then check the
+report:
 
 ```
 TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/authority_graph_test \
@@ -474,13 +523,18 @@ TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/authority_graph_
   tests/storage/postgresEventStore.test.ts \
   tests/storage/postgresCapabilityIssuanceTransaction.test.ts \
   tests/storage/postgresAppendOnlyBoundary.test.ts \
-  --no-file-parallelism \
+  tests/storage/postgresCapabilityRedemptionTransaction.test.ts \
+  tests/storage/postgresRedemptionProcesses.test.ts \
+  tests/storage/postgresRedemptionReview.test.ts \
+  tests/storage/postgresJournalHash.test.ts \
+  tests/redemption/redemptionContract.postgres.test.ts \
   --reporter=default --reporter=json --outputFile.json=vitest-postgres.json
 node scripts/check-postgres-report.mjs vitest-postgres.json
 ```
 
-The second command fails unless every PostgreSQL test ran and passed (none
-skipped, failed or todo, at least 30 passed). CI
-([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs all of the
-above: the first block on Node 20 and 22, the PostgreSQL block on Node 20
+The second command fails unless every PostgreSQL test that ran passed (none
+skipped, failed or todo, at least 30 passed, and the three original files
+present). CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs
+all of the above: the first block on Node 20 and 22 (with the proof-vectors
+check and a replay benchmark smoke test), the PostgreSQL block on Node 20
 against a `postgres:16` service.
