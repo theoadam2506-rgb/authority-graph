@@ -190,6 +190,29 @@ export interface CapabilityIssuedPayload {
   readonly expires_at: Iso8601;
 }
 
+/**
+ * Records that Authority consumed a capability ("ticket") immediately before
+ * the effect, after re-checking at that instant that the invoked authority
+ * still holds (V1, docs/v1/ARCHITECTURE.md). At most one such event exists
+ * per `capability_id`: ingestion refuses a second one as a business-id
+ * collision (kind `redeemed_capability_id`), whatever its `event_id`.
+ *
+ * It means: at `decision_sequence`, this exact (capability_id, action_id,
+ * action_fingerprint, enforcement_point_id) was redeemed. It does NOT mean:
+ * the effect happened, happened once, or will; nor that anything outside the
+ * log was verified. `principal_id` on the envelope is the authenticated
+ * requester as asserted by the caller (ASSERTED_UNVERIFIED, I17).
+ * Redemption never releases or changes the capacity a ticket engages.
+ */
+export interface CapabilityRedeemedPayload {
+  readonly capability_id: CapabilityId;
+  readonly action_id: ActionId;
+  readonly action_fingerprint: Fingerprint;
+  /** The last canonical sequence visible when redemption was decided; the event's own sequence is the next one. */
+  readonly decision_sequence: SequenceNumber;
+  readonly enforcement_point_id: EnforcementPointId;
+}
+
 // ---------------------------------------------------------------------------
 // Discriminated union over event_type, parameterized by envelope shape so
 // that "as authored" and "as accepted into the canonical store" share one
@@ -207,7 +230,8 @@ type EventBodyUnion =
   | Typed<"APPROVAL_GRANTED", ApprovalGrantedPayload>
   | Typed<"APPROVAL_DENIED", ApprovalDeniedPayload>
   | Typed<"ACTION_EXECUTED", ActionExecutedPayload>
-  | Typed<"CAPABILITY_ISSUED", CapabilityIssuedPayload>;
+  | Typed<"CAPABILITY_ISSUED", CapabilityIssuedPayload>
+  | Typed<"CAPABILITY_REDEEMED", CapabilityRedeemedPayload>;
 
 /** As authored by a source, before Authority assigns sequence/authority_time. */
 export type DraftAuthorityEvent = EventEnvelopeSource & EventBodyUnion;

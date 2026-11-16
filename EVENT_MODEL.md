@@ -85,6 +85,8 @@ its creating event type:
 | `delegation_id` | all `DELEGATION_CREATED` and `SUBDELEGATION_CREATED` events ever ingested | The second event is rejected at ingestion, logged (security log), never inserted into the canonical store. |
 | `action_id` | all `ACTION_REQUESTED` events ever ingested | Same. |
 | `approval_id` | all `APPROVAL_REQUESTED` events ever ingested | Same. |
+| `capability_id` | all `CAPABILITY_ISSUED` events ever ingested | Same. |
+| `capability_id`, as a *redemption* (distinct kind) | all `CAPABILITY_REDEEMED` events ever ingested | Same: at most one redemption per capability, whatever the `event_id` (SPEC I28). A redemption never collides with the `CAPABILITY_ISSUED` it consumes. |
 
 This rule is distinct from I8 (which deduplicates by `event_id`): two
 events with different `event_id` values could attempt to reuse the same
@@ -207,7 +209,7 @@ renumbered/truncated forgery. Those claims require authenticated observers,
 signatures, and an externally anchored signed journal head; they are outside
 P1.5 and must not be presented as `proved` by a future verifier.
 
-## The 9 event types
+## The 10 event types
 
 ### 1. `DELEGATION_CREATED`
 
@@ -407,3 +409,30 @@ the command itself, never logged data in the sense of this document.
 An idempotent replay (`REPLAYED`, under the same key) never creates a
 second `CAPABILITY_ISSUED`: the result returned is that of the original
 execution, with no new event and no new evaluation.
+
+### 10. `CAPABILITY_REDEEMED`
+
+Produced only by the redemption command (`redeemCapability` and its
+transaction, V1; see `SPEC.md`, I26 through I30), never supplied by an
+external source. It records that a capability (a `CAPABILITY_ISSUED`) was
+consumed immediately before the effect, after the invoked authority was
+re-checked at that instant.
+
+| Payload field | Type | Description |
+|---|---|---|
+| `capability_id` | opaque identifier | The consumed capability. At most one `CAPABILITY_REDEEMED` exists per `capability_id` (I28). |
+| `action_id` | opaque identifier | The action the capability was issued for. |
+| `action_fingerprint` | hexadecimal string | The ticket's fingerprint, which the observed capability and parameters were compared against (I26). |
+| `decision_sequence` | integer | The last canonical sequence visible when redemption was decided. The event's own sequence is `decision_sequence + 1`, or redemption is reported `CONCURRENT_WRITE_DETECTED` (I30). |
+| `enforcement_point_id` | opaque identifier | The enforcement point that redeemed; equal to the ticket's. |
+
+Envelope: `occurred_at` and `authority_time` equal the explicit `authorityTime`
+the command was decided at; `principal_id` is the authenticated requester as
+asserted by the caller (`ASSERTED_UNVERIFIED`, I17), not proof of identity.
+
+What this event means: at `decision_sequence`, this exact ticket was
+redeemed once. What it does **not** mean: that the effect happened, happened
+once, or will happen; nor anything verified outside the log. Redemption does
+not change `authorityAt`, `explainAction` or capacity accounting (I29). A
+refused redemption writes nothing, except the documented fail-closed case in
+which a concurrent write is detected after the append (I30).

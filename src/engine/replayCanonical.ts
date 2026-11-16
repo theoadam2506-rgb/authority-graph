@@ -13,6 +13,7 @@ export type CanonicalReplayResult =
 const KNOWN_EVENT_TYPES = new Set([
   "DELEGATION_CREATED", "DELEGATION_REVOKED", "SUBDELEGATION_CREATED", "ACTION_REQUESTED",
   "APPROVAL_REQUESTED", "APPROVAL_GRANTED", "APPROVAL_DENIED", "ACTION_EXECUTED", "CAPABILITY_ISSUED",
+  "CAPABILITY_REDEEMED",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
