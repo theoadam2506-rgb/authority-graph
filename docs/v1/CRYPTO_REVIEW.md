@@ -1,6 +1,6 @@
 # Independent cryptographic review (decision D9): brief for the reviewer
 
-Status: **not started**. No communication about security guarantees (website,
+Status: **not started** (preparation: [`D9_REVIEW_PACK.md`](./D9_REVIEW_PACK.md)). No communication about security guarantees (website,
 sales material, README claims, talks) may rely on Authority Proof until this
 review is complete and its findings are resolved or published as known limits.
 

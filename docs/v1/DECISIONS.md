@@ -32,6 +32,13 @@
 | D26 | Replay is limited to 10,000 events without modifying the engine. Measured: 10,000 events verify end to end in about 7 s and 277 MB; 20,000 in about 29 s (`proof:bench`, `docs/v1/ATTESTATIONS.md`). The ceiling stays at 10,000. |
 | D27 | Revocations after the attested head are reported as information only. |
 | D28 | Report format `authority-proof-verify-report/v1`; the CLI is routed as `authority proof ...` in the existing entry point. D9 review runs in two passes: PR 3 crypto, then L3 replay. |
+| D29 | D9 review budget: two scenarios prepared (0 to 500 EUR; 1,500 to 3,000 EUR), no spend committed. See `D9_REVIEW_PACK.md`. |
+| D30 | Volet B (L3) may be prepared in parallel with volet A but is not concluded before Critical and High findings of volet A that affect L3 are fixed. |
+| D31 | Coordinated disclosure with an indicative 90-day delay, adaptable to severity; no fix date is promised (`SECURITY.md`). |
+| D32 | Authority is never presented as audited before D9 is complete; internal and AI-assisted reviews are called internal verification. |
+| D33 | SDK: `authorize` triggers no external effect; `redeem` consumes a capability without running the effect; `guard` orders redemption before the effect and never promises exactly-once for external effects. |
+| D34 | SDK: `TrustedClock` must be injected explicitly (no implicit default clock); `report` is an optional verification function, never an implicit authorization. |
+| D35 | `@authority-graph/core` is a working name, not reserved; no npm package is published without a separate decision. |
 
 ## Still open
 
