@@ -417,24 +417,25 @@ action was legitimate at sequence 8, back when it ran.
 - [`docs/v1/`](./docs/v1/README.md): the V1 documents (architecture, attestation
   format, threats, decisions, roadmap), each item marked as existing or planned.
 
-## Independent audit
+## Internal adversarial review
 
-> **Clarification.** This section records an adversarial review whose findings
-> were fixed and kept as regression tests. It is **not** an independent
-> external human security audit of Authority, and it does not cover Authority
-> Proof. The independent cryptographic review (decision D9) is prepared and has
-> not started. See [`SECURITY.md`](./SECURITY.md).
-
-The spec and its invariants were submitted to an independent adversarial
-audit, which found four real gaps in the implementation (not in the spec's
-intent). All four were fixed. The four reproductions the audit wrote are
-kept in the "Independent adversarial audit" block of
+The spec and its invariants went through an **internal** adversarial review.
+It found four real gaps in the implementation (not in the spec's intent). All
+four were fixed. The four reproductions written during that review are kept
+in the review block of
 [`tests/adversarial/independent-audit.test.ts`](./tests/adversarial/independent-audit.test.ts):
 their scenarios and assertions are unchanged since they were committed
 (`62369a1`), and their only later edit is a mechanical rewrite of threshold
-literals as currency-bound amounts (`f73e962`). The same file also holds,
-in a separately labeled block, one post-audit regression test that the
-audit did not write (I6 action-instance binding, added by pull request #9).
+literals as currency-bound amounts (`f73e962`). The same file also holds, in a
+separately labeled block, one post-review regression test that the review did
+not write (I6 action-instance binding, added by pull request #9).
+
+The file name and the block labels in that file are historical and use the
+word "independent". They must not be read as an independent external audit:
+**no independent external security audit of Authority has been carried out**.
+This review does not cover Authority Proof. The independent cryptographic
+review (decision D9) is prepared and has **not started**. See
+[`SECURITY.md`](./SECURITY.md).
 
 ## Approvals are bound to action instances (I6)
 
