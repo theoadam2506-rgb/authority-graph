@@ -39,12 +39,12 @@ dependency: Ed25519 and SHA-256 come from `node:crypto`; canonical JSON uses
 (in memory and PostgreSQL) writing `CAPABILITY_ISSUED`, append-only PostgreSQL
 journal, argument binding through an RFC 8785 digest in the action fingerprint.
 
-**Planned (V1):** one new event type, `CAPABILITY_REDEEMED`, and the
+**V1, in memory (exists today, PR 1) and on PostgreSQL (PR 2):** one new event type, `CAPABILITY_REDEEMED`, and the
 redemption decision. Existing events, schemas and decisions are unchanged.
 The SQL schema needs no change for it: `authority_events.event_type` is
 `TEXT` with no `CHECK` constraint and the payload is opaque `JSONB`
-(`src/storage/schema.sql`). A uniqueness backstop for redemptions, in the
-spirit of the existing `capability_id` index, is a later, additive step.
+(`src/storage/schema.sql`). The PostgreSQL transaction adds an additive, idempotent partial unique index on
+redeemed `capability_id` in `schema.sql` (the migration).
 
 ## The cycle of a sensitive action (planned)
 

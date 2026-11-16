@@ -850,8 +850,8 @@ re-checking that the authority behind it still holds. Like issuance, it is a
 COMMAND -> DECISION -> EVENT DATA path and not a third read operation. It
 decides about **authority**, never about the effect: it cannot make an
 external effect happen at most once, it does not verify identity, and it
-cannot see a revocation that is not yet in the log. Only the in-memory
-transaction exists in this version.
+cannot see a revocation that is not yet in the log. Two implementations exist: the in-memory transaction and, since V1 PR 2, the
+PostgreSQL transaction (`PostgresCapabilityRedemptionTransaction`).
 
 26. **I26: A ticket is redeemable only as the exact grant that was issued.**
     The `CAPABILITY_ISSUED` must exist and still be a coherent grant of the
@@ -901,6 +901,27 @@ transaction exists in this version.
     properties (colliding attempt ids, independent redeemers, restart, raw
     duplicate writes). Tests: `tests/redemption/redemptionTransaction.test.ts`,
     `tests/redemption/redemptionReview.test.ts` and the contract run.
+
+    **PostgreSQL implementation (V1 PR 2) of those requirements.** (a) One SQL
+    transaction: BEGIN, the writer advisory lock shared with every other
+    writer of `authority_events`, a FRESH read of the whole journal after the
+    lock is held, the pure kernel, INSERT, read-back, COMMIT; any error rolls
+    back and rethrows (an exception is never a success). (b) The partial
+    unique index `authority_events_redeemed_capability_id_uidx` (in
+    `schema.sql`, applied idempotently; installations from before V1 hold no
+    redemption row so it applies to them unchanged) makes a second redemption
+    row impossible even for a raw INSERT or a writer that does not take the
+    lock. (c) `REDEEMED` is returned only after the INSERT ran in THIS
+    transaction AND a read-back inside it shows exactly one redemption row for
+    the capability, whose `event_id` is this attempt's and whose sequence is
+    `decision_sequence + 1`; an I8 "accepted duplicate", a missing row, two rows
+    or another event_id roll back and are never success. (d) A unique violation
+    on the redemption index or on `event_id` is `REDEMPTION_COLLISION`.
+    Event ids embed an unguessable attempt id (so no raw writer can squat one);
+    correctness does not rest on it. Tests: `tests/storage/postgresCapabilityRedemptionTransaction.test.ts`,
+    `tests/storage/postgresRedemptionProcesses.test.ts` (real OS processes,
+    including a lock-holding process killed with SIGKILL) and the shared
+    contract run on PostgreSQL.
 29. **I29: Redemption changes no existing decision and releases no capacity.**
     `authorityAt`, `explainAction` and `remainingCapacity` give identical
     answers with or without `CAPABILITY_REDEEMED` events in the log: a
@@ -922,6 +943,16 @@ transaction exists in this version.
     stays engaged (I29), so re-authorizing the same action against a
     `total_budget` may be refused `CAPACITY_EXCEEDED`; the effect must not be
     performed.
+
+    **PostgreSQL difference, stated plainly.** If a writer that BYPASSES the
+    lock commits a row at the sequence the redemption is about to use, the
+    INSERT hits the primary key; the transaction rolls back and returns
+    `CONCURRENT_WRITE_DETECTED` with `ticketConsumed: false`: nothing was
+    written by the call, so the ticket is NOT consumed (the in-memory model
+    writes the event and consumes it). Writers that take the lock cannot
+    interleave at all. If the connection is lost around COMMIT the call throws
+    and the outcome is unknown: the caller must not assume either, and a retry
+    reads the truth (`ALREADY_REDEEMED` or still redeemable).
 
     **Accepted V1 trade-off (availability, decided by the project owner).**
     A ticket consumed this way keeps its capacity engaged (I29): capacity
@@ -956,7 +987,8 @@ Redemption outcomes (what each result means for the ticket and for the log):
 | `REDEEMED` | yes, at `decision_sequence + 1` | yes | yes | perform the effect, once |
 | `CAPABILITY_NOT_FOUND`, `CAPABILITY_NOT_VALID`, `REQUESTER_MISMATCH`, `WRONG_ENFORCEMENT_POINT`, `EXPIRED`, `ARGUMENTS_MISMATCH`, `AUTHORITY_NO_LONGER_VALID`, `STALE_AUTHORITY_TIME` | no | no | no | fix the cause or authorize again |
 | `ALREADY_REDEEMED`, `REDEMPTION_COLLISION` | no (by this call) | yes, by another call | no | not retry; this call never authorized the effect |
-| `CONCURRENT_WRITE_DETECTED` | yes, but not at `decision_sequence + 1` | yes | **no** | authorize again (may hit `CAPACITY_EXCEEDED`) |
+| `CONCURRENT_WRITE_DETECTED` (in memory) | yes, but not at `decision_sequence + 1` | yes | **no** | authorize again (may hit `CAPACITY_EXCEEDED`) |
+| `CONCURRENT_WRITE_DETECTED` (PostgreSQL, lock-bypassing writer) | no (rolled back) | no | **no** | retry; the decision is re-made on the new journal |
 
 Known limits, stated plainly: a forged `CAPABILITY_REDEEMED` written straight
 into the store (see THREAT_MODEL A37) can burn a ticket but can never grant
