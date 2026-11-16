@@ -63,8 +63,16 @@ export type RedeemCapabilityResult =
       readonly ok: false;
       readonly reason: RedeemCapabilityRejectionReason;
       /** Present for CAPABILITY_NOT_VALID (why the grant failed validation) and AUTHORITY_NO_LONGER_VALID (the engine's decision). */
-      readonly detail?: { readonly grantRejection?: GrantRejectionReason; readonly decision?: AuthorityDecision };
+      readonly detail?: {
+        readonly grantRejection?: GrantRejectionReason;
+        readonly decision?: AuthorityDecision;
+        /** CONCURRENT_WRITE_DETECTED only: the CAPABILITY_REDEEMED event was written, so the ticket is consumed, yet nothing is authorized. */
+        readonly ticketConsumed?: boolean;
+        readonly redemptionSequence?: SequenceNumber;
+      };
     };
+
+type RedeemedEvent = Extract<CanonicalStore[number], { readonly event_type: "CAPABILITY_REDEEMED" }>;
 
 function findIssued(store: CanonicalStore, capabilityId: CapabilityId): CapabilityIssuedEvent | undefined {
   for (const event of store) {
@@ -165,4 +173,70 @@ export function redeemCapability(
       enforcement_point_id: issued.payload.enforcement_point_id,
     },
   };
+}
+
+export type RedemptionEventRejectionReason =
+  | "CAPABILITY_NOT_FOUND"
+  | "CAPABILITY_NOT_VALID"
+  | "REDEMPTION_FIELDS_MISMATCH"
+  | "DECISION_SEQUENCE_NOT_IMMEDIATE"
+  | "NOT_FIRST_REDEMPTION"
+  | "REDEEMED_BEFORE_ISSUANCE"
+  | "REDEEMED_AT_OR_AFTER_EXPIRY"
+  | "AUTHORITY_NOT_VALID_AT_DECISION";
+
+export type RedemptionEventValidation = { readonly ok: true } | { readonly ok: false; readonly reason: RedemptionEventRejectionReason };
+
+/**
+ * Read-time validation of a `CAPABILITY_REDEEMED` already in the log: does it
+ * actually record a redemption that AUTHORIZED the effect? Mirrors
+ * `validateAndSelectGrant` for CAPABILITY_ISSUED. A redemption that failed this
+ * check may still have CONSUMED the ticket (it exists, the log is append-only),
+ * but it authorized nothing: the typical case is
+ * DECISION_SEQUENCE_NOT_IMMEDIATE, the footprint of a CONCURRENT_WRITE_DETECTED.
+ *
+ * Coherence it enforces between the three notions of "when":
+ *  - `decision_sequence` is the sequence the decision was made on and must be
+ *    exactly `event.sequence - 1` (no write slipped in between);
+ *  - `event.sequence` is the ingestion order (assigned at append);
+ *  - `event.authority_time` is the explicit instant of the decision: not before
+ *    the ticket was issued, strictly before its `expires_at`, and the invoked
+ *    authority must have been AUTHORIZED over the log visible at
+ *    `decision_sequence`, at that instant.
+ */
+export function validateRedemptionEvent(store: CanonicalStore, event: RedeemedEvent): RedemptionEventValidation {
+  const issued = findIssued(store.filter((e) => e.sequence < event.sequence), event.payload.capability_id);
+  if (issued === undefined) {
+    return { ok: false, reason: "CAPABILITY_NOT_FOUND" };
+  }
+  if (!validateAndSelectGrant(store, issued).ok) {
+    return { ok: false, reason: "CAPABILITY_NOT_VALID" };
+  }
+  if (
+    issued.payload.action_id !== event.payload.action_id ||
+    issued.payload.action_fingerprint !== event.payload.action_fingerprint ||
+    issued.payload.enforcement_point_id !== event.payload.enforcement_point_id
+  ) {
+    return { ok: false, reason: "REDEMPTION_FIELDS_MISMATCH" };
+  }
+  if (Number(event.payload.decision_sequence) !== Number(event.sequence) - 1) {
+    return { ok: false, reason: "DECISION_SEQUENCE_NOT_IMMEDIATE" };
+  }
+  for (const other of store) {
+    if (other.event_type === "CAPABILITY_REDEEMED" && other.payload.capability_id === event.payload.capability_id && other.sequence < event.sequence) {
+      return { ok: false, reason: "NOT_FIRST_REDEMPTION" };
+    }
+  }
+  const at = Date.parse(event.authority_time);
+  if (at < Date.parse(issued.authority_time)) {
+    return { ok: false, reason: "REDEEMED_BEFORE_ISSUANCE" };
+  }
+  if (!(at < Date.parse(issued.payload.expires_at))) {
+    return { ok: false, reason: "REDEEMED_AT_OR_AFTER_EXPIRY" };
+  }
+  const reselection = selectInvokedGrant(store, event.payload.action_id, event.payload.decision_sequence, event.authority_time);
+  if (!reselection.ok) {
+    return { ok: false, reason: "AUTHORITY_NOT_VALID_AT_DECISION" };
+  }
+  return { ok: true };
 }

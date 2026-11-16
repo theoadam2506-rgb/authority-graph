@@ -4,26 +4,38 @@
  * pure `redeemCapability` kernel and the existing `InMemoryEventStore`; it
  * adds no authority decision of its own.
  *
- * Guarantees, and their exact scope:
- *  - Calls made through ONE instance of this class are serialized by a
- *    promise-chain mutex (same idiom as `InMemoryCapabilityIssuanceTransaction`):
- *    two concurrent `redeem()` of the same ticket cannot both succeed; the
- *    second sees the first's CAPABILITY_REDEEMED and gets ALREADY_REDEEMED.
- *  - Independently of that mutex, ingestion refuses a second
- *    CAPABILITY_REDEEMED for a capability_id (business-id collision, I28), so
- *    two instances wrapping the same store still cannot both redeem.
- *  - Any OTHER writer (a revocation, an issuance, another transaction)
- *    appending between this call's snapshot and its own append is detected:
- *    the event this call wrote would not be at `decision_sequence + 1`. The
- *    call then reports CONCURRENT_WRITE_DETECTED and never REDEEMED. The
- *    ticket is consumed (append-only: the event exists) but nothing is
- *    authorized; the caller must authorize again. Fail-closed on purpose.
+ * Guarantees, and their exact scope (three independent layers):
+ *  1. PER-STORE MUTEX. Every redemption over the same `InMemoryEventStore`
+ *     object, through ANY number of transaction instances, is serialized by
+ *     one promise-chain mutex keyed on the store (a WeakMap). A second
+ *     redemption therefore takes its snapshot only after the first finished
+ *     and sees its CAPABILITY_REDEEMED (ALREADY_REDEEMED). This layer does not
+ *     depend on any identifier being unique.
+ *  2. INGESTION. A second CAPABILITY_REDEEMED for a capability_id is refused as
+ *     a business-id collision (I28), whatever its event_id, so even a writer
+ *     that bypasses the mutex cannot create two.
+ *  3. SUCCESS MEANS "OUR EVENT, RIGHT AFTER OUR SNAPSHOT". `REDEEMED` is
+ *     returned only if the appended event landed at `decision_sequence + 1`.
+ *     Any other writer appending in between yields CONCURRENT_WRITE_DETECTED,
+ *     never REDEEMED. The ticket is then consumed (append-only: the event
+ *     exists) but NOTHING is authorized; the caller must authorize again. The
+ *     event is recognisable afterwards: its sequence is not
+ *     `decision_sequence + 1` (see `validateRedemptionEvent`).
+ *
+ * Scope of the attempt-id counter (read before reusing anything here): each
+ * attempt's event_id embeds an attempt id from an injectable generator whose
+ * default is a PROCESS-WIDE COUNTER. That counter is unique only within one
+ * process and one lifetime: it restarts at 1 after a restart and is
+ * independent across processes. It is therefore NOT an exclusion mechanism and
+ * is private to this module (not exported); layers 1 to 3 above are. A
+ * persistent implementation must not reuse it: it has to rely on the
+ * database's own atomicity (SPEC I28, "persistent stores").
  *
  * Not provided: anything about the external effect (at-most-once effect is
  * the target's job), crash atomicity (in-memory model), and protection
  * against a writer that forges an Authority-generated event straight into the
- * store (THREAT_MODEL A31 applies to CAPABILITY_REDEEMED too: such an event
- * can burn a ticket, it can never grant authority).
+ * store (THREAT_MODEL A31/A37: such an event can burn a ticket, it can never
+ * grant authority).
  */
 import type { AuthenticatedPrincipal } from "../domain/authenticatedPrincipal.js";
 import type { RedeemCapabilityCommand } from "../domain/capabilityCommand.js";
@@ -38,23 +50,19 @@ export interface CapabilityRedemptionTransaction {
 }
 
 /**
- * Every redemption ATTEMPT gets its own event_id. This is load-bearing: if the
- * id depended only on the capability, two racing attempts decided on the same
- * snapshot would build byte-identical drafts, ingestion (I8) would treat the
- * second as an idempotent duplicate of the first and ACCEPT it, and both
- * callers would be told "redeemed": a double effect. With distinct ids the
- * second attempt is refused by the business-id rule (I28). The counter is
- * module-wide so it is unique across transaction instances in one process; it
- * is deterministic (call order), not random.
+ * Builds the draft for one redemption ATTEMPT. `attemptId` is required (no
+ * default on purpose): the event_id must differ per attempt, otherwise two
+ * attempts decided on the same snapshot would build byte-identical drafts,
+ * ingestion (I8) would accept the second as an idempotent duplicate, and both
+ * callers could be told "redeemed". Distinct ids make the second a
+ * business-id collision instead. Uniqueness of the id is the CALLER's
+ * responsibility and is only a second line of defence (see the module doc).
  */
-let attemptCounter = 0;
-const nextAttemptId = (): number => ++attemptCounter;
-
 export function buildCapabilityRedeemedDraft(
   authenticatedPrincipal: AuthenticatedPrincipal,
   authorityTime: Iso8601,
   data: RedeemedCapabilityData,
-  attemptId: number = nextAttemptId(),
+  attemptId: number | string,
 ): DraftAuthorityEvent {
   const payload: CapabilityRedeemedPayload = {
     capability_id: data.capability_id,
@@ -73,19 +81,36 @@ export function buildCapabilityRedeemedDraft(
   };
 }
 
+// Private: unique within one process lifetime only. See the module doc.
+let processAttemptCounter = 0;
+const defaultNextAttemptId = (): number => ++processAttemptCounter;
+
+/** One mutex per store OBJECT, shared by every transaction instance wrapping it. */
+const storeQueues = new WeakMap<InMemoryEventStore, Promise<unknown>>();
+
+export interface InMemoryRedemptionOptions {
+  /** Attempt id source. Default: a process-wide counter (not an exclusion mechanism). */
+  readonly nextAttemptId?: () => number | string;
+}
+
 export class InMemoryCapabilityRedemptionTransaction implements CapabilityRedemptionTransaction {
   private readonly store: InMemoryEventStore;
-  private queue: Promise<unknown> = Promise.resolve();
+  private readonly nextAttemptId: () => number | string;
 
-  constructor(store: InMemoryEventStore) {
+  constructor(store: InMemoryEventStore, options: InMemoryRedemptionOptions = {}) {
     this.store = store;
+    this.nextAttemptId = options.nextAttemptId ?? defaultNextAttemptId;
   }
 
   redeem(authenticatedPrincipal: AuthenticatedPrincipal, command: RedeemCapabilityCommand, authorityTime: Iso8601): Promise<RedeemCapabilityResult> {
-    const run = this.queue.then(() => this.criticalSection(authenticatedPrincipal, command, authorityTime));
-    this.queue = run.then(
-      () => undefined,
-      () => undefined,
+    const previous = storeQueues.get(this.store) ?? Promise.resolve();
+    const run = previous.then(() => this.criticalSection(authenticatedPrincipal, command, authorityTime));
+    storeQueues.set(
+      this.store,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
     );
     return run;
   }
@@ -97,7 +122,7 @@ export class InMemoryCapabilityRedemptionTransaction implements CapabilityRedemp
       return decision;
     }
 
-    const draft = buildCapabilityRedeemedDraft(authenticatedPrincipal, authorityTime, decision.redemption);
+    const draft = buildCapabilityRedeemedDraft(authenticatedPrincipal, authorityTime, decision.redemption, this.nextAttemptId());
     const appended = await this.store.append([draft], authorityTime);
     const outcome = appended.outcomes[0];
 
@@ -108,7 +133,8 @@ export class InMemoryCapabilityRedemptionTransaction implements CapabilityRedemp
       };
     }
     if (Number(outcome.sequence) !== Number(decision.redemption.decision_sequence) + 1) {
-      return { ok: false, reason: "CONCURRENT_WRITE_DETECTED" };
+      // The event IS in the log (append-only): the ticket is consumed, nothing is authorized.
+      return { ok: false, reason: "CONCURRENT_WRITE_DETECTED", detail: { ticketConsumed: true, redemptionSequence: outcome.sequence } };
     }
     return decision;
   }

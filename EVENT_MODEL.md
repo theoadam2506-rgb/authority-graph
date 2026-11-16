@@ -435,4 +435,6 @@ redeemed once. What it does **not** mean: that the effect happened, happened
 once, or will happen; nor anything verified outside the log. Redemption does
 not change `authorityAt`, `explainAction` or capacity accounting (I29). A
 refused redemption writes nothing, except the documented fail-closed case in
-which a concurrent write is detected after the append (I30).
+which a concurrent write is detected after the append (I30): that event exists
+and consumes the ticket but authorizes nothing, and `validateRedemptionEvent`
+(I31) identifies it (its sequence is not `decision_sequence + 1`).

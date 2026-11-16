@@ -47,7 +47,7 @@ describe("single use under concurrency (I28)", () => {
     const events = await h.store.getEvents();
     const first = events.find((e) => e.event_type === "CAPABILITY_REDEEMED");
     if (first === undefined || first.event_type !== "CAPABILITY_REDEEMED") throw new Error("fixture");
-    const sneaky: DraftAuthorityEvent = { ...buildCapabilityRedeemedDraft(auth(AGENT), T("09:13:00"), { ...first.payload, decision_sequence: sequenceNumber(events.length) }), event_id: "another-event-id" as never };
+    const sneaky: DraftAuthorityEvent = { ...buildCapabilityRedeemedDraft(auth(AGENT), T("09:13:00"), { ...first.payload, decision_sequence: sequenceNumber(events.length) }, "forged-attempt"), event_id: "another-event-id" as never };
     const r = await h.store.append([sneaky], T("09:13:00"));
     expect(r.outcomes[0]).toEqual({ accepted: false, reasonCode: "BUSINESS_ID_COLLISION" });
     expect(await redeemedCount(h.store)).toBe(1);
@@ -83,7 +83,7 @@ describe("a concurrent write between snapshot and append (I30, fail-closed)", ()
     const id = await racing.issue(T("09:10:00"));
     store.hook = () => racing.revoke(T("09:11:00"));
     const r = await racing.redemption.redeem(auth(AGENT), racing.command(id), T("09:12:00"));
-    expect(r).toEqual({ ok: false, reason: "CONCURRENT_WRITE_DETECTED" });
+    expect(r).toMatchObject({ ok: false, reason: "CONCURRENT_WRITE_DETECTED", detail: { ticketConsumed: true } });
     // The ticket is burned (append-only), so it cannot be retried into an authorization...
     expect(await racing.redemption.redeem(auth(AGENT), racing.command(id), T("09:13:00"))).toEqual({ ok: false, reason: "ALREADY_REDEEMED" });
     // ...and the authority really is gone.
@@ -99,7 +99,7 @@ describe("a concurrent write between snapshot and append (I30, fail-closed)", ()
       const r = await store.append([toDraft(actionRequest({ sequence: 99, id: "act-unrelated", requester: AGENT, delegationId: "d-redeem", parameters: PARAMS }))], T("09:11:00"));
       expect(r.outcomes[0]?.accepted).toBe(true);
     };
-    expect(await racing.redemption.redeem(auth(AGENT), racing.command(id), T("09:12:00"))).toEqual({ ok: false, reason: "CONCURRENT_WRITE_DETECTED" });
+    expect(await racing.redemption.redeem(auth(AGENT), racing.command(id), T("09:12:00"))).toMatchObject({ ok: false, reason: "CONCURRENT_WRITE_DETECTED", detail: { ticketConsumed: true } });
   });
 
   it("STALE_AUTHORITY_TIME from the store's hidden high-water mark refuses the redemption without consuming the ticket", async () => {
