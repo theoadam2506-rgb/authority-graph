@@ -29,7 +29,7 @@ export type CheckStatus = "PASS" | "FAIL" | "NOT_CHECKED";
 
 export interface Check {
   readonly id: string;
-  readonly level: 0 | 1 | 2;
+  readonly level: 0 | 1 | 2 | 3;
   readonly status: CheckStatus;
   readonly detail?: string;
 }
@@ -68,10 +68,10 @@ export interface VerifyResult {
 
 /** Included in every result: what L0 to L2 never establish. */
 export const NOT_ESTABLISHED: readonly string[] = [
-  "that the decision is correct: the statement is not re-derived from a journal (L3, a later change)",
+  "that the decision is correct: at L0 to L2 the statement is not re-derived from a journal (L3 does, over a journal you supply)",
   "that the events of the journal are authentic: they are asserted and unauthenticated (I17)",
   "that the journal is complete, or that it is the only journal with this history",
-  "that the journal head matches any journal the verifier holds",
+  "that the journal head matches any journal the verifier holds (L3 checks this against a journal you supply)",
   "that the signer's clock was right",
   "that the key was not compromised",
   "who the signer is: a key_id names a public key, not a person or an organization",

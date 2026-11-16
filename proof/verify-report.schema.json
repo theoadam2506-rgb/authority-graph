@@ -1,0 +1,436 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/theoadam2506-rgb/authority-graph/proof/verify-report.schema.json",
+  "title": "authority-proof-verify-report/v1",
+  "description": "Closed schema of the report printed by `authority proof verify --json`. It describes the SHAPE only. A result of CONSISTENT_L1, CONSISTENT_L2 or CONSISTENT_L3 never says the decision is right, that the journal is authentic or complete, that an anchor is independent of the signer, or who a key belongs to: `not_established` lists it in every report. Normative text: docs/v1/ATTESTATIONS.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "report_version",
+    "result",
+    "levels",
+    "checks",
+    "scope",
+    "anchored",
+    "anchor",
+    "journal",
+    "later_revocations",
+    "key",
+    "attestation",
+    "not_established"
+  ],
+  "properties": {
+    "report_version": {
+      "const": "authority-proof-verify-report/v1"
+    },
+    "result": {
+      "enum": [
+        "REJECTED",
+        "CONSISTENT_L1",
+        "CONSISTENT_L2",
+        "CONSISTENT_L3"
+      ]
+    },
+    "levels": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "L0": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "NOT_CHECKED"
+          ]
+        },
+        "L1": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "NOT_CHECKED"
+          ]
+        },
+        "L2": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "NOT_CHECKED"
+          ]
+        },
+        "L3": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "NOT_CHECKED"
+          ]
+        }
+      },
+      "required": [
+        "L0",
+        "L1",
+        "L2",
+        "L3"
+      ]
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              0,
+              1,
+              2,
+              3
+            ]
+          },
+          "status": {
+            "enum": [
+              "PASS",
+              "FAIL",
+              "NOT_CHECKED"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "level",
+          "status"
+        ]
+      }
+    },
+    "scope": {
+      "enum": [
+        "FULL_JOURNAL",
+        "ATTESTED_PREFIX_ONLY",
+        null
+      ]
+    },
+    "anchored": {
+      "type": "boolean",
+      "description": "True only if a supplied anchor matches and covers the whole attested prefix. Says nothing about the anchor's independence."
+    },
+    "anchor": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "NONE_SUPPLIED",
+                "BELOW_ATTESTED_HEAD",
+                "COVERS_ATTESTED_PREFIX"
+              ]
+            },
+            "supplied": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "matched": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "covering": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "head_sequence": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "head_hash": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "label": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "head_sequence",
+                    "head_hash"
+                  ]
+                }
+              ]
+            },
+            "provenance": {
+              "const": "SUPPLIED_BY_VERIFIER"
+            },
+            "independence": {
+              "const": "NOT_ESTABLISHED"
+            },
+            "explanation": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "supplied",
+            "matched",
+            "covering",
+            "provenance",
+            "independence",
+            "explanation"
+          ]
+        }
+      ]
+    },
+    "journal": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "events_provided": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "attested_prefix": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "head_sequence": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "replay": {
+                  "enum": [
+                    "PASS",
+                    "FAIL",
+                    "NOT_CHECKED"
+                  ]
+                },
+                "head_hash_matches": {
+                  "enum": [
+                    "PASS",
+                    "FAIL",
+                    "NOT_CHECKED"
+                  ]
+                },
+                "statement_matches_event": {
+                  "enum": [
+                    "PASS",
+                    "FAIL",
+                    "NOT_CHECKED"
+                  ]
+                },
+                "decision_rederived": {
+                  "enum": [
+                    "PASS",
+                    "FAIL",
+                    "NOT_CHECKED"
+                  ]
+                }
+              },
+              "required": [
+                "head_sequence",
+                "replay",
+                "head_hash_matches",
+                "statement_matches_event",
+                "decision_rederived"
+              ]
+            },
+            "full_journal": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "scope_checked": {
+                  "type": "boolean"
+                },
+                "replay": {
+                  "enum": [
+                    "PASS",
+                    "FAIL",
+                    "NOT_CHECKED"
+                  ]
+                },
+                "events_after_attested_head": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "scope_checked",
+                "replay",
+                "events_after_attested_head"
+              ]
+            },
+            "scope_explanation": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "events_provided",
+            "attested_prefix",
+            "full_journal",
+            "scope_explanation"
+          ]
+        }
+      ]
+    },
+    "later_revocations": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "listed": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "sequence": {
+                    "type": "integer"
+                  },
+                  "delegation_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "revoked_by_principal_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "reason_code": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "sequence",
+                  "delegation_id",
+                  "revoked_by_principal_id",
+                  "reason_code"
+                ]
+              }
+            },
+            "note": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "count",
+            "listed",
+            "note"
+          ]
+        }
+      ]
+    },
+    "key": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "key_id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "key_id"
+          ]
+        }
+      ]
+    },
+    "attestation": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "ISSUANCE",
+                "REDEMPTION"
+              ]
+            },
+            "capability_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "action_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "enforcement_point_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "journal_head": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "head_sequence": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "head_hash": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "head_sequence",
+                "head_hash"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "capability_id",
+            "action_id",
+            "enforcement_point_id",
+            "journal_head"
+          ]
+        }
+      ]
+    },
+    "not_established": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

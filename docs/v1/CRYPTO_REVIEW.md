@@ -20,7 +20,7 @@ review is complete and its findings are resolved or published as known limits.
 
 Out of scope: the decision engine's semantics (SPEC.md I1 to I31; reviewed by
 its own adversarial suite), PostgreSQL storage, key custody (the deployment's),
-L3 replay and the command (PR 4), the SDK.
+the SDK. Pass 2 (after PR 4) covers L3: `src/proof/replay.ts`, `heads.ts`, `cli.ts`, the report format and the anchor wording (what `anchored` may be read to mean).
 
 ## What we ask the reviewer to try to break
 

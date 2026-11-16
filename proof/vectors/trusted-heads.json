@@ -1,0 +1,10 @@
+{
+  "format": "authority-trusted-heads/v1",
+  "heads": [
+    {
+      "head_sequence": 5,
+      "head_hash": "1ec1cd938b3a65bfa19cf3c191571deb6394be2fff3a173e8db70630e8da7493",
+      "label": "head recorded by the verifier (its independence is NOT established by this tool)"
+    }
+  ]
+}

@@ -74,7 +74,7 @@ included. Events must be sequence 1..n, contiguous and in order. The head says:
 are true, that the journal is complete, or that no other journal exists with a
 different history (see "Limits").
 
-## Offline verification (L0 to L2)
+## Offline verification (L0 to L2; L3 below)
 
 | Level | Checks | Result words |
 |---|---|---|
@@ -87,6 +87,89 @@ result is `REJECTED`, `CONSISTENT_L1` or `CONSISTENT_L2`; there is no plain
 "valid". Every result carries `not_established`, the list of what it does not
 establish. A deliberate test case, `validly-signed-lie`, shows that a statement
 no journal supports passes L1 and L2: that is the point of the wording.
+
+## L3: replay against a journal you supply (PR 4)
+
+`authority proof verify <attestation> --keys <keys> --journal <journal> [--trusted-heads <heads>] [--scope full|prefix] [--json]`
+
+L3 runs only after L1 (and L2 when an expected context is given) pass. A key
+revoked `ALWAYS`, or outside its window, stays `REJECTED`: L3 is never run to
+"rescue" it, however consistent the statement is with the journal. L3 then:
+
+1. reads the journal strictly (same reader as attestations; bounded size and event count);
+2. replays the **attested prefix** (events 1..`head_sequence`) with the engine's own validators and checks that its chain head equals the attested `journal_head`;
+3. re-derives the statement from the event at `event.sequence` and requires it to equal the signed statement (`L3.EVENT`); a signed statement that no replay supports is refused (`L3.HEAD`, `L3.EVENT`);
+4. re-validates the decision with the engine's validators over that prefix (`L3.DECISION`; for example a redemption of a capability whose authority was revoked before it is refused);
+5. with `--scope full` (the default), also replays the **whole journal provided**; a defect in the suffix is reported and does not retroactively invalidate the attested prefix, which is checked separately.
+
+Result word: `CONSISTENT_L3`. The report says which scope was validated
+(`ATTESTED_PREFIX_ONLY` or `FULL_JOURNAL`), never both silently.
+
+### Anchors
+
+`--trusted-heads` is a file `authority-trusted-heads/v1` (a list of
+`{head_sequence, head_hash, label?}`; closed, no dates, no source, no
+signature). An anchor **you** supply that matches the journal at its sequence
+and covers the attested head makes the report `anchored: true`.
+
+What anchoring establishes: the journal you hold agrees, up to that sequence,
+with a head you chose to trust. What it does **not** establish: that the anchor
+is independent of the signer (the report states `independence:
+NOT_ESTABLISHED`, `provenance: SUPPLIED_BY_VERIFIER`: a file on the same
+machine proves nothing about its own independence), that events after the
+anchor are complete or genuine, when the statement was signed, or who owns the
+key. Events after the head that revoke the delegation are listed as
+**information only** and never change the result.
+
+### Corroboration analysis (the `corroborate` command is deferred)
+
+A trusted-keys window is evaluated on the time the signer *claims*; a stolen
+key can claim any time before its revocation. A journal anchored before the
+compromise turns "when was this signed" into "is the statement true against a
+history fixed before the compromise". That needs an anchor independent of the
+signer, and still does not prove signing time, suffix completeness or
+identity. `ALWAYS` revocations are never bypassed. The command is deferred
+until the independent cryptographic review (D9) has covered PR 3.
+
+### Replay cost and limits
+
+Engine replay copies state per event, so cost grows faster than linearly
+(roughly x4 per doubling once past a few thousand events). The limit is
+`DEFAULT_MAX_REPLAY_EVENTS = 10_000` (override with `--max-events`); a larger
+journal is refused, not truncated, with an explicit message.
+
+Measured with `npm run proof:bench -- 1000 2000 5000 10000 20000 --budget 300`
+(one run, Node 22, development container; each size in its own process, peak
+RSS includes the synthetic journal; "L3 end-to-end" is the strict JSON read of
+the journal plus `verifyAttestationL3`, what the CLI does):
+
+| events | replay | L3 end-to-end | peak RSS |
+|---:|---:|---:|---:|
+| 1,000 | 97 ms | 156 ms | 99 MB |
+| 2,000 | 335 ms | 339 ms | 119 MB |
+| 5,000 | 1.5 s | 1.9 s | 191 MB |
+| 10,000 | 6.1 s | 6.9 s | 277 MB |
+| 20,000 | 27.5 s | 28.6 s | 389 MB |
+
+Why 10,000: a verification at the ceiling takes about 7 s and under 300 MB on
+a developer machine, which is acceptable for an offline, on-demand check. At
+20,000 it takes about 29 s and the cost keeps quadrupling, which is not; so the
+ceiling is not raised. Memory is not the binding constraint, time is. These
+numbers are one machine and one synthetic journal shape (issuance events):
+read the ratios, not the absolutes, and lower `--max-events` for a constrained
+environment. The engine is deliberately not modified in this PR; a faster
+replay (incremental state) needs its own arbitration. CI runs
+`npm run proof:bench:smoke` (200 and 500 events, 60 s budget) only to prove the
+script runs; it is not a performance gate.
+
+### Limits that remain at L3
+
+L3 does not establish that the journal is authentic or complete (an operator
+can omit or fabricate events consistently), that an anchor is independent,
+that a time claimed by the signer is true, or who a key belongs to. The report
+carries `not_established` in every case. Report format:
+`authority-proof-verify-report/v1`, schema `proof/verify-report.schema.json`.
+Exit codes: 0 consistent, 1 rejected, 2 unreadable input, 64 usage.
 
 ## Keys
 

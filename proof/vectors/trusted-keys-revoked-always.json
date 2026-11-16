@@ -1,0 +1,13 @@
+{
+  "format": "authority-trusted-keys/v1",
+  "keys": [
+    {
+      "jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+      },
+      "revoked_from": "ALWAYS"
+    }
+  ]
+}

@@ -5,3 +5,6 @@ export * from "./journalHash.js";
 export * from "./keys.js";
 export * from "./strictJson.js";
 export * from "./verify.js";
+export * from "./heads.js";
+export * from "./replay.js";
+export * from "./stableJson.js";
