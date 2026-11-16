@@ -119,6 +119,6 @@ First message, draft:
 ## 7. Open points for the owner
 
 1. Which scenario to pursue first (recommendation: Scenario 1 informal contacts for A questions in parallel with a quote request for Scenario 2; spend only after explicit approval).
-2. GitHub private vulnerability reporting must be enabled in the repository settings by the owner (cannot be done from here). Until then `SECURITY.md` points to `security@authority-graph.com`, whose delivery the owner tested from an external mailbox on 2026-11-16.
+2. GitHub private vulnerability reporting is enabled (confirmed by the owner) and `security@authority-graph.com` was tested from an external mailbox on 2026-11-16: both channels are listed in `SECURITY.md`.
 3. Name, pseudonym or anonymity preferences for credits in findings.
 4. A date after which, absent a reviewer, the public wording stays "not independently reviewed".
