@@ -86,6 +86,12 @@ a package named `authority-graph` from any registry (see
 [Status](#status) below). No database, no network, and no API key are needed
 for either command above.
 
+## Conformance Lab (V0)
+
+To check whether an external authorization system agrees with the engine on
+revocation and excessive-delegation scenarios, see
+[`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) (`npm run conformance`).
+
 ## What Authority answers
 
 The engine exposes exactly two operations, never a third path:

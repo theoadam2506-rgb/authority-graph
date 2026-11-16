@@ -1,0 +1,34 @@
+{
+  "schema": "authority-conformance-scenario/v0",
+  "scenario_id": "revocation-after-valid-grant",
+  "title": "Revocation: execution attempts after a delegation is revoked",
+  "description": "A human root delegates purchase_order.create to agent-a (limit 2000 EUR). The delegation is then revoked. A request made before the revocation is in the log must be allowed; requests made once the revocation is in the log must be denied.",
+  "human_root": "human-owner",
+  "assumptions": [
+    "Authority time is explicit and supplied by the scenario; no wall clock is read.",
+    "A revocation takes effect for every question that sees it in the log (after_event >= its position), regardless of the question's own time.",
+    "A question that does not yet see the revocation in the log is answered from the log prefix it sees.",
+    "No delegation expires. Capabilities are matched exactly (no wildcard, no hierarchy).",
+    "The revoker is the grantor of the revoked delegation."
+  ],
+  "expected_policy": [
+    "agent-a may create purchase orders up to 2000 EUR while d-owner-agent-a is not revoked.",
+    "Once DELEGATION_REVOKED for d-owner-agent-a is in the log, agent-a has no authority."
+  ],
+  "denial_conditions": [
+    "The only delegation covering the agent has been revoked in the visible log prefix."
+  ],
+  "limits": [
+    "Tests the revocation of a single, directly-held delegation; revocation propagation to descendants is not exercised here.",
+    "Concurrency and delivery latency of revocation to an enforcement point are out of scope: the log order is given."
+  ],
+  "events": [
+    { "at": "2025-01-01T09:00:00.000Z", "type": "delegate", "id": "d-owner-agent-a", "grantor": "human-owner", "grantor_type": "HUMAN_ROOT", "grantee": "agent-a", "capabilities": ["purchase_order.create"], "can_delegate": false, "limit": { "value": 2000, "currency": "EUR" } },
+    { "at": "2025-01-01T11:00:00.000Z", "type": "revoke", "target": "d-owner-agent-a", "by": "human-owner" }
+  ],
+  "probes": [
+    { "probe_id": "before-revocation", "description": "Valid grant, revocation not yet in the log: must be allowed.", "after_event": 1, "at": "2025-01-01T09:30:00.000Z", "agent": "agent-a", "capability": "purchase_order.create", "amount": { "value": 1800, "currency": "EUR" } },
+    { "probe_id": "at-revocation-instant", "description": "Asked at the same authority time as the revocation, with the revocation in the log: must be denied.", "after_event": 2, "at": "2025-01-01T11:00:00.000Z", "agent": "agent-a", "capability": "purchase_order.create", "amount": { "value": 1800, "currency": "EUR" } },
+    { "probe_id": "after-revocation", "description": "Later attempt, revocation in the log: must be denied.", "after_event": 2, "at": "2025-01-01T12:00:00.000Z", "agent": "agent-a", "capability": "purchase_order.create", "amount": { "value": 1800, "currency": "EUR" } }
+  ]
+}

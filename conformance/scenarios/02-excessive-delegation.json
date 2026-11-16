@@ -1,0 +1,133 @@
+{
+  "schema": "authority-conformance-scenario/v0",
+  "scenario_id": "excessive-delegation-escalation",
+  "title": "Excessive delegation: sub-agent exceeds the delegator's permissions",
+  "description": "A human root gives agent-a purchase_order.create up to 2000 EUR with the right to delegate. Agent-a then makes two over-broad sub-delegations: to agent-b with a 5000 EUR limit (above its own 2000 EUR), and to agent-c with an extra capability, payment.execute, that agent-a never held. Each sub-agent attempts an action that exceeds what agent-a itself could do.",
+  "human_root": "human-owner",
+  "assumptions": [
+    "Authority time is explicit and supplied by the scenario; no wall clock is read.",
+    "A delegate can never confer more than it holds: the monetary limit and the capability set of a sub-delegation are both bounded by its parent.",
+    "Engine semantics, not an assumption of this lab: a sub-delegation that exceeds its parent is not narrowed to the intersection, it confers no authority through the invalid link (the expected side is computed by the engine, see each probe's evidence).",
+    "No delegation expires or is revoked. Capabilities are matched exactly.",
+    "Each sub-delegation is emitted by agent-a (its grantor), so the escalation is in the content of the grant, not in a forged emitter."
+  ],
+  "expected_policy": [
+    "agent-b may not create purchase orders above 2000 EUR even though its own grant says 5000 EUR.",
+    "agent-c may not execute payment.execute: agent-a never held it.",
+    "A sub-agent acting within what the delegator itself could do, through a grant that does not exceed the parent, is allowed."
+  ],
+  "denial_conditions": [
+    "Requested amount exceeds the limit of any delegation in the chain.",
+    "Requested capability is not covered by every delegation in the chain."
+  ],
+  "limits": [
+    "Single chain of depth 2; diamond graphs, depth limits and cycles are covered by the engine's own tests, not here.",
+    "Approval flows (amounts needing human approval) are not exercised: limits are hard ceilings.",
+    "The lab does not test whether a target REJECTS the over-broad grant at creation time; it only tests the resulting decisions."
+  ],
+  "events": [
+    {
+      "at": "2025-01-01T09:00:00.000Z",
+      "type": "delegate",
+      "id": "d-owner-agent-a",
+      "grantor": "human-owner",
+      "grantor_type": "HUMAN_ROOT",
+      "grantee": "agent-a",
+      "capabilities": [
+        "purchase_order.create"
+      ],
+      "can_delegate": true,
+      "limit": {
+        "value": 2000,
+        "currency": "EUR"
+      }
+    },
+    {
+      "at": "2025-01-01T09:10:00.000Z",
+      "type": "subdelegate",
+      "id": "d-agent-a-agent-b",
+      "parent": "d-owner-agent-a",
+      "grantor": "agent-a",
+      "grantee": "agent-b",
+      "capabilities": [
+        "purchase_order.create"
+      ],
+      "can_delegate": false,
+      "limit": {
+        "value": 5000,
+        "currency": "EUR"
+      }
+    },
+    {
+      "at": "2025-01-01T09:20:00.000Z",
+      "type": "subdelegate",
+      "id": "d-agent-a-agent-c",
+      "parent": "d-owner-agent-a",
+      "grantor": "agent-a",
+      "grantee": "agent-c",
+      "capabilities": [
+        "purchase_order.create",
+        "payment.execute"
+      ],
+      "can_delegate": false,
+      "limit": {
+        "value": 2000,
+        "currency": "EUR"
+      }
+    },
+    {
+      "at": "2025-01-01T09:30:00.000Z",
+      "type": "subdelegate",
+      "id": "d-agent-a-agent-d",
+      "parent": "d-owner-agent-a",
+      "grantor": "agent-a",
+      "grantee": "agent-d",
+      "capabilities": [
+        "purchase_order.create"
+      ],
+      "can_delegate": false,
+      "limit": {
+        "value": 1000,
+        "currency": "EUR"
+      }
+    }
+  ],
+  "probes": [
+    {
+      "probe_id": "conforming-subdelegation-within-limits",
+      "description": "agent-d holds a grant narrower than agent-a's own: an action within it must be allowed.",
+      "agent": "agent-d",
+      "capability": "purchase_order.create",
+      "amount": {
+        "value": 800,
+        "currency": "EUR"
+      },
+      "after_event": 4,
+      "at": "2025-01-01T10:00:00.000Z"
+    },
+    {
+      "probe_id": "amount-above-delegator-limit",
+      "description": "agent-b's grant says 5000 EUR but agent-a's ceiling is 2000: 4000 EUR must be denied.",
+      "agent": "agent-b",
+      "capability": "purchase_order.create",
+      "amount": {
+        "value": 4000,
+        "currency": "EUR"
+      },
+      "after_event": 4,
+      "at": "2025-01-01T10:00:00.000Z"
+    },
+    {
+      "probe_id": "capability-not-held-by-delegator",
+      "description": "agent-c's grant includes payment.execute which agent-a never held: must be denied.",
+      "agent": "agent-c",
+      "capability": "payment.execute",
+      "amount": {
+        "value": 100,
+        "currency": "EUR"
+      },
+      "after_event": 4,
+      "at": "2025-01-01T10:00:00.000Z"
+    }
+  ]
+}

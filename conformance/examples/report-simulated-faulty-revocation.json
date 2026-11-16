@@ -1,0 +1,748 @@
+{
+  "limits": [
+    "Expected decisions come from the Authority engine (authorityAt) on a scenario written by this project; they are the reference, not an independent ground truth.",
+    "Only the decisions on the listed probes are compared. A PASS says nothing about inputs that were not probed.",
+    "Authority's REQUIRES_APPROVAL and UNKNOWN outcomes cannot be compared with a binary allow/deny and are reported INCONCLUSIVE.",
+    "The target receives a neutral log prefix and re-derives the decision itself; how it would ingest the same facts through its own production APIs is not tested.",
+    "A policy or target modeled by this project (the Rego policy, the simulated targets) shows agreement or disagreement with the engine on these probes only; it is not a security assessment of the underlying product.",
+    "All events are asserted and unauthenticated (assurance level ASSERTED_UNVERIFIED); no cryptographic verification is involved.",
+    "This is not a certification and not a claim of compliance with any standard (including WIMSE)."
+  ],
+  "reference": {
+    "assurance_level": "ASSERTED_UNVERIFIED",
+    "engine": "authority-graph authorityAt (src/engine)"
+  },
+  "report_version": "authority-conformance-report/v0",
+  "scenarios": [
+    {
+      "assumptions": [
+        "Authority time is explicit and supplied by the scenario; no wall clock is read.",
+        "A revocation takes effect for every question that sees it in the log (after_event >= its position), regardless of the question's own time.",
+        "A question that does not yet see the revocation in the log is answered from the log prefix it sees.",
+        "No delegation expires. Capabilities are matched exactly (no wildcard, no hierarchy).",
+        "The revoker is the grantor of the revoked delegation."
+      ],
+      "config": {
+        "events": [
+          {
+            "at": "2025-01-01T09:00:00.000Z",
+            "can_delegate": false,
+            "capabilities": [
+              "purchase_order.create"
+            ],
+            "grantee": "agent-a",
+            "grantor": "human-owner",
+            "grantor_type": "HUMAN_ROOT",
+            "id": "d-owner-agent-a",
+            "limit": {
+              "currency": "EUR",
+              "value": 2000
+            },
+            "type": "delegate"
+          },
+          {
+            "at": "2025-01-01T11:00:00.000Z",
+            "by": "human-owner",
+            "target": "d-owner-agent-a",
+            "type": "revoke"
+          }
+        ],
+        "human_root": "human-owner"
+      },
+      "denial_conditions": [
+        "The only delegation covering the agent has been revoked in the visible log prefix."
+      ],
+      "description": "A human root delegates purchase_order.create to agent-a (limit 2000 EUR). The delegation is then revoked. A request made before the revocation is in the log must be allowed; requests made once the revocation is in the log must be denied.",
+      "expected_policy": [
+        "agent-a may create purchase orders up to 2000 EUR while d-owner-agent-a is not revoked.",
+        "Once DELEGATION_REVOKED for d-owner-agent-a is in the log, agent-a has no authority."
+      ],
+      "limits": [
+        "Tests the revocation of a single, directly-held delegation; revocation propagation to descendants is not exercised here.",
+        "Concurrency and delivery latency of revocation to an enforcement point are out of scope: the log order is given."
+      ],
+      "probes": [
+        {
+          "description": "Valid grant, revocation not yet in the log: must be allowed.",
+          "diff": null,
+          "evidence": {
+            "http_status": 200,
+            "request_sent": {
+              "log": [
+                {
+                  "at": "2025-01-01T09:00:00.000Z",
+                  "can_delegate": false,
+                  "capabilities": [
+                    "purchase_order.create"
+                  ],
+                  "grantee": "agent-a",
+                  "grantor": "human-owner",
+                  "grantor_type": "HUMAN_ROOT",
+                  "id": "d-owner-agent-a",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 2000
+                  },
+                  "sequence": 1,
+                  "type": "delegate"
+                }
+              ],
+              "request": {
+                "agent": "agent-a",
+                "amount": {
+                  "currency": "EUR",
+                  "value": 1800
+                },
+                "at": "2025-01-01T09:30:00.000Z",
+                "capability": "purchase_order.create",
+                "human_root": "human-owner"
+              }
+            },
+            "response_body_raw": "{\"decision\":\"allow\",\"reason\":\"chain valid\"}"
+          },
+          "expected": {
+            "decision": "ALLOW",
+            "engine_decision": {
+              "chain": [
+                "d-owner-agent-a"
+              ],
+              "outcome": "AUTHORIZED"
+            },
+            "source": "authority-engine:authorityAt"
+          },
+          "observed": {
+            "decision": "ALLOW",
+            "status": "ok",
+            "target_reason": "chain valid"
+          },
+          "probe_id": "before-revocation",
+          "question": {
+            "after_event": 1,
+            "agent": "agent-a",
+            "amount": {
+              "currency": "EUR",
+              "value": 1800
+            },
+            "at": "2025-01-01T09:30:00.000Z",
+            "capability": "purchase_order.create"
+          },
+          "result": "PASS"
+        },
+        {
+          "description": "Asked at the same authority time as the revocation, with the revocation in the log: must be denied.",
+          "diff": "expected DENY but target answered ALLOW",
+          "evidence": {
+            "http_status": 200,
+            "request_sent": {
+              "log": [
+                {
+                  "at": "2025-01-01T09:00:00.000Z",
+                  "can_delegate": false,
+                  "capabilities": [
+                    "purchase_order.create"
+                  ],
+                  "grantee": "agent-a",
+                  "grantor": "human-owner",
+                  "grantor_type": "HUMAN_ROOT",
+                  "id": "d-owner-agent-a",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 2000
+                  },
+                  "sequence": 1,
+                  "type": "delegate"
+                },
+                {
+                  "at": "2025-01-01T11:00:00.000Z",
+                  "by": "human-owner",
+                  "sequence": 2,
+                  "target": "d-owner-agent-a",
+                  "type": "revoke"
+                }
+              ],
+              "request": {
+                "agent": "agent-a",
+                "amount": {
+                  "currency": "EUR",
+                  "value": 1800
+                },
+                "at": "2025-01-01T11:00:00.000Z",
+                "capability": "purchase_order.create",
+                "human_root": "human-owner"
+              }
+            },
+            "response_body_raw": "{\"decision\":\"allow\",\"reason\":\"chain valid\"}"
+          },
+          "expected": {
+            "decision": "DENY",
+            "engine_decision": {
+              "outcome": "DENIED",
+              "reasonCode": "C12_DELEGATION_REVOKED"
+            },
+            "source": "authority-engine:authorityAt"
+          },
+          "observed": {
+            "decision": "ALLOW",
+            "status": "ok",
+            "target_reason": "chain valid"
+          },
+          "probe_id": "at-revocation-instant",
+          "question": {
+            "after_event": 2,
+            "agent": "agent-a",
+            "amount": {
+              "currency": "EUR",
+              "value": 1800
+            },
+            "at": "2025-01-01T11:00:00.000Z",
+            "capability": "purchase_order.create"
+          },
+          "result": "FAIL"
+        },
+        {
+          "description": "Later attempt, revocation in the log: must be denied.",
+          "diff": "expected DENY but target answered ALLOW",
+          "evidence": {
+            "http_status": 200,
+            "request_sent": {
+              "log": [
+                {
+                  "at": "2025-01-01T09:00:00.000Z",
+                  "can_delegate": false,
+                  "capabilities": [
+                    "purchase_order.create"
+                  ],
+                  "grantee": "agent-a",
+                  "grantor": "human-owner",
+                  "grantor_type": "HUMAN_ROOT",
+                  "id": "d-owner-agent-a",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 2000
+                  },
+                  "sequence": 1,
+                  "type": "delegate"
+                },
+                {
+                  "at": "2025-01-01T11:00:00.000Z",
+                  "by": "human-owner",
+                  "sequence": 2,
+                  "target": "d-owner-agent-a",
+                  "type": "revoke"
+                }
+              ],
+              "request": {
+                "agent": "agent-a",
+                "amount": {
+                  "currency": "EUR",
+                  "value": 1800
+                },
+                "at": "2025-01-01T12:00:00.000Z",
+                "capability": "purchase_order.create",
+                "human_root": "human-owner"
+              }
+            },
+            "response_body_raw": "{\"decision\":\"allow\",\"reason\":\"chain valid\"}"
+          },
+          "expected": {
+            "decision": "DENY",
+            "engine_decision": {
+              "outcome": "DENIED",
+              "reasonCode": "C12_DELEGATION_REVOKED"
+            },
+            "source": "authority-engine:authorityAt"
+          },
+          "observed": {
+            "decision": "ALLOW",
+            "status": "ok",
+            "target_reason": "chain valid"
+          },
+          "probe_id": "after-revocation",
+          "question": {
+            "after_event": 2,
+            "agent": "agent-a",
+            "amount": {
+              "currency": "EUR",
+              "value": 1800
+            },
+            "at": "2025-01-01T12:00:00.000Z",
+            "capability": "purchase_order.create"
+          },
+          "result": "FAIL"
+        }
+      ],
+      "result": "FAIL",
+      "scenario_id": "revocation-after-valid-grant",
+      "scenario_sha256": "a639f23bcb1b0f658138495b46cae7306ece84250a472599249d2eaada124148",
+      "title": "Revocation: execution attempts after a delegation is revoked"
+    },
+    {
+      "assumptions": [
+        "Authority time is explicit and supplied by the scenario; no wall clock is read.",
+        "A delegate can never confer more than it holds: the monetary limit and the capability set of a sub-delegation are both bounded by its parent.",
+        "Engine semantics, not an assumption of this lab: a sub-delegation that exceeds its parent is not narrowed to the intersection, it confers no authority through the invalid link (the expected side is computed by the engine, see each probe's evidence).",
+        "No delegation expires or is revoked. Capabilities are matched exactly.",
+        "Each sub-delegation is emitted by agent-a (its grantor), so the escalation is in the content of the grant, not in a forged emitter."
+      ],
+      "config": {
+        "events": [
+          {
+            "at": "2025-01-01T09:00:00.000Z",
+            "can_delegate": true,
+            "capabilities": [
+              "purchase_order.create"
+            ],
+            "grantee": "agent-a",
+            "grantor": "human-owner",
+            "grantor_type": "HUMAN_ROOT",
+            "id": "d-owner-agent-a",
+            "limit": {
+              "currency": "EUR",
+              "value": 2000
+            },
+            "type": "delegate"
+          },
+          {
+            "at": "2025-01-01T09:10:00.000Z",
+            "can_delegate": false,
+            "capabilities": [
+              "purchase_order.create"
+            ],
+            "grantee": "agent-b",
+            "grantor": "agent-a",
+            "id": "d-agent-a-agent-b",
+            "limit": {
+              "currency": "EUR",
+              "value": 5000
+            },
+            "parent": "d-owner-agent-a",
+            "type": "subdelegate"
+          },
+          {
+            "at": "2025-01-01T09:20:00.000Z",
+            "can_delegate": false,
+            "capabilities": [
+              "purchase_order.create",
+              "payment.execute"
+            ],
+            "grantee": "agent-c",
+            "grantor": "agent-a",
+            "id": "d-agent-a-agent-c",
+            "limit": {
+              "currency": "EUR",
+              "value": 2000
+            },
+            "parent": "d-owner-agent-a",
+            "type": "subdelegate"
+          },
+          {
+            "at": "2025-01-01T09:30:00.000Z",
+            "can_delegate": false,
+            "capabilities": [
+              "purchase_order.create"
+            ],
+            "grantee": "agent-d",
+            "grantor": "agent-a",
+            "id": "d-agent-a-agent-d",
+            "limit": {
+              "currency": "EUR",
+              "value": 1000
+            },
+            "parent": "d-owner-agent-a",
+            "type": "subdelegate"
+          }
+        ],
+        "human_root": "human-owner"
+      },
+      "denial_conditions": [
+        "Requested amount exceeds the limit of any delegation in the chain.",
+        "Requested capability is not covered by every delegation in the chain."
+      ],
+      "description": "A human root gives agent-a purchase_order.create up to 2000 EUR with the right to delegate. Agent-a then makes two over-broad sub-delegations: to agent-b with a 5000 EUR limit (above its own 2000 EUR), and to agent-c with an extra capability, payment.execute, that agent-a never held. Each sub-agent attempts an action that exceeds what agent-a itself could do.",
+      "expected_policy": [
+        "agent-b may not create purchase orders above 2000 EUR even though its own grant says 5000 EUR.",
+        "agent-c may not execute payment.execute: agent-a never held it.",
+        "A sub-agent acting within what the delegator itself could do, through a grant that does not exceed the parent, is allowed."
+      ],
+      "limits": [
+        "Single chain of depth 2; diamond graphs, depth limits and cycles are covered by the engine's own tests, not here.",
+        "Approval flows (amounts needing human approval) are not exercised: limits are hard ceilings.",
+        "The lab does not test whether a target REJECTS the over-broad grant at creation time; it only tests the resulting decisions."
+      ],
+      "probes": [
+        {
+          "description": "agent-d holds a grant narrower than agent-a's own: an action within it must be allowed.",
+          "diff": null,
+          "evidence": {
+            "http_status": 200,
+            "request_sent": {
+              "log": [
+                {
+                  "at": "2025-01-01T09:00:00.000Z",
+                  "can_delegate": true,
+                  "capabilities": [
+                    "purchase_order.create"
+                  ],
+                  "grantee": "agent-a",
+                  "grantor": "human-owner",
+                  "grantor_type": "HUMAN_ROOT",
+                  "id": "d-owner-agent-a",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 2000
+                  },
+                  "sequence": 1,
+                  "type": "delegate"
+                },
+                {
+                  "at": "2025-01-01T09:10:00.000Z",
+                  "can_delegate": false,
+                  "capabilities": [
+                    "purchase_order.create"
+                  ],
+                  "grantee": "agent-b",
+                  "grantor": "agent-a",
+                  "id": "d-agent-a-agent-b",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 5000
+                  },
+                  "parent": "d-owner-agent-a",
+                  "sequence": 2,
+                  "type": "subdelegate"
+                },
+                {
+                  "at": "2025-01-01T09:20:00.000Z",
+                  "can_delegate": false,
+                  "capabilities": [
+                    "purchase_order.create",
+                    "payment.execute"
+                  ],
+                  "grantee": "agent-c",
+                  "grantor": "agent-a",
+                  "id": "d-agent-a-agent-c",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 2000
+                  },
+                  "parent": "d-owner-agent-a",
+                  "sequence": 3,
+                  "type": "subdelegate"
+                },
+                {
+                  "at": "2025-01-01T09:30:00.000Z",
+                  "can_delegate": false,
+                  "capabilities": [
+                    "purchase_order.create"
+                  ],
+                  "grantee": "agent-d",
+                  "grantor": "agent-a",
+                  "id": "d-agent-a-agent-d",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 1000
+                  },
+                  "parent": "d-owner-agent-a",
+                  "sequence": 4,
+                  "type": "subdelegate"
+                }
+              ],
+              "request": {
+                "agent": "agent-d",
+                "amount": {
+                  "currency": "EUR",
+                  "value": 800
+                },
+                "at": "2025-01-01T10:00:00.000Z",
+                "capability": "purchase_order.create",
+                "human_root": "human-owner"
+              }
+            },
+            "response_body_raw": "{\"decision\":\"allow\",\"reason\":\"chain valid\"}"
+          },
+          "expected": {
+            "decision": "ALLOW",
+            "engine_decision": {
+              "chain": [
+                "d-owner-agent-a",
+                "d-agent-a-agent-d"
+              ],
+              "outcome": "AUTHORIZED"
+            },
+            "source": "authority-engine:authorityAt"
+          },
+          "observed": {
+            "decision": "ALLOW",
+            "status": "ok",
+            "target_reason": "chain valid"
+          },
+          "probe_id": "conforming-subdelegation-within-limits",
+          "question": {
+            "after_event": 4,
+            "agent": "agent-d",
+            "amount": {
+              "currency": "EUR",
+              "value": 800
+            },
+            "at": "2025-01-01T10:00:00.000Z",
+            "capability": "purchase_order.create"
+          },
+          "result": "PASS"
+        },
+        {
+          "description": "agent-b's grant says 5000 EUR but agent-a's ceiling is 2000: 4000 EUR must be denied.",
+          "diff": null,
+          "evidence": {
+            "http_status": 200,
+            "request_sent": {
+              "log": [
+                {
+                  "at": "2025-01-01T09:00:00.000Z",
+                  "can_delegate": true,
+                  "capabilities": [
+                    "purchase_order.create"
+                  ],
+                  "grantee": "agent-a",
+                  "grantor": "human-owner",
+                  "grantor_type": "HUMAN_ROOT",
+                  "id": "d-owner-agent-a",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 2000
+                  },
+                  "sequence": 1,
+                  "type": "delegate"
+                },
+                {
+                  "at": "2025-01-01T09:10:00.000Z",
+                  "can_delegate": false,
+                  "capabilities": [
+                    "purchase_order.create"
+                  ],
+                  "grantee": "agent-b",
+                  "grantor": "agent-a",
+                  "id": "d-agent-a-agent-b",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 5000
+                  },
+                  "parent": "d-owner-agent-a",
+                  "sequence": 2,
+                  "type": "subdelegate"
+                },
+                {
+                  "at": "2025-01-01T09:20:00.000Z",
+                  "can_delegate": false,
+                  "capabilities": [
+                    "purchase_order.create",
+                    "payment.execute"
+                  ],
+                  "grantee": "agent-c",
+                  "grantor": "agent-a",
+                  "id": "d-agent-a-agent-c",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 2000
+                  },
+                  "parent": "d-owner-agent-a",
+                  "sequence": 3,
+                  "type": "subdelegate"
+                },
+                {
+                  "at": "2025-01-01T09:30:00.000Z",
+                  "can_delegate": false,
+                  "capabilities": [
+                    "purchase_order.create"
+                  ],
+                  "grantee": "agent-d",
+                  "grantor": "agent-a",
+                  "id": "d-agent-a-agent-d",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 1000
+                  },
+                  "parent": "d-owner-agent-a",
+                  "sequence": 4,
+                  "type": "subdelegate"
+                }
+              ],
+              "request": {
+                "agent": "agent-b",
+                "amount": {
+                  "currency": "EUR",
+                  "value": 4000
+                },
+                "at": "2025-01-01T10:00:00.000Z",
+                "capability": "purchase_order.create",
+                "human_root": "human-owner"
+              }
+            },
+            "response_body_raw": "{\"decision\":\"deny\",\"reason\":\"d-agent-a-agent-b exceeds its parent\"}"
+          },
+          "expected": {
+            "decision": "DENY",
+            "engine_decision": {
+              "outcome": "DENIED",
+              "reasonCode": "C11_CAPABILITY_NOT_COVERED"
+            },
+            "source": "authority-engine:authorityAt"
+          },
+          "observed": {
+            "decision": "DENY",
+            "status": "ok",
+            "target_reason": "d-agent-a-agent-b exceeds its parent"
+          },
+          "probe_id": "amount-above-delegator-limit",
+          "question": {
+            "after_event": 4,
+            "agent": "agent-b",
+            "amount": {
+              "currency": "EUR",
+              "value": 4000
+            },
+            "at": "2025-01-01T10:00:00.000Z",
+            "capability": "purchase_order.create"
+          },
+          "result": "PASS"
+        },
+        {
+          "description": "agent-c's grant includes payment.execute which agent-a never held: must be denied.",
+          "diff": null,
+          "evidence": {
+            "http_status": 200,
+            "request_sent": {
+              "log": [
+                {
+                  "at": "2025-01-01T09:00:00.000Z",
+                  "can_delegate": true,
+                  "capabilities": [
+                    "purchase_order.create"
+                  ],
+                  "grantee": "agent-a",
+                  "grantor": "human-owner",
+                  "grantor_type": "HUMAN_ROOT",
+                  "id": "d-owner-agent-a",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 2000
+                  },
+                  "sequence": 1,
+                  "type": "delegate"
+                },
+                {
+                  "at": "2025-01-01T09:10:00.000Z",
+                  "can_delegate": false,
+                  "capabilities": [
+                    "purchase_order.create"
+                  ],
+                  "grantee": "agent-b",
+                  "grantor": "agent-a",
+                  "id": "d-agent-a-agent-b",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 5000
+                  },
+                  "parent": "d-owner-agent-a",
+                  "sequence": 2,
+                  "type": "subdelegate"
+                },
+                {
+                  "at": "2025-01-01T09:20:00.000Z",
+                  "can_delegate": false,
+                  "capabilities": [
+                    "purchase_order.create",
+                    "payment.execute"
+                  ],
+                  "grantee": "agent-c",
+                  "grantor": "agent-a",
+                  "id": "d-agent-a-agent-c",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 2000
+                  },
+                  "parent": "d-owner-agent-a",
+                  "sequence": 3,
+                  "type": "subdelegate"
+                },
+                {
+                  "at": "2025-01-01T09:30:00.000Z",
+                  "can_delegate": false,
+                  "capabilities": [
+                    "purchase_order.create"
+                  ],
+                  "grantee": "agent-d",
+                  "grantor": "agent-a",
+                  "id": "d-agent-a-agent-d",
+                  "limit": {
+                    "currency": "EUR",
+                    "value": 1000
+                  },
+                  "parent": "d-owner-agent-a",
+                  "sequence": 4,
+                  "type": "subdelegate"
+                }
+              ],
+              "request": {
+                "agent": "agent-c",
+                "amount": {
+                  "currency": "EUR",
+                  "value": 100
+                },
+                "at": "2025-01-01T10:00:00.000Z",
+                "capability": "payment.execute",
+                "human_root": "human-owner"
+              }
+            },
+            "response_body_raw": "{\"decision\":\"deny\",\"reason\":\"d-agent-a-agent-c exceeds its parent\"}"
+          },
+          "expected": {
+            "decision": "DENY",
+            "engine_decision": {
+              "outcome": "DENIED",
+              "reasonCode": "C11_CAPABILITY_NOT_COVERED"
+            },
+            "source": "authority-engine:authorityAt"
+          },
+          "observed": {
+            "decision": "DENY",
+            "status": "ok",
+            "target_reason": "d-agent-a-agent-c exceeds its parent"
+          },
+          "probe_id": "capability-not-held-by-delegator",
+          "question": {
+            "after_event": 4,
+            "agent": "agent-c",
+            "amount": {
+              "currency": "EUR",
+              "value": 100
+            },
+            "at": "2025-01-01T10:00:00.000Z",
+            "capability": "payment.execute"
+          },
+          "result": "PASS"
+        }
+      ],
+      "result": "PASS",
+      "scenario_id": "excessive-delegation-escalation",
+      "scenario_sha256": "ae5ed01ab30647792d47f95f72302fab2512110cff1ca2a5fc80b6a97844f46c",
+      "title": "Excessive delegation: sub-agent exceeds the delegator's permissions"
+    }
+  ],
+  "summary": {
+    "probes": {
+      "FAIL": 2,
+      "INCONCLUSIVE": 0,
+      "PASS": 4
+    },
+    "result": "FAIL",
+    "scenarios": 2
+  },
+  "target": {
+    "details": {
+      "mode": "faulty-revocation",
+      "note": "in-process stand-in with a DELIBERATELY injected bug; a FAIL here is not a real vulnerability"
+    },
+    "kind": "simulated",
+    "name": "simulated-target:faulty-revocation"
+  }
+}
