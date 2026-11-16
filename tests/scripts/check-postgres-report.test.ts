@@ -9,7 +9,7 @@
  * a file-level status of "passed".
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,9 +17,19 @@ import { afterAll, describe, expect, it } from "vitest";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const GUARD = path.join(REPO_ROOT, "scripts/check-postgres-report.mjs");
+/** The eight PostgreSQL suites the CI job runs, with their real test counts (92 in total). */
+const SUITES: Readonly<Record<string, number>> = {
+  "tests/storage/postgresEventStore.test.ts": 3,
+  "tests/storage/postgresCapabilityIssuanceTransaction.test.ts": 15,
+  "tests/storage/postgresAppendOnlyBoundary.test.ts": 14,
+  "tests/storage/postgresCapabilityRedemptionTransaction.test.ts": 21,
+  "tests/storage/postgresRedemptionProcesses.test.ts": 2,
+  "tests/storage/postgresRedemptionReview.test.ts": 28,
+  "tests/storage/postgresJournalHash.test.ts": 1,
+  "tests/redemption/redemptionContract.postgres.test.ts": 8,
+};
+const SUITE_NAMES = Object.keys(SUITES);
 const EVENT_STORE_FILE = path.join(REPO_ROOT, "tests/storage/postgresEventStore.test.ts");
-const ISSUANCE_FILE = path.join(REPO_ROOT, "tests/storage/postgresCapabilityIssuanceTransaction.test.ts");
-const BOUNDARY_FILE = path.join(REPO_ROOT, "tests/storage/postgresAppendOnlyBoundary.test.ts");
 
 type AssertionStatus = "passed" | "failed" | "skipped" | "pending" | "todo";
 
@@ -80,81 +90,130 @@ function runGuardOn(report: unknown): { readonly status: number | null; readonly
   return runGuardOnContent(JSON.stringify(report));
 }
 
+type SuiteOverrides = Readonly<Record<string, readonly AssertionStatus[] | null>>;
+
+/** A report of the eight suites, all passing, with per-suite overrides (null removes the suite). */
+function allSuites(overrides: SuiteOverrides = {}): Record<string, readonly AssertionStatus[]> {
+  const files: Record<string, readonly AssertionStatus[]> = {};
+  for (const [name, count] of Object.entries(SUITES)) {
+    const override = overrides[name];
+    if (override === null) continue;
+    files[path.join(REPO_ROOT, name)] = override ?? passing(count);
+  }
+  return files;
+}
+
 describe("scripts/check-postgres-report.mjs", () => {
-  it("accepts a report where all 30 PostgreSQL tests ran and passed", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: passing(15), [BOUNDARY_FILE]: passing(12) }));
+  it("accepts a report where all 92 PostgreSQL tests of the eight suites ran and passed", () => {
+    const result = runGuardOn(vitestReport(allSuites()));
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("30/30 tests passed");
+    expect(result.stdout).toContain("92/92 tests passed");
+    expect(result.stdout).toContain("in 8 required files");
     expect(result.status).toBe(0);
   });
 
-  it("accepts more than 30 passed tests (the floor is a minimum, not an exact count)", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(4), [ISSUANCE_FILE]: passing(16), [BOUNDARY_FILE]: passing(12) }));
+  it("accepts more than 92 passed tests (the floor is a minimum, not an exact count)", () => {
+    const result = runGuardOn(vitestReport(allSuites({ "tests/storage/postgresEventStore.test.ts": passing(4) })));
     expect(result.status).toBe(0);
   });
 
   it("accepts Windows-style paths in testResults", () => {
-    const result = runGuardOn(
-      vitestReport({
-        "C:\\work\\authority-graph\\tests\\storage\\postgresEventStore.test.ts": passing(3),
-        "C:\\work\\authority-graph\\tests\\storage\\postgresCapabilityIssuanceTransaction.test.ts": passing(15),
-        "C:\\work\\authority-graph\\tests\\storage\\postgresAppendOnlyBoundary.test.ts": passing(12),
-      }),
-    );
+    const files: Record<string, readonly AssertionStatus[]> = {};
+    for (const [name, count] of Object.entries(SUITES)) files[`C:\\work\\authority-graph\\${name.replaceAll("/", "\\")}`] = passing(count);
+    const result = runGuardOn(vitestReport(files));
+    expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
   });
 
-  it("rejects a report where all 30 PostgreSQL tests were skipped, even though Vitest calls it a success", () => {
-    const report = vitestReport({ [EVENT_STORE_FILE]: skipped(3), [ISSUANCE_FILE]: skipped(15), [BOUNDARY_FILE]: skipped(12) });
+  describe.each(SUITE_NAMES)("suite %s", (suite) => {
+    it("fails the check when the suite is absent from the report (it was not run)", () => {
+      const result = runGuardOn(vitestReport(allSuites({ [suite]: null })));
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`${suite} does not appear in testResults`);
+    });
+
+    it("fails the check when every test of the suite was skipped, even with the other seven passing", () => {
+      const report = vitestReport(allSuites({ [suite]: skipped(SUITES[suite] ?? 1) }));
+      expect(report["success"]).toBe(true);
+      const result = runGuardOn(report);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`${suite} has no passed test`);
+      expect(result.stderr).toContain("were skipped or pending");
+    });
+
+    it("fails the check when a single test of the suite is skipped", () => {
+      const count = SUITES[suite] ?? 1;
+      const result = runGuardOn(vitestReport(allSuites({ [suite]: [...passing(count - 1), "skipped"] })));
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("1 PostgreSQL test(s) were skipped or pending");
+    });
+
+    it("fails the check when the suite is present but has no assertion at all", () => {
+      const result = runGuardOn(vitestReport(allSuites({ [suite]: [] })));
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`${suite} has no passed test`);
+    });
+  });
+
+  it("names every missing suite when several are absent (the five newer suites dropped from the CI command)", () => {
+    const dropped = SUITE_NAMES.slice(3);
+    const overrides: Record<string, null> = Object.fromEntries(dropped.map((name) => [name, null]));
+    const result = runGuardOn(vitestReport(allSuites(overrides)));
+    expect(result.status).toBe(1);
+    for (const name of dropped) expect(result.stderr).toContain(`${name} does not appear in testResults`);
+  });
+
+  it("rejects a report where all PostgreSQL tests were skipped, even though Vitest calls it a success", () => {
+    const files: Record<string, readonly AssertionStatus[]> = {};
+    for (const [name, count] of Object.entries(SUITES)) files[path.join(REPO_ROOT, name)] = skipped(count);
+    const report = vitestReport(files);
     expect(report["success"]).toBe(true);
     const result = runGuardOn(report);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("PostgreSQL tests were skipped: the database was not reachable from the job");
-    expect(result.stderr).toContain("tests/storage/postgresEventStore.test.ts has no passed test");
-    expect(result.stderr).toContain("tests/storage/postgresCapabilityIssuanceTransaction.test.ts has no passed test");
-  });
-
-  it("rejects a partially skipped report", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: [...passing(14), "skipped"], [BOUNDARY_FILE]: passing(12) }));
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("1 PostgreSQL test(s) were skipped or pending");
+    for (const name of SUITE_NAMES) expect(result.stderr).toContain(`${name} has no passed test`);
   });
 
   it("rejects todo tests", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: [...passing(15), "todo"], [BOUNDARY_FILE]: passing(12) }));
+    const result = runGuardOn(vitestReport(allSuites({ "tests/storage/postgresRedemptionReview.test.ts": [...passing(28), "todo"] })));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("marked todo");
   });
 
   it("rejects failed tests", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: ["passed", "failed", "passed"], [ISSUANCE_FILE]: passing(15), [BOUNDARY_FILE]: passing(12) }));
+    const result = runGuardOn(vitestReport(allSuites({ [path.relative(REPO_ROOT, EVENT_STORE_FILE)]: ["passed", "failed", "passed"] })));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("1 PostgreSQL test(s) failed");
     expect(result.stderr).toContain("tests/storage/postgresEventStore.test.ts failed as a file");
   });
 
-  it("rejects fewer than 30 passed tests", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: passing(11), [BOUNDARY_FILE]: passing(12) }));
+  it("rejects fewer than 92 passed tests when every suite still has a passing test", () => {
+    const result = runGuardOn(vitestReport(allSuites({ "tests/storage/postgresRedemptionReview.test.ts": passing(27) })));
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("only 26 PostgreSQL test(s) passed, expected at least 30");
+    expect(result.stderr).toContain("only 91 PostgreSQL test(s) passed, expected at least 92");
   });
 
-  it("rejects a report where a required test file is absent", () => {
-    const result = runGuardOn(vitestReport({ [ISSUANCE_FILE]: passing(18), [BOUNDARY_FILE]: passing(12) }));
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("tests/storage/postgresEventStore.test.ts does not appear in testResults");
+  it("accepts a suite that grew and rejects one that shrank by a test (a deleted test is noticed)", () => {
+    expect(runGuardOn(vitestReport(allSuites({ "tests/redemption/redemptionContract.postgres.test.ts": passing(9) }))).status).toBe(0);
+    expect(runGuardOn(vitestReport(allSuites({ "tests/redemption/redemptionContract.postgres.test.ts": passing(7) }))).status).toBe(1);
   });
 
-  it("rejects a report where the append-only boundary test file is absent", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: passing(3), [ISSUANCE_FILE]: passing(25) }));
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("tests/storage/postgresAppendOnlyBoundary.test.ts does not appear in testResults");
+  it("requires exactly the files that the CI job runs: the list cannot drift from .github/workflows/ci.yml", () => {
+    const listed = spawnSync(process.execPath, [GUARD, "--list-required"], { encoding: "utf8" });
+    expect(listed.status).toBe(0);
+    const required = listed.stdout.split("\n").filter((line) => line !== "").sort();
+    expect(required).toEqual([...SUITE_NAMES].sort());
+
+    const workflow = readFileSync(path.join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
+    const step = workflow.slice(workflow.indexOf("- name: Run the PostgreSQL tests"), workflow.indexOf("- name: Check that no PostgreSQL test was skipped"));
+    expect(step).not.toBe("");
+    const inCi = [...step.matchAll(/\btests\/[\w./-]+\.test\.ts\b/g)].map((m) => m[0]).sort();
+    expect(inCi).toEqual(required);
+    expect(workflow).toContain("node scripts/check-postgres-report.mjs vitest-postgres.json");
   });
 
-  it("rejects a report where one file has no passed test, even if the totals are met", () => {
-    const result = runGuardOn(vitestReport({ [EVENT_STORE_FILE]: [], [ISSUANCE_FILE]: passing(18), [BOUNDARY_FILE]: passing(12) }));
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("tests/storage/postgresEventStore.test.ts has no passed test");
+  it("the suite counts used here add up to the floor of the guard", () => {
+    expect(Object.values(SUITES).reduce((a, b) => a + b, 0)).toBe(92);
   });
 
   it("rejects an incomplete report (missing counters and testResults)", () => {
