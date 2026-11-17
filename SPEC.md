@@ -889,7 +889,7 @@ PostgreSQL transaction (`PostgresCapabilityRedemptionTransaction`).
     OBJECT with a per-store mutex, so correctness does not rest on any
     identifier (its default attempt counter is unique within one process
     lifetime only, restarts at 1, and is private to that module).
-    **Persistent stores** (the future PostgreSQL implementation) must obtain
+    **Persistent stores** (implemented for PostgreSQL, see below) must obtain
     exclusion from the database itself, never from an application-generated
     id: (a) decide and write under the existing writer lock after a fresh read
     of the log; (b) a partial unique index on the redeemed `capability_id` as a
@@ -1030,12 +1030,43 @@ Redemption outcomes (what each result means for the ticket and for the log):
 | `ALREADY_REDEEMED`, `REDEMPTION_COLLISION` | no (by this call) | yes, by another call | no | not retry; this call never authorized the effect |
 | `CONCURRENT_WRITE_DETECTED` (in memory) | yes, but not at `decision_sequence + 1` | yes | **no** | authorize again (may hit `CAPACITY_EXCEEDED`) |
 | `CONCURRENT_WRITE_DETECTED` (PostgreSQL: a lock-bypassing writer took the sequence, or the journal has a gap) | no (rolled back) | no | **no** | retry; the decision is re-made on the new journal |
-| exception (PostgreSQL: connection lost, outcome unknown) | unknown | unknown | **no** | retry (see "Unknown outcome and recovery") |
+| `RedemptionSchemaError` (PostgreSQL: the redemption index is missing, invalid, not unique or mis-defined) | no (thrown before anything is written) | no | **no** | apply the migration, then retry the same ticket (the failure is not cached) |
+| any other exception (PostgreSQL: connection lost, server error; the outcome is unknown) | unknown | unknown | **no** | retry the same ticket (see "Unknown outcome and recovery") |
 
 Known limits, stated plainly: a forged `CAPABILITY_REDEEMED` written straight
 into the store (see THREAT_MODEL A37) can burn a ticket but can never grant
-authority, and `validateRedemptionEvent` (I31) tells it apart; the effect after redemption is not covered; only the in-memory
-transaction exists, so the PostgreSQL behaviour is not demonstrated.
+authority, and `validateRedemptionEvent` (I31) tells it apart; the effect after
+redemption is not covered.
+
+**What is demonstrated for PostgreSQL, and what is not.** Both implementations
+exist: the in-memory transaction and `PostgresCapabilityRedemptionTransaction`.
+They answer alike on the shared contract (`tests/redemption/redemptionContract.ts`,
+run on both). The tests that run against a real PostgreSQL 16 instance, which CI
+runs, demonstrate:
+
+- exactly one `ok: true` and exactly one redemption row when six separate
+  operating-system processes redeem the same ticket at once, and when 50
+  concurrent redemptions from five independent connection pools do
+  (`tests/storage/postgresRedemptionProcesses.test.ts`,
+  `tests/storage/postgresCapabilityRedemptionTransaction.test.ts`);
+- a process killed with SIGKILL while it holds the writer lock inside an open
+  transaction releases it, and another process then redeems exactly once;
+- after a lost COMMIT acknowledgement the call rejects although the row is
+  committed, a retry reports `ALREADY_REDEEMED` and never a second success, and no
+  lock is left behind (`tests/storage/postgresRedemptionReview.test.ts`);
+- a writer that bypasses the lock, or a gap in the sequence, makes redemption
+  fail closed, and two racing redemptions never leave two rows for one ticket;
+- a missing, invalid (failed `CONCURRENTLY` build) or non-unique redemption index
+  makes `redeem` throw `RedemptionSchemaError` and write nothing, with no cached
+  failure.
+
+Not demonstrated, or outside what is claimed: any protection against a
+privileged role (a superuser, the table owner or the database owner can alter or
+drop the journal; the append-only boundary holds for the application role only);
+behaviour under production load (never
+benchmarked); a PostgreSQL major version other than the one CI runs, or a driver
+other than node-postgres; the external effect; and any independent review (none
+has taken place).
 
 ## I6 — action-instance approval binding
 

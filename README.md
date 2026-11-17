@@ -393,9 +393,14 @@ action was legitimate at sequence 8, back when it ran.
   [`SPEC.md`](./SPEC.md)); they do not change what is said here about
   concurrent plain decisions.
 - **Authority Proof does not establish the journal's authenticity or
-  completeness.** `authority proof verify` replays a journal *you supply* and
-  checks that a signed statement is consistent with it. An operator can omit or
-  fabricate events consistently. A trusted anchor (`--trusted-heads`) is chosen
+  completeness, and a signed attestation does not prove that events happened.**
+  `authority proof verify` replays a journal *you supply* and checks that a
+  signed statement is consistent with it. A coherent history can be fabricated:
+  an operator can omit events or invent a consistent set, and an attestation
+  signed by a key you trust over that history passes verification
+  (`CONSISTENT_L3`). A valid signature shows that a key signed a statement, not
+  that the events are real, that none are missing, or that an action was
+  executed. A trusted anchor (`--trusted-heads`) is chosen
   by the verifier, and its independence from the signer is **not verified**.
   A key identifier names a key, not a person; the signing instant is the
   signer's claim. There is no timestamping, no non-repudiation and no
