@@ -1060,9 +1060,10 @@ runs, demonstrate:
   makes `redeem` throw `RedemptionSchemaError` and write nothing, with no cached
   failure.
 
-Not demonstrated, or outside what is claimed: a database role other than the
-append-only application role (a superuser, the table owner or the database owner
-can alter or drop the journal); behaviour under production load (never
+Not demonstrated, or outside what is claimed: any protection against a
+privileged role (a superuser, the table owner or the database owner can alter or
+drop the journal; the append-only boundary holds for the application role only);
+behaviour under production load (never
 benchmarked); a PostgreSQL major version other than the one CI runs, or a driver
 other than node-postgres; the external effect; and any independent review (none
 has taken place).
