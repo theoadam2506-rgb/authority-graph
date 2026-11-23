@@ -111,7 +111,7 @@ export async function generate(): Promise<Map<string, string>> {
   const reordered = [...events];
   [reordered[2], reordered[3]] = [reordered[3]!, reordered[2]!];
   const corruptedSuffix = JSON.parse(JSON.stringify(withSuffix.events)) as Record<string, unknown>[];
-  corruptedSuffix[5] = { ...corruptedSuffix[5]!, sequence: 9 };
+  corruptedSuffix[6] = { ...corruptedSuffix[6]!, sequence: 9 }; // the revocation after the 6-event prefix
   const head5 = journalHead(events);
   files.set("journals/journal.json", pretty(events));
   files.set("journals/with-valid-suffix.json", pretty(withSuffix.events));
@@ -120,9 +120,9 @@ export async function generate(): Promise<Map<string, string>> {
   files.set("journals/divergent-same-length.json", pretty(divergent.events));
   files.set("journals/invalid-suffix.json", pretty(corruptedSuffix));
   const heads = (...hs: { head_sequence: number; head_hash: string; label?: string }[]) => pretty({ format: "authority-trusted-heads/v1", heads: hs });
-  files.set("trusted-heads.json", heads({ head_sequence: 5, head_hash: head5.head_hash, label: "head recorded by the verifier (its independence is NOT established by this tool)" }));
+  files.set("trusted-heads.json", heads({ head_sequence: events.length, head_hash: head5.head_hash, label: "head recorded by the verifier (its independence is NOT established by this tool)" }));
   files.set("trusted-heads-below-head.json", heads({ head_sequence: 3, head_hash: journalHead(events, 3).head_hash }));
-  files.set("trusted-heads-wrong-hash.json", heads({ head_sequence: 5, head_hash: "ab".repeat(32) }));
+  files.set("trusted-heads-wrong-hash.json", heads({ head_sequence: events.length, head_hash: "ab".repeat(32) }));
   files.set("trusted-heads-beyond-journal.json", heads({ head_sequence: 9, head_hash: "cd".repeat(32) }));
   files.set("trusted-keys-revoked-always.json", pretty({ format: "authority-trusted-keys/v1", keys: [{ jwk: TEST_PUBLIC_JWK, revoked_from: "ALWAYS" }] }));
 
@@ -161,7 +161,7 @@ Reproducible vectors for implementers of an independent verifier. **Test materia
 
 - \`test-key.json\`: RFC 8032 section 7.1 TEST 1. Its private key is public knowledge: it protects nothing and must never be trusted for a real attestation.
 - \`trusted-keys.json\`: the verifier's trusted-keys document ("authority-trusted-keys/v1").
-- \`journal.json\` / \`journal.head.json\`: a 5-event journal and its hash chain ("authority-journal-chain/v1"), with the head after every prefix.
+- \`journal.json\` / \`journal.head.json\`: a 6-event journal and its hash chain ("authority-journal-chain/v1"), with the head after every prefix.
 - \`issuance.json\`, \`redemption.json\`: genuine attestations over that journal.
 - \`*.signing-input.txt\`: the exact bytes that were signed (UTF-8): \`authority-attestation/v1\\n\` followed by the RFC 8785 (JCS) form of the attestation with \`signature = { alg, key_id }\`.
 - \`negative/\`: documents a verifier must refuse (or, for \`validly-signed-lie\`, must accept at L2 and say nothing more about).

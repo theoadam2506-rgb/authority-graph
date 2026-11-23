@@ -90,6 +90,7 @@ jobs:
           tests/storage/postgresRedemptionReview.test.ts
           tests/storage/postgresJournalHash.test.ts
           tests/redemption/redemptionContract.postgres.test.ts
+          tests/storage/postgresTicketPerAction.test.ts
           --reporter=default
           --reporter=json
           --outputFile.json=vitest-postgres.json

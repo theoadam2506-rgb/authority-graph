@@ -14,7 +14,7 @@
  * Each size runs in its own child process (so its peak RSS is its own) and is
  * killed when the budget expires: a size over budget is reported as TIMEOUT and
  * the script exits non-zero. Journals are synthetic and valid: one delegation,
- * one action, one real issuance, then copies of it with distinct ids.
+ * one action, one real issuance, then copies of it with distinct capability and action ids (I32: one ticket per action; the copies' actions have no ACTION_REQUESTED, which replay does not need: this measures replay cost, not decision validity).
  * Absolute numbers depend on the machine: read the ratios.
  */
 import { spawnSync } from "node:child_process";
@@ -49,7 +49,7 @@ export async function build(count: number): Promise<CanonicalStore> {
     events.push({
       ...template,
       event_id: `capability-issued:cap-b-${n}:act-b`,
-      payload: { ...template.payload, capability_id: `cap-b-${n}` },
+      payload: { ...template.payload, capability_id: `cap-b-${n}`, action_id: `act-b-copy-${n}` },
       sequence: i + 1,
       recorded_at: new Date(Date.parse("2025-01-01T12:00:00.000Z") + 1000 * i).toISOString(),
     });

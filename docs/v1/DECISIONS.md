@@ -39,6 +39,7 @@
 | D33 | SDK: `authorize` triggers no external effect; `redeem` consumes a capability without running the effect; `guard` orders redemption before the effect and never promises exactly-once for external effects. |
 | D34 | SDK: `TrustedClock` must be injected explicitly (no implicit default clock); `report` is an optional verification function, never an implicit authorization. |
 | D35 | `@authority-graph/core` is a working name, not reserved; no npm package is published without a separate decision. |
+| D36 | I32: at most one `CAPABILITY_ISSUED` per action, definitively (variant A). An expired, redeemed or burned ticket does not free the action; a new action is required. Enforced in the kernel, in ingestion, in the issuance transactions and by a PostgreSQL unique index. Moving approval consumption to redemption is deferred. See "D36 in detail" below. |
 
 ## Still open
 
@@ -49,3 +50,30 @@
 | O3 | Contribution policy: DCO or CLA; trademark policy | To be decided with legal review |
 | O4 | Publication of [`EDITION.md`](./EDITION.md) | After legal review |
 | O5 | Commercial validation (prospect conversations) before the Proof, SDK and demo work | At least two before PR 3 |
+
+## D36 in detail: one ticket per action (I32)
+
+**Status:** decided by the project owner; implemented in a separate pull request from the SDK (PR 5a), which it does not require.
+
+**Context.** A ticket (`CAPABILITY_ISSUED`) is the right to run one action, and an approval is bound to one action (I6). The engine did not limit the tickets per action: with different idempotency keys, one approved action obtained two tickets and both were redeemed, because the approval is consumed only by a later `ACTION_EXECUTED`, not by issuance or redemption. Found while building the SDK; reproduced on `main` at `397ba8c`. The SDK worked around it (one fixed idempotency key per action) but a caller issuing tickets directly was not protected.
+
+**Decision.** Invariant I32 (see `SPEC.md`): at most one `CAPABILITY_ISSUED` per `action_id`, definitively.
+
+- An **expired**, **redeemed** or **burned** (`CONCURRENT_WRITE_DETECTED`) ticket does not free the action. A new action (a new `ACTION_REQUESTED`, and a new approval where one is needed) is required. This follows from approval binding: an approval belongs to one action, so a replacement ticket for the same action would be a replacement effect under the same approval.
+- Four independent layers, mirroring I28: the kernel (`ACTION_ALREADY_TICKETED`), ingestion (business id `ticketed_action_id`, which also makes replay refuse a journal that tickets an action twice), the issuance transactions, and a PostgreSQL partial unique index checked by `IssuanceSchemaError`.
+- Idempotency is unchanged.
+
+**Alternatives considered.**
+
+- *Variant B, re-issue after expiry if nothing was redeemed.* More flexible, but it has no database-level backstop (an index cannot express "all earlier tickets expired"), more states, and an unclear approval semantics (is a stale approval still good?). Rejected for V1; revisit only on a demonstrated need.
+- *Consume the approval at redemption* (instead of at `ACTION_EXECUTED`). More faithful to the intent and it would make a second effect impossible by construction, but it changes the approval accounting (I15, I18) and the redemption contract. **Deferred by the project owner**; it is not part of I32.
+- *Document the possibility only.* Rejected: a documented hole is still a hole.
+
+**Consequences.**
+
+- Existing tests that issued several tickets for one action were changed: the redemption harnesses (memory and PostgreSQL) and the contract now give each extra ticket its own action; `tests/proof/fixture.ts` gives its second ticket its own action; the "known cost" test in `tests/redemption/redemptionReview.test.ts` now asserts both the I32 refusal and the capacity cost on a new action. The published proof vectors were regenerated (`npm run proof:vectors`; the fixture journal gains one `ACTION_REQUESTED`) and the proof tests that hard-code the journal layout were shifted by one event. A fragile test that depended on a signature containing a `-` was fixed.
+- Recovery after a consumed ticket (`CONCURRENT_WRITE_DETECTED`, an unknown outcome that proved to be `ALREADY_REDEEMED`) now means opening a new action, not re-authorizing the same one. The capacity cost of D12 is unchanged.
+- **Migration.** An installation written before I32 may hold several tickets for one action. `schema.sql` refuses once, listing the offending action ids, and rewrites nothing (the journal is append-only). The operator decides: keep the installation on the pre-I32 schema (the issuance transaction then refuses to run, fail closed), or resolve the duplicates by a documented, owner-level action before applying the schema. No such installation is known to exist: nothing is published and the project has no releases.
+- A journal with two tickets for one action no longer replays, so an attestation over such a journal no longer verifies at L3. Same remark: no released journal is known to contain one.
+- The SDK (`src/sdk`, PR 5a) is compatible: its fixed idempotency key per action keeps its behaviour, and it maps the new refusal to `DENIED` (`ACTION_ALREADY_TICKETED`).
+- **Replay cost.** A ticket now adds two business ids to the ingestion state. Measured on the same machine with the benchmark (`npm run proof:bench -- 5000 10000`, a worst case where every event is a ticket): 10,000 events replay in about 9.5 s instead of 8.0 s on `main` (5,000 events: 2.2 s instead of 2.0 s). The 10,000-event ceiling (D26) is kept.

@@ -89,7 +89,7 @@ export function describeRedemptionContract(backend: string, make: ContractEnvFac
         const first = await env.issue(T("09:10:00"));
         expect((await env.redeem(auth(AGENT), env.command(first), T("09:11:00"))).ok).toBe(true);
         await env.restart();
-        const second = await env.issue(T("09:12:00")); // a second capability for the same action (new idempotency key)
+        const second = await env.issue(T("09:12:00")); // a second capability, for its own action (I32: one ticket per action)
         expect((await env.redeem(auth(AGENT), env.command(second), T("09:13:00"))).ok).toBe(true);
         expect(redeemedEvents(await env.events())).toHaveLength(2);
         expect(await env.redeem(auth(AGENT), env.command(first), T("09:14:00"))).toEqual({ ok: false, reason: "ALREADY_REDEEMED" });

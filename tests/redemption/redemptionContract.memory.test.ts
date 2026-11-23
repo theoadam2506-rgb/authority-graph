@@ -31,11 +31,19 @@ describeRedemptionContract("in-memory", async ({ collidingAttemptIds }): Promise
   });
   let tx = open(store);
   let keyCounter = 0;
+  let ticketsIssued = 0;
 
   const env: ContractEnv = {
     events: () => store.getEvents(),
     async issue(at) {
-      const out = await tx.issuance.issue(auth(AGENT), clientIdempotencyKey(`k-${++keyCounter}`), { action_id: actionId("act-redeem"), enforcement_point_id: EP }, {
+      // I32: one ticket per action. The first ticket serves the seeded action; every further ticket
+      // the contract asks for is a ticket for its own, freshly requested, identical action.
+      const act = ticketsIssued++ === 0 ? "act-redeem" : `act-redeem-${ticketsIssued}`;
+      if (act !== "act-redeem") {
+        const requested = await store.append([toDraft(actionRequest({ sequence: 1000 + ticketsIssued, id: act, requester: AGENT, delegationId: "d-redeem", parameters: PARAMS }))], at);
+        if (!requested.outcomes.every((o) => o.accepted)) throw new Error(`extra action rejected: ${JSON.stringify(requested)}`);
+      }
+      const out = await tx.issuance.issue(auth(AGENT), clientIdempotencyKey(`k-${++keyCounter}`), { action_id: actionId(act), enforcement_point_id: EP }, {
         nextCapabilityId: () => capabilityId(`cap-contract-${++capCounter}`),
         expiresAt: (t) => iso8601(new Date(Date.parse(t) + 5 * 60_000).toISOString()),
       }, at);

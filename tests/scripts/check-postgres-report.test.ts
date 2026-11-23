@@ -17,7 +17,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const GUARD = path.join(REPO_ROOT, "scripts/check-postgres-report.mjs");
-/** The eight PostgreSQL suites the CI job runs, with their real test counts (92 in total). */
+/** The nine PostgreSQL suites the CI job runs, with their real test counts (102 in total). */
 const SUITES: Readonly<Record<string, number>> = {
   "tests/storage/postgresEventStore.test.ts": 3,
   "tests/storage/postgresCapabilityIssuanceTransaction.test.ts": 15,
@@ -27,6 +27,7 @@ const SUITES: Readonly<Record<string, number>> = {
   "tests/storage/postgresRedemptionReview.test.ts": 28,
   "tests/storage/postgresJournalHash.test.ts": 1,
   "tests/redemption/redemptionContract.postgres.test.ts": 8,
+  "tests/storage/postgresTicketPerAction.test.ts": 10,
 };
 const SUITE_NAMES = Object.keys(SUITES);
 const EVENT_STORE_FILE = path.join(REPO_ROOT, "tests/storage/postgresEventStore.test.ts");
@@ -92,7 +93,7 @@ function runGuardOn(report: unknown): { readonly status: number | null; readonly
 
 type SuiteOverrides = Readonly<Record<string, readonly AssertionStatus[] | null>>;
 
-/** A report of the eight suites, all passing, with per-suite overrides (null removes the suite). */
+/** A report of the nine suites, all passing, with per-suite overrides (null removes the suite). */
 function allSuites(overrides: SuiteOverrides = {}): Record<string, readonly AssertionStatus[]> {
   const files: Record<string, readonly AssertionStatus[]> = {};
   for (const [name, count] of Object.entries(SUITES)) {
@@ -104,15 +105,15 @@ function allSuites(overrides: SuiteOverrides = {}): Record<string, readonly Asse
 }
 
 describe("scripts/check-postgres-report.mjs", () => {
-  it("accepts a report where all 92 PostgreSQL tests of the eight suites ran and passed", () => {
+  it("accepts a report where all 102 PostgreSQL tests of the nine suites ran and passed", () => {
     const result = runGuardOn(vitestReport(allSuites()));
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("92/92 tests passed");
-    expect(result.stdout).toContain("in 8 required files");
+    expect(result.stdout).toContain("102/102 tests passed");
+    expect(result.stdout).toContain("in 9 required files");
     expect(result.status).toBe(0);
   });
 
-  it("accepts more than 92 passed tests (the floor is a minimum, not an exact count)", () => {
+  it("accepts more than 102 passed tests (the floor is a minimum, not an exact count)", () => {
     const result = runGuardOn(vitestReport(allSuites({ "tests/storage/postgresEventStore.test.ts": passing(4) })));
     expect(result.status).toBe(0);
   });
@@ -187,10 +188,10 @@ describe("scripts/check-postgres-report.mjs", () => {
     expect(result.stderr).toContain("tests/storage/postgresEventStore.test.ts failed as a file");
   });
 
-  it("rejects fewer than 92 passed tests when every suite still has a passing test", () => {
+  it("rejects fewer than 102 passed tests when every suite still has a passing test", () => {
     const result = runGuardOn(vitestReport(allSuites({ "tests/storage/postgresRedemptionReview.test.ts": passing(27) })));
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("only 91 PostgreSQL test(s) passed, expected at least 92");
+    expect(result.stderr).toContain("only 101 PostgreSQL test(s) passed, expected at least 102");
   });
 
   it("accepts a suite that grew and rejects one that shrank by a test (a deleted test is noticed)", () => {
@@ -213,7 +214,7 @@ describe("scripts/check-postgres-report.mjs", () => {
   });
 
   it("the suite counts used here add up to the floor of the guard", () => {
-    expect(Object.values(SUITES).reduce((a, b) => a + b, 0)).toBe(92);
+    expect(Object.values(SUITES).reduce((a, b) => a + b, 0)).toBe(102);
   });
 
   it("rejects an incomplete report (missing counters and testResults)", () => {

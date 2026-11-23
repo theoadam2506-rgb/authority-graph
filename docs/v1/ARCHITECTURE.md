@@ -51,7 +51,7 @@ redeemed `capability_id` in `schema.sql` (the migration).
 1. **authorize.** The application asks for a decision bound to this exact
    call: tool name, canonical arguments digest, amount, recipient. If the
    decision is `AUTHORIZED`, a ticket (`CAPABILITY_ISSUED`) with a short
-   lifetime is returned.
+   lifetime is returned. At most one ticket exists per action, definitively (I32, D36): an expired or redeemed ticket does not free the action, a new action is required.
 2. **redeem.** Immediately before the effect, one atomic step checks that the
    ticket exists, has not expired, has not been redeemed, names this
    enforcement point, matches the arguments actually observed, and that the

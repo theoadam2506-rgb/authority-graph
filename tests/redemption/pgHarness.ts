@@ -69,6 +69,7 @@ export async function pgHarness(options: PgHarnessOptions = {}): Promise<PgHarne
   clockTime = T("09:05:00");
 
   let counter = 0;
+  let ticketsIssued = 0;
   const newPool = (): Pool => {
     const p = new Pool({ connectionString: iso.connectionString, options: `-c search_path=${iso.schema}` });
     p.on("error", () => undefined);
@@ -79,7 +80,15 @@ export async function pgHarness(options: PgHarnessOptions = {}): Promise<PgHarne
     iso, pool, store, issuance, redemption, newPool,
     newRedemption: (p = newPool(), o = {}) => new PostgresCapabilityRedemptionTransaction(p, o),
     async issue(at, key = `k-${++counter}`) {
-      const out = await issuance.issue(auth(AGENT), clientIdempotencyKey(key), { action_id: actionId("act-redeem"), enforcement_point_id: EP }, {
+      // I32: one ticket per action. The first ticket serves the seeded action; every further ticket
+      // the tests ask for is a ticket for its own, freshly requested, identical action.
+      const act = ticketsIssued++ === 0 ? "act-redeem" : `act-redeem-${ticketsIssued}`;
+      if (act !== "act-redeem") {
+        clockTime = at;
+        const requested = await store.append([toDraft(actionRequest({ sequence: 1000 + ticketsIssued, id: act, requester: AGENT, delegationId: "d-redeem", parameters: PARAMS }))]);
+        if (!requested.outcomes.every((o) => o.accepted)) throw new Error(`extra action rejected: ${JSON.stringify(requested)}`);
+      }
+      const out = await issuance.issue(auth(AGENT), clientIdempotencyKey(key), { action_id: actionId(act), enforcement_point_id: EP }, {
         nextCapabilityId: () => capabilityId(`cap-pg-${++counter}`),
         expiresAt: (t) => iso8601(new Date(Date.parse(t) + 5 * 60_000).toISOString()),
       }, at);

@@ -285,10 +285,23 @@ export class InMemoryCapabilityIssuanceTransaction implements CapabilityIssuance
     // for a freshly-built CAPABILITY_ISSUED draft remains, as before,
     // assumed to be the one other modeled case (a forced/broken
     // capability_id generator).
+    //
+    // I32 — a BUSINESS_ID_COLLISION now has two possible causes: a forced
+    // capability_id, or an action that was ticketed between this snapshot and
+    // this append by a writer that bypassed the transaction. The second is
+    // reported as what it is.
+    const issuedActionId = idempotent.result.capability.action_id;
+    const ticketedMeanwhile =
+      outcome !== undefined &&
+      !outcome.accepted &&
+      outcome.reasonCode === "BUSINESS_ID_COLLISION" &&
+      (await this.store.getEvents()).some((e) => e.event_type === "CAPABILITY_ISSUED" && e.payload.action_id === issuedActionId);
     const failureResult: IssueCapabilityResult =
       outcome !== undefined && !outcome.accepted && outcome.reasonCode === "STALE_AUTHORITY_TIME"
         ? { ok: false, reason: "STALE_AUTHORITY_TIME" }
-        : { ok: false, reason: "CAPABILITY_ID_COLLISION", capability_id: idempotent.result.capability.capability_id };
+        : ticketedMeanwhile
+          ? { ok: false, reason: "ACTION_ALREADY_TICKETED" }
+          : { ok: false, reason: "CAPABILITY_ID_COLLISION", capability_id: idempotent.result.capability.capability_id };
     this.idempotencyState = replaceExecutedIdempotencyResult(idempotent.nextState, authenticatedPrincipal, clientIdempotencyKey, command, failureResult);
     return { outcome: "EXECUTED", result: failureResult };
   }

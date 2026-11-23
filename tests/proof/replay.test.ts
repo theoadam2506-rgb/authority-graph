@@ -44,7 +44,7 @@ describe("L3: the happy path, and what the report says", () => {
     expect(r.anchored).toBe(false);
     expect(r.anchor?.status).toBe("NONE_SUPPLIED");
     expect(r.anchor?.explanation).toMatch(/self-consistent, would pass/);
-    expect(r.journal).toMatchObject({ events_provided: 5, attested_prefix: { head_sequence: 5, replay: "PASS", head_hash_matches: "PASS", statement_matches_event: "PASS", decision_rederived: "PASS" }, full_journal: { scope_checked: true, replay: "PASS", events_after_attested_head: 0 } });
+    expect(r.journal).toMatchObject({ events_provided: 6, attested_prefix: { head_sequence: 6, replay: "PASS", head_hash_matches: "PASS", statement_matches_event: "PASS", decision_rederived: "PASS" }, full_journal: { scope_checked: true, replay: "PASS", events_after_attested_head: 0 } });
     for (const id of ["L3.JOURNAL_READ", "L3.PREFIX_REPLAY", "L3.HEAD", "L3.EVENT", "L3.DECISION", "L3.FULL_REPLAY"]) expect(checkStatus(r, id), id).toBe("PASS");
     expect(checkStatus(r, "L3.ANCHOR")).toBe("NOT_CHECKED");
   });
@@ -91,17 +91,17 @@ describe("L3: the happy path, and what the report says", () => {
 describe("L3: anchors say exactly what they say", () => {
   it("an anchor that matches and covers the attested prefix gives anchored: true, with the provenance and independence stated", async () => {
     const b = await base();
-    const r = verify(b.redemption, b.journal, { trustedHeads: [{ head_sequence: 5, head_hash: b.head.head_hash, label: "my own copy" }] });
+    const r = verify(b.redemption, b.journal, { trustedHeads: [{ head_sequence: 6, head_hash: b.head.head_hash, label: "my own copy" }] });
     expect(r.result).toBe("CONSISTENT_L3");
     expect(r.anchored).toBe(true);
-    expect(r.anchor).toMatchObject({ status: "COVERS_ATTESTED_PREFIX", supplied: 1, matched: 1, provenance: "SUPPLIED_BY_VERIFIER", independence: "NOT_ESTABLISHED", covering: { head_sequence: 5, label: "my own copy" } });
+    expect(r.anchor).toMatchObject({ status: "COVERS_ATTESTED_PREFIX", supplied: 1, matched: 1, provenance: "SUPPLIED_BY_VERIFIER", independence: "NOT_ESTABLISHED", covering: { head_sequence: 6, label: "my own copy" } });
     expect(r.anchor?.explanation).toMatch(/does NOT mean the anchor is independent/);
     expect(r.anchor?.explanation).toMatch(/a file on the same machine proves nothing about its own independence/);
   });
 
   it("independence is NOT_ESTABLISHED in every anchored report, whatever the label says", async () => {
     const b = await base();
-    const r = verify(b.redemption, b.journal, { trustedHeads: [{ head_sequence: 5, head_hash: b.head.head_hash, label: "independent notary, certified" }] });
+    const r = verify(b.redemption, b.journal, { trustedHeads: [{ head_sequence: 6, head_hash: b.head.head_hash, label: "independent notary, certified" }] });
     expect(r.anchor?.independence).toBe("NOT_ESTABLISHED");
     expect(JSON.stringify(r)).not.toMatch(/"independence":"ESTABLISHED"/);
   });
@@ -117,8 +117,8 @@ describe("L3: anchors say exactly what they say", () => {
 
   it("several anchors: the smallest one that covers the attested prefix is reported", async () => {
     const b = await base();
-    const r = verify(b.redemption, b.journal, { trustedHeads: heads([2, journalHead(b.f.events, 2).head_hash], [4, journalHead(b.f.events, 4).head_hash], [5, b.head.head_hash]) });
-    expect(r.anchor).toMatchObject({ supplied: 3, matched: 3, status: "COVERS_ATTESTED_PREFIX", covering: { head_sequence: 5 } });
+    const r = verify(b.redemption, b.journal, { trustedHeads: heads([2, journalHead(b.f.events, 2).head_hash], [4, journalHead(b.f.events, 4).head_hash], [6, b.head.head_hash]) });
+    expect(r.anchor).toMatchObject({ supplied: 3, matched: 3, status: "COVERS_ATTESTED_PREFIX", covering: { head_sequence: 6 } });
   });
 
   it("an anchor that the journal does not match is REJECTED: a divergent or rewritten journal", async () => {
@@ -142,7 +142,7 @@ describe("L3: anchors say exactly what they say", () => {
     const b = await base();
     const tampered = JSON.parse(b.journal) as Record<string, unknown>[];
     tampered[0] = { ...tampered[0]!, recorded_at: "2031-01-01T00:00:00.000Z" };
-    const r = verify(b.redemption, text(tampered), { trustedHeads: heads([5, b.head.head_hash]) });
+    const r = verify(b.redemption, text(tampered), { trustedHeads: heads([6, b.head.head_hash]) });
     expect(r.result).toBe("REJECTED");
     expect(failing(r)).toBe("L3.HEAD"); // the attested head already differs; the anchor would say the same
   });
@@ -218,8 +218,8 @@ describe("L3: truncated, reordered, divergent and modified journals", () => {
 describe("L3: the attested prefix and the whole journal provided are validated separately", () => {
   async function withSuffix() {
     const f = await buildFixture({ revocation: true });
-    expect(f.events).toHaveLength(6);
-    const prefix = f.events.slice(0, 5);
+    expect(f.events).toHaveLength(7);
+    const prefix = f.events.slice(0, 6);
     const redemption = await attestRedemption(prefix, f.capabilityId, testSigner());
     return { f, redemption, prefix };
   }
@@ -229,7 +229,7 @@ describe("L3: the attested prefix and the whole journal provided are validated s
     const r = verify(redemption, text(f.events));
     expect(r.result).toBe("CONSISTENT_L3");
     expect(r.journal?.full_journal).toEqual({ scope_checked: true, replay: "PASS", events_after_attested_head: 1 });
-    expect(r.later_revocations).toMatchObject({ count: 1, listed: [{ sequence: 6, delegation_id: "d-proof", revoked_by_principal_id: "theo" }] });
+    expect(r.later_revocations).toMatchObject({ count: 1, listed: [{ sequence: 7, delegation_id: "d-proof", revoked_by_principal_id: "theo" }] });
     expect(r.later_revocations?.note).toMatch(/never change the result/);
   });
 
@@ -239,11 +239,11 @@ describe("L3: the attested prefix and the whole journal provided are validated s
   });
 
   it.each([
-    ["a duplicate event_id with different content", (e: Record<string, any>[]) => [...e.slice(0, 5), { ...e[5]!, event_id: e[0]!.event_id }]],
-    ["a sequence gap", (e: Record<string, any>[]) => [...e.slice(0, 5), { ...e[5]!, sequence: 9 }]],
-    ["authority_time going backwards", (e: Record<string, any>[]) => [...e.slice(0, 5), { ...e[5]!, authority_time: "2025-01-01T08:00:00.000Z" }]],
-    ["a non-event junk element", (e: Record<string, any>[]) => [...e.slice(0, 5), null]],
-    ["an unauthorized revocation", (e: Record<string, any>[]) => [...e.slice(0, 5), { ...e[5]!, principal_id: "mallory", payload: { ...e[5]!.payload, revoked_by_principal_id: "mallory" } }]],
+    ["a duplicate event_id with different content", (e: Record<string, any>[]) => [...e.slice(0, 6), { ...e[6]!, event_id: e[0]!.event_id }]],
+    ["a sequence gap", (e: Record<string, any>[]) => [...e.slice(0, 6), { ...e[6]!, sequence: 9 }]],
+    ["authority_time going backwards", (e: Record<string, any>[]) => [...e.slice(0, 6), { ...e[6]!, authority_time: "2025-01-01T08:00:00.000Z" }]],
+    ["a non-event junk element", (e: Record<string, any>[]) => [...e.slice(0, 6), null]],
+    ["an unauthorized revocation", (e: Record<string, any>[]) => [...e.slice(0, 6), { ...e[6]!, principal_id: "mallory", payload: { ...e[6]!.payload, revoked_by_principal_id: "mallory" } }]],
   ])("a suffix with %s: the prefix is sound, the full journal is refused", async (_name, mutate) => {
     const { f, redemption } = await withSuffix();
     const bad = text(mutate(JSON.parse(text(f.events))));
@@ -258,7 +258,7 @@ describe("L3: the attested prefix and the whole journal provided are validated s
 
   it("scope ATTESTED_PREFIX_ONLY validates the prefix, leaves the suffix unchecked, and says so", async () => {
     const { f, redemption } = await withSuffix();
-    const bad = text([...JSON.parse(text(f.events)).slice(0, 5), null]);
+    const bad = text([...JSON.parse(text(f.events)).slice(0, 6), null]);
     const r = verify(redemption, bad, { scope: "ATTESTED_PREFIX_ONLY" });
     expect(r.result).toBe("CONSISTENT_L3");
     expect(r.scope).toBe("ATTESTED_PREFIX_ONLY");
@@ -281,7 +281,7 @@ describe("L3: the attested prefix and the whole journal provided are validated s
 
   it("an anchor covering events after the attested head is accepted in prefix-only scope (hashing needs no validation) and the scope still says the suffix was not checked", async () => {
     const { f, redemption } = await withSuffix();
-    const r = verify(redemption, text(f.events), { scope: "ATTESTED_PREFIX_ONLY", trustedHeads: heads([6, journalHead(f.events).head_hash]) });
+    const r = verify(redemption, text(f.events), { scope: "ATTESTED_PREFIX_ONLY", trustedHeads: heads([7, journalHead(f.events).head_hash]) });
     expect(r.anchored).toBe(true);
     expect(r.journal?.full_journal.replay).toBe("NOT_CHECKED");
   });
@@ -341,10 +341,10 @@ describe("L3 refuses a signed statement the deterministic replay does not reprod
 
   it("a forged redemption written after a revocation, with a signature over a statement that matches it exactly, is refused by the engine's validator (L3.DECISION)", async () => {
     const f = await buildFixture({ forgedRedemptionAfterRevocation: true });
-    expect(f.events).toHaveLength(7);
+    expect(f.events).toHaveLength(8);
     await expect(attestRedemption(f.events, f.unredeemedCapabilityId, testSigner())).rejects.toMatchObject({ code: "REDEMPTION_NOT_VALID" }); // the honest builder refuses
     // A key holder skips the builder and signs the matching statement anyway:
-    const forgedEvent = f.events[6] as Extract<AuthorityEvent, { event_type: "CAPABILITY_REDEEMED" }>;
+    const forgedEvent = f.events[7] as Extract<AuthorityEvent, { event_type: "CAPABILITY_REDEEMED" }>;
     const head = journalHead(f.events);
     const doc: Record<string, any> = {
       proof_version: "authority-attestation/v1", kind: "REDEMPTION", engine: { id: "authority-graph", protocol_version: 1, event_schema_version: 1 },
@@ -387,7 +387,7 @@ describe("a revoked key stays REJECTED, whatever the journal says", () => {
     ["not_after before the claimed time", { notAfter: "2025-01-01T09:00:00.000Z" }],
   ])("%s: the statement matches the journal and an anchor covers it, yet the result is REJECTED and L3 is not run", async (_n, keyExtra) => {
     const b = await base();
-    const r = verifyAttestationL3(JSON.stringify(b.redemption), { keys: testKeys(keyExtra as never), journal: b.journal, trustedHeads: [{ head_sequence: 5, head_hash: b.head.head_hash }] });
+    const r = verifyAttestationL3(JSON.stringify(b.redemption), { keys: testKeys(keyExtra as never), journal: b.journal, trustedHeads: [{ head_sequence: 6, head_hash: b.head.head_hash }] });
     expect(r.result).toBe("REJECTED");
     expect(r.levels).toMatchObject({ L1: "FAIL", L3: "NOT_CHECKED" });
     expect(r.journal).toBeNull();

@@ -135,7 +135,10 @@ function looksLikeEmail(value: string): boolean {
   return value.includes("@");
 }
 
-type BusinessId = { readonly kind: "delegation_id" | "action_id" | "approval_id" | "capability_id" | "redeemed_capability_id"; readonly value: string };
+type BusinessId = {
+  readonly kind: "delegation_id" | "action_id" | "approval_id" | "capability_id" | "redeemed_capability_id" | "ticketed_action_id";
+  readonly value: string;
+};
 
 /**
  * PR4B-3A — `capability_id` joins this same, already-generic mechanism.
@@ -148,26 +151,34 @@ type BusinessId = { readonly kind: "delegation_id" | "action_id" | "approval_id"
  * closed with the same `BUSINESS_ID_COLLISION` reason code every other
  * business-id kind already uses — no new reason code was needed.
  */
-function businessIdOf(event: EventBody): BusinessId | undefined {
+function businessIdsOf(event: EventBody): readonly BusinessId[] {
   if (event.event_type === "DELEGATION_CREATED" || event.event_type === "SUBDELEGATION_CREATED") {
-    return { kind: "delegation_id", value: event.payload.delegation_id };
+    return [{ kind: "delegation_id", value: event.payload.delegation_id }];
   }
   if (event.event_type === "ACTION_REQUESTED") {
-    return { kind: "action_id", value: event.payload.action_id };
+    return [{ kind: "action_id", value: event.payload.action_id }];
   }
   if (event.event_type === "APPROVAL_REQUESTED") {
-    return { kind: "approval_id", value: event.payload.approval_id };
+    return [{ kind: "approval_id", value: event.payload.approval_id }];
   }
+  // I32: a CAPABILITY_ISSUED carries TWO business ids. `capability_id` is unique
+  // (PR4B-3A) and `ticketed_action_id` makes the action ticketed at most once,
+  // whatever the capability_id, the event_id or the idempotency key. A distinct
+  // kind from `action_id` (the ACTION_REQUESTED's own id), otherwise a ticket
+  // would collide with the very request it serves.
   if (event.event_type === "CAPABILITY_ISSUED") {
-    return { kind: "capability_id", value: event.payload.capability_id };
+    return [
+      { kind: "capability_id", value: event.payload.capability_id },
+      { kind: "ticketed_action_id", value: event.payload.action_id },
+    ];
   }
   // V1: a distinct kind from `capability_id`, otherwise a redemption would
   // collide with the very CAPABILITY_ISSUED it consumes. Exactly one
   // CAPABILITY_REDEEMED per capability_id, whatever its event_id (I28).
   if (event.event_type === "CAPABILITY_REDEEMED") {
-    return { kind: "redeemed_capability_id", value: event.payload.capability_id };
+    return [{ kind: "redeemed_capability_id", value: event.payload.capability_id }];
   }
-  return undefined;
+  return [];
 }
 
 function businessIdKey(id: BusinessId): string {
@@ -288,8 +299,7 @@ export function rebuildIngestionState(events: CanonicalStore): IngestionState {
   const seenBusinessIds = new Set<string>();
   for (const event of events) {
     seenByEventId.set(event.event_id, { draft: toDraft(event), sequence: event.sequence });
-    const businessId = businessIdOf(event);
-    if (businessId !== undefined) {
+    for (const businessId of businessIdsOf(event)) {
       seenBusinessIds.add(businessIdKey(businessId));
     }
   }
@@ -355,8 +365,8 @@ export function processDraft(
     return rejected("UNKNOWN_SCHEMA_VERSION");
   }
 
-  const businessId = businessIdOf(draft);
-  if (businessId !== undefined && state.seenBusinessIds.has(businessIdKey(businessId))) {
+  const businessIds = businessIdsOf(draft);
+  if (businessIds.some((businessId) => state.seenBusinessIds.has(businessIdKey(businessId)))) {
     return rejected("BUSINESS_ID_COLLISION");
   }
 
@@ -369,7 +379,12 @@ export function processDraft(
   const newEvent = buildIngestedEvent(draft, sequence, trustedTimeIso, recordedAtIso);
   const nextSeenByEventId = new Map(state.seenByEventId);
   nextSeenByEventId.set(draft.event_id, { draft, sequence });
-  const nextSeenBusinessIds = businessId === undefined ? state.seenBusinessIds : new Set(state.seenBusinessIds).add(businessIdKey(businessId));
+  let nextSeenBusinessIds = state.seenBusinessIds;
+  if (businessIds.length > 0) {
+    const copy = new Set(state.seenBusinessIds); // one copy per accepted event, as before I32 (a ticket adds two ids)
+    for (const businessId of businessIds) copy.add(businessIdKey(businessId));
+    nextSeenBusinessIds = copy;
+  }
 
   return {
     outcome: { accepted: true, sequence: sequenceNumber(sequence) },
