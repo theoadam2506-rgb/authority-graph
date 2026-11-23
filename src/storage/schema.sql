@@ -117,7 +117,7 @@ BEGIN
             HAVING count(*) > 1) d;
     IF offenders IS NOT NULL THEN
       RAISE EXCEPTION 'I32: cannot create authority_events_ticketed_action_id_uidx: several CAPABILITY_ISSUED rows exist for the same action: %', offenders
-        USING HINT = 'The journal is append-only and is not rewritten. See docs/v1/DECISIONS.md (D36) for the migration options.';
+        USING HINT = 'The journal is append-only and is not rewritten. Do not delete the extra ticket. See docs/v1/COMPATIBILITY_I32.md (and D36 in docs/v1/DECISIONS.md) for the checks, the backup and the options.';
     END IF;
   END IF;
 END
