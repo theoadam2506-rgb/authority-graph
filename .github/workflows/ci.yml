@@ -37,6 +37,13 @@ jobs:
 
       - run: npm run sdk:example
 
+      # Builds the SDK package, packs it (npm pack, nothing is published), installs
+      # the tarball in a throwaway project outside the repository, type-checks and
+      # runs the documented quickstart under two TypeScript module settings, and
+      # checks the exports adversarially.
+      - name: SDK package from a local tarball
+        run: npm run sdk:package:check
+
       # The published proof vectors must be what the generator produces now.
       - name: Check the proof vectors are up to date
         run: npm run proof:vectors -- --check

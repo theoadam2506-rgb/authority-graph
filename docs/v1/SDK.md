@@ -1,8 +1,10 @@
 # Authority SDK (experimental)
 
 > **Status: experimental, not published to npm, not independently reviewed.**
-> Do not use it for real payments or sensitive production actions. Packaging,
-> event builders and a scripted demo are separate, later pull requests.
+> Do not use it for real payments or sensitive production actions. To install it
+> in your own project from a local tarball, see
+> [`SDK_QUICKSTART.md`](./SDK_QUICKSTART.md). A scripted demo is a separate,
+> later pull request.
 
 `src/sdk` is a thin in-process layer over the existing engine, stores and
 transactions. It adds no authority logic and changes no event format. It gives
@@ -30,7 +32,7 @@ Run the complete, checked example with `npm run sdk:example`
 | `redeem(ticket, observed)` | One atomic step, immediately before the effect: ticket exists, not expired, not redeemed, this enforcement point, same arguments, authority **still valid now**. Writes `CAPABILITY_REDEEMED`. |
 | `report(ticket, { resultCode })` | Records `ACTION_EXECUTED` for a redeemed ticket, built from the journal (see below). An assertion by the enforcement point, not proof that the effect happened. |
 | `guard(call, effect)` | `authorize`, `redeem`, run `effect` only if redeemed, then `report`. Never retries the effect. |
-| `record(events)` | Appends delegations, approvals, revocations through the engine's ingestion rules. |
+| `record(events)` | Appends delegations, approvals, revocations through the engine's ingestion rules. Build the events with `createEventBuilders({ clock })` (see below). |
 | `events()` | Read-only journal. |
 
 Decisions are **results**, never exceptions. Malformed input or configuration
@@ -213,7 +215,36 @@ Both were observed on `main` at `397ba8c`; neither is changed here.
    of this change**. Until it is merged and released, do not issue tickets
    around the SDK.
 
+## Typed event builders
+
+`createEventBuilders({ clock })` returns `delegation`, `subdelegation`,
+`revocation`, `approvalRequest`, `approvalGranted` and `approvalDenied`. Each takes
+a plain object and returns a draft for `record()`. They are strict: exact keys only
+(an unknown key, a getter, a symbol key or a non-plain object is refused), whole
+integer amounts, one currency per delegation (I25, never converted), an approval
+band that is ordered, exact capabilities (a lone `*` is refused, I9), an explicit
+`expiresAt` (`null` means "never"; there is no default), an explicit `canDelegate`,
+canonical instants, short reason codes (`^[A-Z0-9_]{1,64}$`) and opaque ids of 1 to
+256 characters without control characters. The time comes from the clock you pass
+(D34). A refusal throws `AuthorityInputError` before anything reaches the engine.
+
+They add no authority. The engine still decides at ingestion who may delegate,
+revoke or approve: an event it refuses comes back as `accepted: false` from
+`record()`. There is no builder for the events Authority writes itself (action
+requests, tickets, redemptions, reports).
+
+## Packaging
+
+`npm run sdk:package` builds the package (`.sdk-package/`: compiled ESM, `.d.ts`,
+`sql/`, licence) and packs it with `npm pack`. `npm run sdk:package:check` installs
+that tarball in a throwaway project outside the repository, type-checks and runs
+the quickstart under two TypeScript module settings, and checks the exports. The
+generated package is `"private": true` and is not published. It has one public
+entry point; deep imports are closed by the `exports` map; the SDK compiles only
+`domain`, `engine`, `storage` and `sdk` (no CLI, no conformance lab, no proof
+tooling). `pg` is an optional peer dependency used only by `postgresBackend`.
+
 ## Not in this change
 
-Event builders, packaging (`dist`, subpath exports), npm publication, a scripted
-agent demo, Authority Proof signing from the SDK, an HTTP service.
+npm publication, a scripted agent demo, Authority Proof signing from the SDK, an
+HTTP service.
