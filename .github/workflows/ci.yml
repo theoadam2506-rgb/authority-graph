@@ -37,6 +37,9 @@ jobs:
 
       - run: npm run sdk:example
 
+      - name: Agent demo (scripted, offline, self-checking)
+        run: npm run demo:agent
+
       # Builds the SDK package, packs it (npm pack, nothing is published), installs
       # the tarball in a throwaway project outside the repository, type-checks and
       # runs the documented quickstart under two TypeScript module settings, and
