@@ -12,7 +12,7 @@ const ROOT = join(__dirname, "..", "..");
 const DEMO_DIR = join(ROOT, "examples", "agent-demo");
 
 describe("agent demo", () => {
-  it("runs end to end and the tool placed exactly the four orders that were authorized, redeemed once", async () => {
+  it("runs end to end and the tool placed and confirmed exactly the four orders that were authorized, redeemed once", async () => {
     const report = await runAgentDemo();
     expect(report.orders.map((o) => o.orderId)).toEqual(["po-1001", "po-2001", "po-3001", "po-4001"]);
     expect(new Set(report.orders.map((o) => o.idempotencyKey)).size).toBe(4);
@@ -34,12 +34,43 @@ describe("agent demo", () => {
     expect(facts["unknown:effect"]).toBe("EFFECT_FAILED");
   });
 
+  it("7b: the target received one attempt with the idempotency key, the ticket is consumed, the SDK never retries and never calls it a success", async () => {
+    const report = await runAgentDemo();
+    const { facts } = report;
+    // The target system itself received the call, with the ticket id as idempotency key.
+    expect(facts["unknown:effect:attemptsAtTarget"]).toBe(1);
+    expect(report.unconfirmed).toHaveLength(1);
+    expect(report.unconfirmed[0]).toMatchObject({ orderId: "po-7002", amountEur: 700, targetState: "completed, reply lost" });
+    expect(report.unconfirmed[0]?.idempotencyKey).toMatch(/^cap-demo-\d+$/);
+    // The SDK result describes what it observed, and the ticket is consumed.
+    expect(facts["unknown:effect"]).toBe("EFFECT_FAILED");
+    expect(facts["unknown:effect:ticketConsumed"]).toBe(true);
+    expect(facts["unknown:effect:redeemAgain"]).toBe("ALREADY_REDEEMED");
+    // The journal separates the attempt from the absence of a confirmed success, and never says EXECUTED.
+    expect(facts["unknown:effect:journal"]).toBe("ACTION_REQUESTED,CAPABILITY_ISSUED,CAPABILITY_REDEEMED,ACTION_EXECUTED:EFFECT_FAILED");
+    // No confirmed order exists for it: the caller never saw a result.
+    expect(report.orders.map((o) => o.orderId)).not.toContain("po-7002");
+    // The documentation says what EFFECT_FAILED does and does not mean.
+    const doc = readFileSync(join(ROOT, "docs", "v1", "AGENT_DEMO.md"), "utf8");
+    expect(doc).toMatch(/not proof that the external effect did not happen/);
+  });
+
+  it("the I32 bypass is documented as deliberate, in the code and in the guide", () => {
+    const code = readFileSync(join(DEMO_DIR, "scenarios.ts"), "utf8");
+    expect(code).toMatch(/DELIBERATE BYPASS of the typed builders/);
+    expect(code).toMatch(/not a pattern to use/);
+    const doc = readFileSync(join(ROOT, "docs", "v1", "AGENT_DEMO.md"), "utf8");
+    expect(doc).toMatch(/deliberate attempt to bypass the typed\s+builders/);
+    expect(doc).toMatch(/not a pattern to use/);
+  });
+
   it("an unknown outcome is never reported as executed or as a success in the output", async () => {
     const text = formatDemo(await runAgentDemo());
     const seven = text.slice(text.indexOf("7. An unknown outcome"), text.indexOf("Orders the sandbox tool"));
     expect(seven).toMatch(/UNKNOWN_OUTCOME/);
     expect(seven).toMatch(/EFFECT_FAILED/);
-    expect(seven).not.toMatch(/\bEXECUTED\b|ran once|\bREDEEMED\b/);
+    // "never EXECUTED" is the explanation; any other bare EXECUTED, REDEEMED or "ran once" would be a success claim.
+    expect(seven).not.toMatch(/(?<!never )\bEXECUTED\b|ran once|\bREDEEMED\b/);
     expect(seven).toMatch(/NOT a success/);
   });
 

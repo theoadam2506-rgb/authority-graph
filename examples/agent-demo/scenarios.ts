@@ -34,6 +34,15 @@ export interface Order {
   readonly idempotencyKey: string;
 }
 
+export interface UnconfirmedAttempt {
+  readonly orderId: string;
+  readonly amountEur: number;
+  readonly recipient: string;
+  readonly idempotencyKey: string;
+  /** What the target system itself holds. Visible to this simulation only. */
+  readonly targetState: "completed, reply lost";
+}
+
 export interface StepRecord {
   readonly scenario: number;
   readonly title: string;
@@ -44,8 +53,13 @@ export interface StepRecord {
 
 export interface DemoReport {
   readonly steps: readonly StepRecord[];
-  /** Every order the sandbox tool actually placed, in order. */
+  /** Every order the sandbox tool placed AND confirmed to its caller, in order. */
   readonly orders: readonly Order[];
+  /**
+   * Attempts that reached the target system without a confirmed result for the caller (scenario 7b). The demo
+   * can see what the target did; Authority and the SDK cannot.
+   */
+  readonly unconfirmed: readonly UnconfirmedAttempt[];
   /** Facts the tests and the run script assert. */
   readonly facts: Readonly<Record<string, string | number | boolean>>;
 }
@@ -102,6 +116,9 @@ export async function runAgentDemo(): Promise<DemoReport> {
   const clock = new DemoClock();
   const steps: StepRecord[] = [];
   const orders: Order[] = [];
+  /** Every call that REACHED the target system, with the idempotency key it received (the target's own log). */
+  const targetReceived: { orderId: string; idempotencyKey: string }[] = [];
+  const unconfirmed: UnconfirmedAttempt[] = [];
   const facts: Record<string, string | number | boolean> = {};
 
   let eventCounter = 0;
@@ -112,8 +129,19 @@ export async function runAgentDemo(): Promise<DemoReport> {
 
   /** The sandbox tool. It is the ONLY place an "effect" happens, and it records what it received. */
   const placeOrder = async (call: ToolCall, idempotencyKey: string): Promise<string> => {
+    targetReceived.push({ orderId: call.actionId, idempotencyKey });
     orders.push({ orderId: call.actionId, amountEur: call.amount?.value ?? 0, recipient: call.recipient ?? "", idempotencyKey });
     return `order ${call.actionId} placed`;
+  };
+  /**
+   * A target system whose reply is lost. The request REACHES it with the idempotency key and it COMPLETES the
+   * order; then the connection drops and the caller sees only a timeout. This is the fault the SDK must never
+   * turn into a success, and cannot turn into a failure either: it does not know.
+   */
+  const placeOrderReplyLost = async (call: ToolCall, idempotencyKey: string): Promise<never> => {
+    targetReceived.push({ orderId: call.actionId, idempotencyKey });
+    unconfirmed.push({ orderId: call.actionId, amountEur: call.amount?.value ?? 0, recipient: call.recipient ?? "", idempotencyKey, targetState: "completed, reply lost" });
+    throw new Error("tool call timed out after 30s: the reply was lost (simulated)");
   };
   const toolRuns = (): number => orders.length;
   const note = (scenario: number, title: string, call: string, authority: string, tool: string): void => {
@@ -285,7 +313,11 @@ export async function runAgentDemo(): Promise<DemoReport> {
     const reused = await authority.authorize({ ...call, amount: { value: 1900, currency: "EUR" } });
     must(reused.status === "DENIED" && reused.reason === "ACTION_ID_REUSED_WITH_DIFFERENT_CALL", "an action id cannot be reused for a different call");
 
-    // Someone writes around the SDK: a hand-made second CAPABILITY_ISSUED for the same action.
+    // DELIBERATE BYPASS of the typed builders, to test the validation at ingestion. There is no builder for
+    // CAPABILITY_ISSUED on purpose (only Authority writes tickets). Here we play a buggy or hostile writer that
+    // goes around the SDK: copy the real ticket event out of the journal, give it new ids, and defeat the type
+    // system with `as never` (the draft type is not even exported). That `as never` is the point of the test,
+    // not a pattern to use: ingestion must refuse the second ticket whatever the types say.
     const journal = (await authority.events()) as unknown as readonly { readonly event_type: string; readonly payload: { readonly action_id?: string } }[];
     const issued = journal.find((e) => e.event_type === "CAPABILITY_ISSUED" && e.payload.action_id === "po-6001");
     must(issued !== undefined, "the journal holds the ticket of po-6001");
@@ -325,7 +357,10 @@ export async function runAgentDemo(): Promise<DemoReport> {
     note(7, "The redemption's outcome is unknown", describe(call), `UNKNOWN_OUTCOME (${r.status === "BLOCKED" && r.result.status === "UNKNOWN_OUTCOME" ? r.result.code : "?"}); a retry would report ALREADY_REDEEMED either way`, "did not run: NOT a success, NOT a confirmed failure");
     facts["unknown:redeem"] = r.status === "BLOCKED" && r.result.status === "UNKNOWN_OUTCOME" ? r.result.status : "";
 
-    // 7b. The ticket was redeemed, the effect started, and the tool call timed out. Did the order happen? Nobody here knows.
+    // 7b. Authority authorized and consumed the ticket; the target RECEIVED the attempt with the idempotency key and
+    // completed it; its reply was lost. The SDK saw an exception. It reports EFFECT_FAILED, which describes what the
+    // SDK OBSERVED (the call did not return a result). It is NOT proof that the external effect did not happen:
+    // here it did. The SDK never retries; reconciling is the job of whoever holds the idempotency key.
     const healthy = newAuthority(memoryBackend());
     await healthy.record([
       events.delegation({
@@ -339,20 +374,47 @@ export async function runAgentDemo(): Promise<DemoReport> {
       }),
     ]);
     const slow: ToolCall = { ...order("po-7002", 700), delegationId: "d-healthy" };
-    const timedOut = await healthy.guard(slow, async () => {
-      throw new Error("tool call timed out after 30s (simulated)");
+    let handedTicket: Parameters<typeof healthy.redeem>[0] | undefined;
+    let invocations = 0;
+    const timedOut = await healthy.guard(slow, async ({ idempotencyKey, ticket }) => {
+      invocations++;
+      handedTicket = ticket;
+      return placeOrderReplyLost(slow, idempotencyKey);
     });
-    must(timedOut.status === "EFFECT_FAILED" && timedOut.ticketConsumed === true && toolRuns() === before, "an effect that throws is EFFECT_FAILED, never EXECUTED");
+    must(timedOut.status === "EFFECT_FAILED" && timedOut.ticketConsumed === true, "a lost reply is EFFECT_FAILED with the ticket consumed, never EXECUTED");
+    const attempts = targetReceived.filter((r) => r.orderId === "po-7002");
+    must(attempts.length === 1 && invocations === 1, "the target received exactly one attempt, and the SDK made no automatic retry");
+    must(handedTicket !== undefined && attempts[0]?.idempotencyKey === handedTicket.capabilityId, "the attempt carried the ticket's idempotency key");
+    must(toolRuns() === before && !orders.some((o) => o.orderId === "po-7002"), "no confirmed order exists for po-7002: the caller never saw a result");
+    // Nothing re-runs the effect afterwards: the ticket is consumed and the same action stays blocked.
+    const again = handedTicket === undefined ? undefined : await healthy.redeem(handedTicket, slow);
+    must(again?.status === "REFUSED" && again.reason === "ALREADY_REDEEMED", "the consumed ticket cannot be redeemed again");
+    const rerun = await healthy.guard(slow, async () => {
+      invocations++;
+      return "must not run";
+    });
+    must(rerun.status === "BLOCKED" && invocations === 1 && targetReceived.filter((r) => r.orderId === "po-7002").length === 1, "guard() on the same action does not call the tool again");
+    // The journal tells the attempt (CAPABILITY_REDEEMED) apart from the absence of a confirmed success (ACTION_EXECUTED with EFFECT_FAILED).
     const journal = (await healthy.events()) as unknown as readonly { readonly event_type: string; readonly payload: { readonly action_id?: string; readonly execution_result?: string } }[];
-    const reported = journal.find((e) => e.event_type === "ACTION_EXECUTED" && e.payload.action_id === "po-7002");
-    must(reported?.payload.execution_result === "EFFECT_FAILED", "the journal records EFFECT_FAILED, not EXECUTED");
-    note(7, "The tool call times out after redemption", describe(slow), `EFFECT_FAILED (ticket consumed, never retried); journal says ${reported?.payload.execution_result}; check the target with the idempotency key`, "outcome UNKNOWN: not a confirmed success");
+    const forAction = journal.filter((e) => e.payload.action_id === "po-7002").map((e) => e.event_type === "ACTION_EXECUTED" ? `${e.event_type}:${e.payload.execution_result}` : e.event_type);
+    must(forAction.includes("CAPABILITY_REDEEMED") && forAction.includes("ACTION_EXECUTED:EFFECT_FAILED") && !forAction.includes("ACTION_EXECUTED:EXECUTED"), "the journal holds the redemption and EFFECT_FAILED, never EXECUTED");
+    note(
+      7,
+      "The target received the call, its reply was lost",
+      describe(slow),
+      `ticket consumed; the target received 1 attempt with idempotency key ${attempts[0]?.idempotencyKey}; SDK result EFFECT_FAILED (what it observed: no result came back), never EXECUTED; no retry; journal: ${forAction.join(", ")}`,
+      "reached the target; in this simulation the target DID complete it, but nobody who holds the ticket can know: not a confirmed success",
+    );
     facts["unknown:effect"] = timedOut.status;
+    facts["unknown:effect:attemptsAtTarget"] = attempts.length;
+    facts["unknown:effect:ticketConsumed"] = timedOut.status === "EFFECT_FAILED" ? timedOut.ticketConsumed : false;
+    facts["unknown:effect:redeemAgain"] = again?.status === "REFUSED" ? again.reason : "";
+    facts["unknown:effect:journal"] = forAction.join(",");
   }
 
   facts["orders"] = orders.length;
   facts["singleUseTicket"] = singleUseTicketId;
-  return { steps, orders, facts };
+  return { steps, orders, unconfirmed, facts };
 }
 
 // ---------------------------------------------------------------------------
@@ -379,8 +441,10 @@ export function formatDemo(report: DemoReport): string {
     }
     lines.push(`  - ${step.title}`, `      agent asks : ${step.agentAsks}`, `      Authority  : ${step.authority}`, `      tool       : ${step.tool}`);
   }
-  lines.push("", `Orders the sandbox tool actually placed: ${report.orders.length}`);
+  lines.push("", `Orders the sandbox tool placed and confirmed to its caller: ${report.orders.length}`);
   for (const o of report.orders) lines.push(`  - ${o.orderId}: ${o.amountEur} EUR to ${o.recipient} (idempotency key ${o.idempotencyKey})`);
+  lines.push("", `Attempts that reached the target without a confirmed result: ${report.unconfirmed.length}`);
+  for (const u of report.unconfirmed) lines.push(`  - ${u.orderId}: ${u.amountEur} EUR to ${u.recipient} (idempotency key ${u.idempotencyKey}); in this simulation the target ${u.targetState}. Authority and the SDK cannot know: reconcile with the target using the key.`);
   lines.push("", "Every expectation held. This demo does not show exactly-once execution of the external effect, identity verification or an independent audit: see docs/v1/AGENT_DEMO.md.");
   return lines.join("\n").replace(/^\n/, "");
 }

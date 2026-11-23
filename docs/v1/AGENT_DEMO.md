@@ -45,7 +45,7 @@ approval**, nothing above, until the end of 2026.
 | 4 | After authorization, change the amount, the recipient, the tool arguments or the action id | `ARGUMENTS_MISMATCH` / `ACTION_ID_MISMATCH`: refused, **and the ticket is not burned**: the honest call still works | The ticket is bound to the exact call (RFC 8785 digest of the arguments) |
 | 5 | A ticket was issued, then Alice revokes the delegation | Redemption is `AUTHORITY_NO_LONGER_VALID`; new actions are `DENIED`. The agent cannot revoke its own delegation | Authority is re-checked at the last moment |
 | 6 | Ask for the same action again, after redemption and expiry, with other arguments; someone writes a second ticket by hand | Same ticket every time; the reuse is `DENIED`; the hand-written second ticket is refused at ingestion (`BUSINESS_ID_COLLISION`); the journal holds **one** ticket | I32: at most one ticket per action, definitively |
-| 7 | (a) the redemption's acknowledgement is lost; (b) the tool call times out after redemption | (a) `UNKNOWN_OUTCOME`: the tool does not run. (b) `EFFECT_FAILED`: the journal records `EFFECT_FAILED`, never `EXECUTED` | An unknown result is never presented as a confirmed success |
+| 7 | (a) the redemption's acknowledgement is lost; (b) Authority redeems the ticket, the **target system receives the call and completes it, but its reply is lost** | (a) `UNKNOWN_OUTCOME`: the tool does not run. (b) `EFFECT_FAILED`; the ticket is consumed; exactly one attempt reached the target, with the idempotency key; **no retry**; the journal holds `CAPABILITY_REDEEMED` then `ACTION_EXECUTED` with `EFFECT_FAILED`, never `EXECUTED` | An unknown result is never presented as a confirmed success |
 
 ### Expected output
 
@@ -136,33 +136,68 @@ approval**, nothing above, until the end of 2026.
       agent asks : po-7001: 400 EUR to vendor-1
       Authority  : UNKNOWN_OUTCOME (OUTCOME_UNCERTAIN); a retry would report ALREADY_REDEEMED either way
       tool       : did not run: NOT a success, NOT a confirmed failure
-  - The tool call times out after redemption
+  - The target received the call, its reply was lost
       agent asks : po-7002: 700 EUR to vendor-1
-      Authority  : EFFECT_FAILED (ticket consumed, never retried); journal says EFFECT_FAILED; check the target with the idempotency key
-      tool       : outcome UNKNOWN: not a confirmed success
+      Authority  : ticket consumed; the target received 1 attempt with idempotency key cap-demo-8; SDK result EFFECT_FAILED (what it observed: no result came back), never EXECUTED; no retry; journal: ACTION_REQUESTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED:EFFECT_FAILED
+      tool       : reached the target; in this simulation the target DID complete it, but nobody who holds the ticket can know: not a confirmed success
 
-Orders the sandbox tool actually placed: 4
+Orders the sandbox tool placed and confirmed to its caller: 4
   - po-1001: 1200 EUR to vendor-1 (idempotency key cap-demo-1)
   - po-2001: 3500 EUR to vendor-1 (idempotency key cap-demo-2)
   - po-3001: 800 EUR to vendor-1 (idempotency key cap-demo-3)
   - po-4001: 1200 EUR to vendor-1 (idempotency key cap-demo-4)
 
+Attempts that reached the target without a confirmed result: 1
+  - po-7002: 700 EUR to vendor-1 (idempotency key cap-demo-8); in this simulation the target completed, reply lost. Authority and the SDK cannot know: reconcile with the target using the key.
+
 Every expectation held. This demo does not show exactly-once execution of the external effect, identity verification or an independent audit: see docs/v1/AGENT_DEMO.md.
 ```
 
 Read it as: *the agent asks*, *Authority answers*, *the tool did or did not run*.
-Four orders were placed in total (`po-1001`, `po-2001`, `po-3001`, `po-4001`);
-everything else was stopped or is of unknown outcome. The `idempotency key` is
+Four orders were placed **and confirmed** (`po-1001`, `po-2001`, `po-3001`, `po-4001`);
+everything else was stopped, except `po-7002`, which reached the target and has no
+confirmed result (next section). The `idempotency key` is
 the ticket id: **pass it to the real target system** so that it can deduplicate.
 Authority cannot.
+
+## On scenario 7b: what `EFFECT_FAILED` means
+
+In 7b the simulation is deliberately faithful to the hard case. Authority
+authorizes and **consumes the ticket**. The sandbox target then **receives the
+attempt with the idempotency key** (it is the ticket id), **completes the order**,
+and its reply is **lost** (a timeout). The SDK only sees an exception.
+
+`EFFECT_FAILED` describes **the result the SDK observed**: the effect call did not
+return a result. It is **not proof that the external effect did not happen**: in
+this simulation it did, and the final listing shows it under "attempts that
+reached the target without a confirmed result". Neither Authority nor the SDK can
+tell which of the two it was, so they never say "success", never say "it did not
+happen", and never retry. What they guarantee:
+
+- the ticket is consumed and cannot be redeemed again (`ALREADY_REDEEMED`);
+- the SDK made **one** call to the tool, and `guard` on the same action calls it
+  **zero** more times;
+- the journal separates the attempt (`CAPABILITY_REDEEMED`) from the absence of a
+  confirmed success (`ACTION_EXECUTED` with `EFFECT_FAILED`; `report()` is an
+  assertion by the enforcement point, never proof).
+
+Resolving it is for whoever holds the idempotency key: ask the target system what
+it did under that key, or let it deduplicate a retry you make on purpose. The
+"what the target holds" line in the output is the simulation's own knowledge, which
+no component of the real system has. No engine behaviour was changed for this.
 
 ## On scenario 6 and the four layers of I32
 
 Through the SDK, asking again for the same action returns the **same** ticket
 (one fixed idempotency key per action), so the SDK path never even tries to issue
-a second ticket. What the demo shows is what happens when someone writes around
-it: a hand-made second `CAPABILITY_ISSUED` for the same action is refused by
-ingestion. I32 has four layers (issuance kernel, ingestion, issuance transactions,
+a second ticket. The demo then makes a **deliberate attempt to bypass the typed
+builders**, to test the validation at ingestion. There is no builder for
+`CAPABILITY_ISSUED` (only Authority writes tickets), so the demo copies the real
+ticket event out of the journal, gives it new ids and pushes it through `record()`
+with an `as never` cast (the draft type is not even exported). That cast is the
+point of the test: it plays a buggy or hostile writer going around the SDK. It is
+**not a pattern to use**. The second ticket for the same action is refused by
+ingestion (`BUSINESS_ID_COLLISION`). I32 has four layers (issuance kernel, ingestion, issuance transactions,
 PostgreSQL unique index); this demo exercises the ingestion layer on the
 in-memory backend. The kernel refusal (`ACTION_ALREADY_TICKETED`), the
 transactions and the PostgreSQL index are covered by the engine and PostgreSQL
