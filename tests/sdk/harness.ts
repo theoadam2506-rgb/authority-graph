@@ -6,7 +6,7 @@
 import { toDraft } from "../../src/domain/events.js";
 import { thresholds } from "../../src/domain/types.js";
 import type { Money } from "../../src/domain/types.js";
-import { createAuthority, memoryBackend, type Authority, type Backend, type ToolCall } from "../../src/sdk/index.js";
+import { createAuthority, memoryBackend, type Authority, type Backend, type Diagnostic, type ToolCall } from "../../src/sdk/index.js";
 import type { BackendParts } from "../../src/sdk/backend.js";
 import { AGENT_A, EUR, PURCHASE_ORDER_CREATE, THEO, actionRequest, approvalGrant, approvalRequest, revokeDelegation, rootDelegation } from "../fixtures/scenarios.js";
 
@@ -48,14 +48,16 @@ export interface FaultPlan {
   append?: (n: number, draftTypes: readonly string[]) => Fault | undefined;
   issue?: (n: number) => Fault | undefined;
   redeem?: (n: number) => Fault | undefined;
-  /** Error to throw for redeem (default: a plain Error). */
+  /** Error to throw for redeem (default: `error`, else a plain Error). */
   redeemError?: () => Error;
+  /** What every injected failure throws (default: a plain Error). May be any thrown value. */
+  error?: () => unknown;
 }
 
 /** Wraps real parts so that chosen calls throw before ("throw") or after ("throw-after", a lost acknowledgement) the real call. */
 export function faulty(parts: BackendParts, plan: FaultPlan): BackendParts {
   const counters = { getEvents: 0, append: 0, issue: 0, redeem: 0 };
-  const boom = (label: string, error?: () => Error) => (error ? error() : new Error(`injected ${label} failure`));
+  const boom = (label: string, error?: () => unknown): unknown => (error ? error() : plan.error ? plan.error() : new Error(`injected ${label} failure`));
   return {
     store: {
       getEvents: async (filter) => {
@@ -106,6 +108,7 @@ export interface Setup {
 }
 
 export interface SetupOptions {
+  readonly onDiagnostic?: (diagnostic: Diagnostic) => void | Promise<void>;
   readonly totalBudget?: Money;
   readonly ttlMs?: number;
   readonly wrap?: (parts: BackendParts) => BackendParts;
@@ -126,6 +129,7 @@ export async function setup(options: SetupOptions = {}): Promise<Setup> {
     clock,
     enforcementPointId: options.enforcementPointId ?? "ep-1",
     ...(options.ttlMs !== undefined ? { capabilityTtlMs: options.ttlMs } : {}),
+    ...(options.onDiagnostic !== undefined ? { onDiagnostic: options.onDiagnostic } : {}),
   });
   if (real === undefined) throw new Error("backend not built");
   const parts = real;

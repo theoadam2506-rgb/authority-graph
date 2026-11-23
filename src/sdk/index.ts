@@ -11,6 +11,7 @@ export {
   AuthorityConfigError,
   AuthorityInputError,
   type AuthorizeResult,
+  type Diagnostic,
   type EffectContext,
   type GuardResult,
   type RecordResult,
@@ -18,4 +19,6 @@ export {
   type ReportResult,
   type Ticket,
   type ToolCall,
+  type UnavailableCode,
+  type UncertainCode,
 } from "./types.js";

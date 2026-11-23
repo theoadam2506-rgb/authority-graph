@@ -21,6 +21,19 @@ describe("SDK public surface", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("writes nothing and opens no connection of its own: no console, no process output, no network", () => {
+    for (const file of readdirSync(SDK_DIR).filter((f) => f.endsWith(".ts"))) {
+      expect(readFileSync(join(SDK_DIR, file), "utf8"), file).not.toMatch(/\bconsole\.|process\.(stdout|stderr)|\bfetch\(|node:(http|https|net|tls|dgram)/);
+    }
+  });
+
+  it("no public result type carries an error: `cause` / `error: unknown` appear only in the operator-only Diagnostic", () => {
+    const types = readFileSync(join(SDK_DIR, "types.ts"), "utf8");
+    const outsideDiagnostic = types.replace(/export interface Diagnostic \{[\s\S]*?\n\}/, "");
+    expect(outsideDiagnostic).not.toMatch(/\b(cause|error)\??\s*:\s*unknown/);
+    expect(types).toMatch(/export interface Diagnostic/);
+  });
+
   it("does not import the engine's discovery entry point", () => {
     for (const file of readdirSync(SDK_DIR).filter((f) => f.endsWith(".ts"))) {
       expect(readFileSync(join(SDK_DIR, file), "utf8")).not.toMatch(/import[^;]*\bauthorityAt\b/);
