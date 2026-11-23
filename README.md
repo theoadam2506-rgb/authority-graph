@@ -257,7 +257,9 @@ creates a unique index that allows at most one `CAPABILITY_ISSUED` per action, a
 `PostgresCapabilityIssuanceTransaction` refuses to run (`IssuanceSchemaError`)
 without it. Re-apply `schema.sql` after upgrading. If the journal already holds
 several tickets for one action (the engine used to allow it), the migration
-stops with the list of offending action ids and rewrites nothing: see D36 in
+stops with the list of offending action ids and rewrites nothing. Check an existing
+journal first, read-only, and back it up before migrating: see
+[`docs/v1/COMPATIBILITY_I32.md`](./docs/v1/COMPATIBILITY_I32.md) and D36 in
 [`docs/v1/DECISIONS.md`](./docs/v1/DECISIONS.md). An expired or redeemed ticket
 does not free its action: open a new one.
 
@@ -550,7 +552,7 @@ node scripts/check-postgres-report.mjs vitest-postgres.json
 ```
 
 The second command fails unless every PostgreSQL test that ran passed (none
-skipped, failed or todo, at least 108 passed, and each of the ten suites
+skipped, failed or todo, at least 111 passed, and each of the ten suites
 above present with at least one passed test). CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs
 all of the above: the first block on Node 20 and 22 (with the proof-vectors
 check and a replay benchmark smoke test), the PostgreSQL block on Node 20

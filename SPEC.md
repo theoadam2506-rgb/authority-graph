@@ -1114,7 +1114,8 @@ has taken place).
     one more `ACTION_REQUESTED` (its second ticket serves its own action).
     **Migration.** An installation written before I32 may already hold several
     tickets for one action. `schema.sql` refuses once, listing the offending
-    action ids, and rewrites nothing; the operator decides (D36). **Not changed:**
+    action ids, and rewrites nothing; the operator decides (D36; read-only checks, backup and
+    options in `docs/v1/COMPATIBILITY_I32.md`). **Not changed:**
     approval consumption stays with `ACTION_EXECUTED`; moving it to redemption is a
     separate, deferred decision. **Limits:** in memory the rule rests on ingestion
     and the queue (no database); a superuser or the table owner can still drop the

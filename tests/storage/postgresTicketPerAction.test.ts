@@ -175,7 +175,7 @@ describe.skipIf(!available)("I32 schema: the backstop index is required, and the
       expect(err?.hint).toMatch(/D36/);
       expect((await t.pool.query(`SELECT count(*)::int AS c FROM authority_events WHERE event_type = 'CAPABILITY_ISSUED' AND payload ->> 'action_id' = 'old-action'`)).rows[0].c).toBe(2); // not rewritten
       expect((await checkTicketPerActionSchema(t.pool)).join(" ")).toMatch(/missing/); // and the transaction keeps refusing to run
-      // the operator resolves it (here: as the owner, removing one row), then the migration succeeds, twice
+      // (test only: removing a row stands for ANY resolution, to prove the migration then succeeds, twice; deleting rows is NOT recommended, see docs/v1/COMPATIBILITY_I32.md)
       await t.pool.query(`DELETE FROM authority_events WHERE event_id = 'old-2'`);
       await t.pool.query(schemaSql());
       await t.pool.query(schemaSql());
@@ -192,6 +192,95 @@ describe.skipIf(!available)("I32 schema: the backstop index is required, and the
       await t.pool.query(schemaSql());
       expect(await checkTicketPerActionSchema(t.pool)).toEqual([]);
       expect(await ticketRows(t)).toHaveLength(1);
+    } finally {
+      await t.close();
+    }
+  });
+});
+
+describe.skipIf(!available)("I32 compatibility check: read-only SQL (src/storage/check_i32_readonly.sql)", () => {
+  const checkSql = () => readFileSync(new URL("../../src/storage/check_i32_readonly.sql", import.meta.url), "utf8");
+  /** Runs the check inside a READ ONLY transaction, exactly as the documented procedure does. */
+  async function runCheck(t: PgHarness) {
+    const client = await t.pool.connect();
+    try {
+      await client.query("BEGIN READ ONLY");
+      const r = await client.query<{ kind: string; subject: string; detail: string }>(checkSql());
+      await client.query("ROLLBACK");
+      return r.rows;
+    } finally {
+      client.release();
+    }
+  }
+  const fingerprint = async (t: PgHarness) =>
+    (await t.pool.query(`SELECT count(*)::int AS n, max(sequence)::int AS max_seq, md5(string_agg(event_id || ':' || sequence::text, ',' ORDER BY sequence)) AS md5 FROM authority_events`)).rows[0];
+  const verdict = (rows: { kind: string; detail: string }[]) => rows.find((r) => r.kind === "VERDICT")?.detail;
+  const index = (rows: { kind: string; detail: string }[]) => rows.find((r) => r.kind === "I32_INDEX")?.detail;
+
+  it("a clean journal: COMPATIBLE, the index is reported present, and the check changes nothing", async () => {
+    const t = await pgHarness({ label: "i32_chk_clean" });
+    try {
+      expect(ok(await issueFor(t.issuance, "k1"))).toBe(true);
+      const before = await fingerprint(t);
+      const rows = await runCheck(t);
+      expect(verdict(rows)).toBe("COMPATIBLE");
+      expect(index(rows)).toBe("PRESENT_VALID_UNIQUE");
+      expect(rows.find((r) => r.kind === "TICKETS")?.detail).toBe("1");
+      expect(rows.filter((r) => r.kind === "OFFENDER")).toHaveLength(0);
+      expect(await fingerprint(t)).toEqual(before);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("a pre-I32 journal with duplicates: INCOMPATIBLE, each offending action listed with its count, index MISSING / INVALID / NOT_UNIQUE reported, nothing changed", async () => {
+    const t = await pgHarness({ label: "i32_chk_dup" });
+    try {
+      await t.pool.query(`DROP INDEX ${TICKETED_ACTION_INDEX}`);
+      await rawInsert(t.pool, { sequence: 900, event_id: "o-1", event_type: "CAPABILITY_ISSUED", principal_id: "x", payload: { capability_id: "c1", action_id: "act-dup-a" } });
+      await rawInsert(t.pool, { sequence: 901, event_id: "o-2", event_type: "CAPABILITY_ISSUED", principal_id: "x", payload: { capability_id: "c2", action_id: "act-dup-a" } });
+      await rawInsert(t.pool, { sequence: 902, event_id: "o-3", event_type: "CAPABILITY_ISSUED", principal_id: "x", payload: { capability_id: "c3", action_id: "act-dup-a" } });
+      await rawInsert(t.pool, { sequence: 903, event_id: "o-4", event_type: "CAPABILITY_ISSUED", principal_id: "x", payload: { capability_id: "c4", action_id: "act-dup-b" } });
+      await rawInsert(t.pool, { sequence: 904, event_id: "o-5", event_type: "CAPABILITY_ISSUED", principal_id: "x", payload: { capability_id: "c5", action_id: "act-dup-b" } });
+      await rawInsert(t.pool, { sequence: 905, event_id: "o-6", event_type: "CAPABILITY_ISSUED", principal_id: "x", payload: { capability_id: "c6", action_id: "act-fine" } });
+      const before = await fingerprint(t);
+
+      let rows = await runCheck(t);
+      expect(verdict(rows)).toBe("INCOMPATIBLE");
+      expect(index(rows)).toBe("MISSING");
+      expect(rows.filter((r) => r.kind === "OFFENDER").map((r) => [r.subject, r.detail])).toEqual([["act-dup-a", "3 tickets"], ["act-dup-b", "2 tickets"]]);
+      expect(rows.find((r) => r.kind === "OFFENDING_ACTIONS")?.detail).toBe("2");
+      expect(rows.find((r) => r.kind === "ACTIONS_TICKETED")?.detail).toBe("3");
+
+      // an INVALID leftover (a CONCURRENTLY build that failed over the duplicates), then a non-unique index
+      await expect(t.pool.query(`CREATE UNIQUE INDEX CONCURRENTLY ${TICKETED_ACTION_INDEX} ON authority_events ((payload ->> 'action_id')) WHERE event_type = 'CAPABILITY_ISSUED'`)).rejects.toMatchObject({ code: "23505" });
+      expect(index(await runCheck(t))).toBe("INVALID");
+      await t.pool.query(`DROP INDEX ${TICKETED_ACTION_INDEX}`);
+      await t.pool.query(`CREATE INDEX ${TICKETED_ACTION_INDEX} ON authority_events ((payload ->> 'action_id')) WHERE event_type = 'CAPABILITY_ISSUED'`);
+      rows = await runCheck(t);
+      expect(index(rows)).toBe("NOT_UNIQUE");
+      expect(verdict(rows)).toBe("INCOMPATIBLE");
+      expect(await fingerprint(t)).toEqual(before); // no row added, removed or reordered by any of it
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("is read only: it runs inside a READ ONLY transaction (in which a write is refused), and the file contains no statement that writes", async () => {
+    const t = await pgHarness({ label: "i32_chk_ro" });
+    try {
+      const client = await t.pool.connect();
+      try {
+        await client.query("BEGIN READ ONLY");
+        await expect(client.query(`INSERT INTO authority_events (sequence, event_id, event_type, principal_id, schema_version, occurred_at, authority_time, recorded_at, assurance_level, payload) VALUES (1, 'w', 'X', 'p', 1, now(), now(), now(), 'ASSERTED_UNVERIFIED', '{}')`)).rejects.toMatchObject({ code: "25006" });
+        await client.query("ROLLBACK");
+      } finally {
+        client.release();
+      }
+      expect((await runCheck(t)).length).toBeGreaterThan(0);
+      const code = checkSql().split("\n").filter((line) => !line.startsWith("--")).join("\n");
+      expect(code).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|COPY|VACUUM|LOCK|SET)\b/i);
+      expect(code.trim().startsWith("WITH")).toBe(true);
     } finally {
       await t.close();
     }
