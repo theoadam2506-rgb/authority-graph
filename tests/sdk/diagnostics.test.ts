@@ -47,7 +47,10 @@ function reachable(value: unknown, seen = new Set<unknown>(), out: string[] = []
 function expectNoLeak(result: unknown): void {
   const views = [JSON.stringify(result), inspect(result, { depth: null, showHidden: true, getters: true }), String(result), reachable(result).join("\n")];
   expect(() => structuredClone(result), "a result is plain, cloneable data").not.toThrow();
-  for (const view of views) for (const secret of SECRETS) expect(view, `leaked ${secret}`).not.toContain(secret);
+  // The ids Authority generates itself (`diag-<uuid>`, `cap-<uuid>`) are random hex: a short secret such as "5432" can
+  // appear inside one by chance (it did, in CI). They carry nothing from the error, so mask them before searching.
+  const mask = (view: string): string => view.replace(/\b(diag|cap)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g, "$1-<generated-id>");
+  for (const view of views) for (const secret of SECRETS) expect(mask(view), `leaked ${secret}`).not.toContain(secret);
 }
 
 const SUCCESS = new Set(["AUTHORIZED", "REDEEMED", "EXECUTED", "REPORTED", "RECORDED"]);

@@ -484,7 +484,7 @@ audited. Nothing below is a security guarantee.
 | Authority Conformance Lab (V0) | **exists** |
 | `corroborate` command | **deferred** until after the cryptographic review |
 | Independent cryptographic review (D9) | **prepared, not started** |
-| SDK (`authorize`, `redeem`, `report`, `guard`): in-process, experimental; see [`docs/v1/SDK.md`](./docs/v1/SDK.md). Typed event builders and a local tarball (`npm run sdk:package`, see [`SDK_QUICKSTART.md`](./docs/v1/SDK_QUICKSTART.md)) exist; the demo is **planned** | **exists** (PR 5a, 5b), not published |
+| SDK (`authorize`, `redeem`, `report`, `guard`): in-process, experimental; see [`docs/v1/SDK.md`](./docs/v1/SDK.md). Typed event builders and a local tarball (`npm run sdk:package`, see [`SDK_QUICKSTART.md`](./docs/v1/SDK_QUICKSTART.md)) exist; a scripted agent demo (`npm run demo:agent`, see [`AGENT_DEMO.md`](./docs/v1/AGENT_DEMO.md)) exists | **exists** (PR 5a, 5b, 6), not published |
 | npm package | **not published**; no name reserved |
 
 The roadmap and the state of each V1 pull request are in

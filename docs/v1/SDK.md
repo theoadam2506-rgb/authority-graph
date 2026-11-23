@@ -19,7 +19,7 @@ const authority = createAuthority({ backend: memoryBackend(), clock: systemClock
 const result = await authority.guard(call, async ({ idempotencyKey }) => placeOrder(call, idempotencyKey));
 ```
 
-Run the complete, checked example with `npm run sdk:example`
+Run the scripted agent demo (seven scenarios, offline) with `npm run demo:agent` ([`AGENT_DEMO.md`](./AGENT_DEMO.md)). Run the complete, checked example with `npm run sdk:example`
 ([`examples/sdk-guard.ts`](../../examples/sdk-guard.ts)). For a database, use
 `postgresBackend(pool)` after applying `src/storage/schema.sql` (and
 `roles.sql`); the pool and its `error` listener stay yours.
@@ -246,5 +246,5 @@ tooling). `pg` is an optional peer dependency used only by `postgresBackend`.
 
 ## Not in this change
 
-npm publication, a scripted agent demo, Authority Proof signing from the SDK, an
+npm publication, Authority Proof signing from the SDK, an
 HTTP service.
