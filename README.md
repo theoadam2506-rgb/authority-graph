@@ -484,7 +484,7 @@ audited. Nothing below is a security guarantee.
 | Authority Conformance Lab (V0) | **exists** |
 | `corroborate` command | **deferred** until after the cryptographic review |
 | Independent cryptographic review (D9) | **prepared, not started** |
-| SDK (`authorize`, `redeem`, `guard`) | **planned, not started** |
+| SDK (`authorize`, `redeem`, `report`, `guard`): in-process, experimental; see [`docs/v1/SDK.md`](./docs/v1/SDK.md). Builders, packaging and demo are **planned** | **exists** (PR 5a), not published |
 | npm package | **not published**; no name reserved |
 
 The roadmap and the state of each V1 pull request are in
@@ -545,13 +545,14 @@ TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/authority_graph_
   tests/storage/postgresRedemptionReview.test.ts \
   tests/storage/postgresJournalHash.test.ts \
   tests/redemption/redemptionContract.postgres.test.ts \
+  tests/sdk/authority.postgres.test.ts \
   tests/storage/postgresTicketPerAction.test.ts \
   --reporter=default --reporter=json --outputFile.json=vitest-postgres.json
 node scripts/check-postgres-report.mjs vitest-postgres.json
 ```
 
 The second command fails unless every PostgreSQL test that ran passed (none
-skipped, failed or todo, at least 105 passed, and each of the nine suites
+skipped, failed or todo, at least 111 passed, and each of the ten suites
 above present with at least one passed test). CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs
 all of the above: the first block on Node 20 and 22 (with the proof-vectors
 check and a replay benchmark smoke test), the PostgreSQL block on Node 20

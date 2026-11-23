@@ -35,6 +35,8 @@ jobs:
 
       - run: npm run quickstart
 
+      - run: npm run sdk:example
+
       # The published proof vectors must be what the generator produces now.
       - name: Check the proof vectors are up to date
         run: npm run proof:vectors -- --check
@@ -90,6 +92,7 @@ jobs:
           tests/storage/postgresRedemptionReview.test.ts
           tests/storage/postgresJournalHash.test.ts
           tests/redemption/redemptionContract.postgres.test.ts
+          tests/sdk/authority.postgres.test.ts
           tests/storage/postgresTicketPerAction.test.ts
           --reporter=default
           --reporter=json

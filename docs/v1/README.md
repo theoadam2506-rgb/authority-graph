@@ -15,7 +15,7 @@ application can call before a sensitive action. It has four components:
 |---|---|---|
 | **Authority Core** | Deterministic engine: delegations, revocations, restrictions, budgets, explainable decisions; capability issuance; single-use redemption (`CAPABILITY_REDEEMED`) in memory and on PostgreSQL | **exists today** (`src/engine`, `src/storage`); redemption merged in PRs 1 and 2 |
 | **Authority Proof** | Canonical, signed attestations of issuances and redemptions; offline verification L0 to L3 (L3 replays a journal you supply); `authority proof verify` and `authority proof head` | **exists today** (`src/proof`, [`ATTESTATIONS.md`](./ATTESTATIONS.md)), merged in PRs 3 and 4; not independently reviewed; the `corroborate` command is deferred |
-| **Authority SDK** | In-process TypeScript API to check authorization before an action | **planned, not started** |
+| **Authority SDK** | In-process TypeScript API to check authorization before an action | **exists today** (`src/sdk`, [`SDK.md`](./SDK.md)), PR 5a; experimental; packaging and builders (PR 5b) **planned** |
 | **Authority Conformance Lab** | Compares an external authorization system with the engine | **exists today** (V0, `src/conformance`, [`docs/CONFORMANCE.md`](../CONFORMANCE.md)) |
 
 Reading order:
