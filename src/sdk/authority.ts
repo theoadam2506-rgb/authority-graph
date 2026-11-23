@@ -26,7 +26,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { argumentsDigest } from "../domain/canonicalJson.js";
-import { computeActionFingerprint, type CanonicalStore, type DraftAuthorityEvent } from "../domain/events.js";
+import { computeActionFingerprint, type CanonicalStore, type CapabilityIssuedPayload, type ChainLink, type DraftAuthorityEvent } from "../domain/events.js";
 import {
   CURRENT_SCHEMA_VERSION,
   actionId as toActionId,
@@ -49,11 +49,11 @@ import {
   type AuthorityDecision,
   type Capability,
   type DelegationId,
-  type Fingerprint,
   type Iso8601,
   type PrincipalId,
 } from "../domain/types.js";
 import { selectInvokedGrant } from "../engine/grantValidation.js";
+import { validateRedemptionEvent } from "../engine/redeemCapability.js";
 import { RedemptionSchemaError } from "../storage/postgresCapabilityRedemptionTransaction.js";
 import type { Backend, BackendParts } from "./backend.js";
 import { readClock, type TrustedClock } from "./clock.js";
@@ -174,6 +174,23 @@ function refusal(reason: string, decision: AuthorityDecision | undefined): Autho
     }
   }
   return { status: "DENIED", reason };
+}
+
+const RESULT_CODE = /^[A-Z0-9_]{1,64}$/;
+
+const linkKey = (link: ChainLink): string => (link.kind === "delegation" ? `delegation:${link.delegation_id}` : `approval:${link.approval_id}`);
+
+/** The first field of the caller's ticket that disagrees with the journal, if any. */
+function firstMismatch(ticket: Ticket, issued: CapabilityIssuedPayload, requester: PrincipalId): string | undefined {
+  if (ticket.actionId !== issued.action_id) return "actionId";
+  if (ticket.agentId !== requester) return "agentId";
+  if (ticket.fingerprint !== issued.action_fingerprint) return "fingerprint";
+  if (ticket.decisionSequence !== Number(issued.decision_sequence)) return "decisionSequence";
+  if (ticket.enforcementPointId !== issued.enforcement_point_id) return "enforcementPointId";
+  const claimed = Array.isArray(ticket.grantedChain) ? ticket.grantedChain.map(linkKey) : undefined;
+  const actual = issued.granted_chain_ref.map(linkKey);
+  if (claimed === undefined || claimed.length !== actual.length || claimed.some((k, i) => k !== actual[i])) return "grantedChain";
+  return undefined;
 }
 
 function validateTicket(ticket: Ticket): void {
@@ -314,27 +331,51 @@ export function createAuthority(config: AuthorityConfig): Authority {
     }
   }
 
+  /**
+   * The ticket the caller hands in is a plain object and is never trusted: the
+   * ACTION_EXECUTED is built from what the JOURNAL says about this capability
+   * (the issued grant, the request, the redemption), and the caller's ticket
+   * must agree with all of it. A forged or altered ticket records nothing.
+   */
   async function report(ticket: Ticket, outcome: { readonly resultCode: string }): Promise<ReportResult> {
     validateTicket(ticket);
     const code = requireText(outcome?.resultCode, "resultCode");
+    if (!RESULT_CODE.test(code)) {
+      throw new AuthorityInputError("resultCode must match ^[A-Z0-9_]{1,64}$ (a short code, never free text or data)");
+    }
     try {
       const snapshot = await store.getEvents();
-      const redeemed = snapshot.some((e) => e.event_type === "CAPABILITY_REDEEMED" && e.payload.capability_id === ticket.capabilityId);
-      if (!redeemed) return { status: "REJECTED", reason: "TICKET_NOT_REDEEMED" };
-      const isReported = (events: CanonicalStore) => events.some((e) => e.event_type === "ACTION_EXECUTED" && e.payload.action_id === ticket.actionId);
+      let issued: Extract<CanonicalStore[number], { readonly event_type: "CAPABILITY_ISSUED" }> | undefined;
+      let redeemed: Extract<CanonicalStore[number], { readonly event_type: "CAPABILITY_REDEEMED" }> | undefined;
+      for (const event of snapshot) {
+        if (event.event_type === "CAPABILITY_ISSUED" && event.payload.capability_id === ticket.capabilityId) issued = event;
+        if (event.event_type === "CAPABILITY_REDEEMED" && event.payload.capability_id === ticket.capabilityId && redeemed === undefined) redeemed = event;
+      }
+      if (issued === undefined) return { status: "REJECTED", reason: "UNKNOWN_TICKET" };
+      if (redeemed === undefined) return { status: "REJECTED", reason: "TICKET_NOT_REDEEMED" };
+      const request = findRequest(snapshot, issued.payload.action_id);
+      if (request === undefined) return { status: "REJECTED", reason: "ACTION_NOT_FOUND" };
+
+      const mismatch = firstMismatch(ticket, issued.payload, request.payload.requesting_principal_id);
+      if (mismatch !== undefined) return { status: "REJECTED", reason: `TICKET_DOES_NOT_MATCH_JOURNAL:${mismatch}` };
+      if (redeemed.payload.enforcement_point_id !== enforcementPoint) return { status: "REJECTED", reason: "WRONG_ENFORCEMENT_POINT" };
+      const valid = validateRedemptionEvent(snapshot, redeemed);
+      if (!valid.ok) return { status: "REJECTED", reason: `REDEMPTION_NOT_VALID:${valid.reason}` };
+
+      const isReported = (events: CanonicalStore) => events.some((e) => e.event_type === "ACTION_EXECUTED" && e.payload.action_id === issued.payload.action_id);
       if (isReported(snapshot)) return { status: "ALREADY_REPORTED" };
       const draft: DraftAuthorityEvent = {
-        event_id: eventId(`sdk-executed.${ticket.actionId}`),
+        event_id: eventId(`sdk-executed.${issued.payload.action_id}`),
         schema_version: CURRENT_SCHEMA_VERSION,
         occurred_at: readClock(clock),
-        principal_id: toPrincipalId(ticket.agentId),
+        principal_id: request.payload.requesting_principal_id,
         event_type: "ACTION_EXECUTED",
         payload: {
-          action_id: toActionId(ticket.actionId),
-          executed_by_principal_id: toPrincipalId(ticket.agentId),
-          action_fingerprint: ticket.fingerprint as Fingerprint,
-          decision_sequence: sequenceNumber(ticket.decisionSequence),
-          authority_chain_ref: ticket.grantedChain,
+          action_id: issued.payload.action_id,
+          executed_by_principal_id: request.payload.requesting_principal_id,
+          action_fingerprint: issued.payload.action_fingerprint,
+          decision_sequence: issued.payload.decision_sequence,
+          authority_chain_ref: issued.payload.granted_chain_ref,
           execution_result: executionResultCode(code),
         },
       };

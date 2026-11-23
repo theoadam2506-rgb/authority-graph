@@ -28,7 +28,7 @@ Run the complete, checked example with `npm run sdk:example`
 |---|---|
 | `authorize(call)` | Records the call (`ACTION_REQUESTED`), evaluates it for this exact action, and if authorized issues a single-use `Ticket` (`CAPABILITY_ISSUED`). |
 | `redeem(ticket, observed)` | One atomic step, immediately before the effect: ticket exists, not expired, not redeemed, this enforcement point, same arguments, authority **still valid now**. Writes `CAPABILITY_REDEEMED`. |
-| `report(ticket, { resultCode })` | Records `ACTION_EXECUTED` for a redeemed ticket. An assertion by the enforcement point, not proof that the effect happened. |
+| `report(ticket, { resultCode })` | Records `ACTION_EXECUTED` for a redeemed ticket, built from the journal (see below). An assertion by the enforcement point, not proof that the effect happened. |
 | `guard(call, effect)` | `authorize`, `redeem`, run `effect` only if redeemed, then `report`. Never retries the effect. |
 | `record(events)` | Appends delegations, approvals, revocations through the engine's ingestion rules. |
 | `events()` | Read-only journal. |
@@ -63,6 +63,39 @@ look at the journal. The price of this choice is that an effect can be
 If the effect throws, the ticket stays consumed, the failure is reported
 (`EFFECT_FAILED`) and the effect is not retried. If `report` fails, the result
 is still `EXECUTED` with `report: { status: "UNAVAILABLE" }`.
+
+## What `report` checks
+
+The `Ticket` is a plain object the caller can alter, so `report` never trusts
+it. It looks the capability up in the journal and records nothing unless the
+journal and the ticket agree on every one of: the action, the requester's
+identity, the fingerprint, the issuance decision sequence, the granted chain
+and the enforcement point. The recorded event is built from the journal's
+values (requester, fingerprint, decision sequence, granted chain), never from
+the ticket. It also requires, in this order: the capability was issued; it was
+redeemed; the redemption was made at **this** enforcement point; the redemption
+is one the engine accepts as having authorized the action
+(`validateRedemptionEvent`: first redemption, decision sequence immediately
+before it, within the ticket's lifetime, authority valid at that point). A
+redemption that was only a burned ticket (a forged event, or a concurrent write
+detected) cannot be reported.
+
+`resultCode` must match `^[A-Z0-9_]{1,64}$`: a short code, never free text or
+data. The first report wins; a later one answers `ALREADY_REPORTED` and the
+journal keeps the first code. Concurrent identical reports write one event; a
+caller may be told `REPORTED` with the same sequence as another. Tests:
+`tests/sdk/report.test.ts` (alterations of each field, the capability of another
+action, another enforcement point, a forged redemption, concurrency, and the
+engine's own explanation of a journal written by `guard`).
+
+Limits of `report`:
+
+- It is an **assertion** by the enforcement point. The SDK cannot know that the
+  effect really happened, nor that it ran with the redeemed arguments.
+- `record()` is trusted ingress. A forged `ACTION_EXECUTED` written around the
+  SDK is accepted by the engine's ingestion; `explainAction` then exposes it
+  (for example `C6_ACTION_FINGERPRINT_MISMATCH`), but nothing prevents it.
+- The decision sequence recorded is the issuance's, not the redemption's.
 
 ## Guarantees, and where they stop
 
@@ -103,8 +136,10 @@ Both were observed on `main` at `397ba8c`; neither is changed here.
    the approval is consumed only by `ACTION_EXECUTED` (`report`). Through the
    SDK there is exactly one ticket per action (a fixed idempotency key makes the
    issuance atomic), but a caller that issues tickets directly, with its own
-   keys, is not protected. Whether the engine should enforce "one live ticket
-   per action" is a separate decision.
+   keys, is **not protected**. Documenting this is not considered enough: a
+   separate engine correction is proposed in its own document and is **not part
+   of this change**. Until it is merged and released, do not issue tickets
+   around the SDK.
 
 ## Not in this change
 
