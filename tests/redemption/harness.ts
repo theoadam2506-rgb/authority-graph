@@ -63,6 +63,7 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
   seedTime = T("09:05:00");
 
   let counter = 0;
+  let ticketsIssued = 0;
   const ttl = options.ticketTtlMs ?? 5 * 60_000;
   const deps = (): IssueCapabilityDependencies => ({
     nextCapabilityId: () => capabilityId(`cap-redeem-${++counter}`),
@@ -72,7 +73,14 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
   return {
     store, issuance, redemption,
     async issue(at, who = AGENT, key = `k-${counter}`) {
-      const out = await issuance.issue(auth(who), clientIdempotencyKey(key), { action_id: actionId("act-redeem"), enforcement_point_id: EP }, deps(), at);
+      // I32: one ticket per action. The first ticket serves the seeded action; every further ticket
+      // the tests ask for is a ticket for its own, freshly requested, identical action.
+      const act = ticketsIssued++ === 0 ? "act-redeem" : `act-redeem-${ticketsIssued}`;
+      if (act !== "act-redeem") {
+        const requested = await store.append([toDraft(actionRequest({ sequence: 1000 + ticketsIssued, id: act, requester: AGENT, delegationId: "d-redeem", parameters: params }))], at);
+        if (!requested.outcomes.every((o) => o.accepted)) throw new Error(`extra action rejected: ${JSON.stringify(requested)}`);
+      }
+      const out = await issuance.issue(auth(who), clientIdempotencyKey(key), { action_id: actionId(act), enforcement_point_id: EP }, deps(), at);
       if (out.outcome !== "EXECUTED" || !out.result.ok) throw new Error(`issuance failed: ${JSON.stringify(out)}`);
       return out.result.capability.capability_id;
     },

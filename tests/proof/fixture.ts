@@ -71,15 +71,18 @@ export async function buildFixture(options: FixtureOptions = {}): Promise<ProofF
   const redemption = new InMemoryCapabilityRedemptionTransaction(store, { nextAttemptId: () => 1 });
   let n = 0;
   const deps = () => ({ nextCapabilityId: () => capabilityId(`cap-proof-${++n}`), expiresAt: (t: string) => iso8601(new Date(Date.parse(t) + 5 * 60_000).toISOString()) });
-  const issue = async (key: string, at: string) => {
-    const out = await issuance.issue({ principalId: AGENT as never }, clientIdempotencyKey(key), { action_id: actionId("act-proof"), enforcement_point_id: enforcementPointId(EP) }, deps(), T(at));
+  const issue = async (key: string, at: string, action = "act-proof") => {
+    const out = await issuance.issue({ principalId: AGENT as never }, clientIdempotencyKey(key), { action_id: actionId(action), enforcement_point_id: enforcementPointId(EP) }, deps(), T(at));
     if (out.outcome !== "EXECUTED" || !out.result.ok) throw new Error(`fixture issuance failed: ${JSON.stringify(out)}`);
     return out.result.capability.capability_id;
   };
   const first = await issue("k1", "09:10:00");
   const redeemed = await redemption.redeem({ principalId: AGENT as never }, { capability_id: first, enforcement_point_id: enforcementPointId(EP), observed_capability: capability("purchase_order", "create"), observed_parameters: params }, T("09:12:00"));
   if (!redeemed.ok) throw new Error(`fixture redemption failed: ${JSON.stringify(redeemed)}`);
-  const second = await issue("k2", "09:13:00");
+  // I32: one ticket per action, so the second (never redeemed) ticket serves its own, identical action.
+  const secondRequest = await store.append([toDraft(actionRequest({ sequence: 3, id: "act-proof-2", requester: AGENT as never, delegationId: "d-proof", parameters: params }))], T("09:13:00"));
+  if (!secondRequest.outcomes.every((o) => o.accepted)) throw new Error("fixture second action rejected");
+  const second = await issue("k2", "09:13:00", "act-proof-2");
   if (options.revocation === true || options.forgedRedemptionAfterRevocation === true) {
     const r = await store.append([toDraft(revokeDelegation({ sequence: 99, targetId: "d-proof", issuedBy: THEO }))], T("09:14:00"));
     if (!r.outcomes[0]?.accepted) throw new Error("fixture revocation rejected");

@@ -226,3 +226,7 @@ implementing the sections above must reproduce `expected.json`.
 `authority-trusted-keys/v1` are frozen. Any change to a field, an encoding, the
 signing input or the hash construction is a new version string; a verifier
 refuses a version it does not know. There is no algorithm negotiation.
+
+## I32 and replay
+
+L3 replays a journal with the engine's own ingestion rules. Since I32 (D36) those rules refuse a second `CAPABILITY_ISSUED` for the same action, so a journal that tickets an action twice is `REPLAY_REJECTED` at the second ticket and fails L3. The published vectors were regenerated for that change: the fixture journal is now six events (a second action serves the second ticket) and every head, signature and journal in `proof/vectors/` changed. No released journal or attestation is known to contain two tickets for one action.

@@ -252,6 +252,15 @@ barrier (see [What it doesn't do](#what-it-doesnt-do) above, the same
 caveat that already applies to `PostgresEventStore`). The role boundary
 described there is what restricts the application role to read and append.
 
+**One ticket per action (I32), and the migration.** `src/storage/schema.sql` also
+creates a unique index that allows at most one `CAPABILITY_ISSUED` per action, and
+`PostgresCapabilityIssuanceTransaction` refuses to run (`IssuanceSchemaError`)
+without it. Re-apply `schema.sql` after upgrading. If the journal already holds
+several tickets for one action (the engine used to allow it), the migration
+stops with the list of offending action ids and rewrites nothing: see D36 in
+[`docs/v1/DECISIONS.md`](./docs/v1/DECISIONS.md). An expired or redeemed ticket
+does not free its action: open a new one.
+
 **Roles (P2A).** Create the tables with `src/storage/schema.sql` as a
 migration/owner role, then apply `src/storage/roles.sql` the same way
 (`psql --single-transaction -f ...`; idempotent, safe on an existing
@@ -535,12 +544,13 @@ TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/authority_graph_
   tests/storage/postgresJournalHash.test.ts \
   tests/redemption/redemptionContract.postgres.test.ts \
   tests/sdk/authority.postgres.test.ts \
+  tests/storage/postgresTicketPerAction.test.ts \
   --reporter=default --reporter=json --outputFile.json=vitest-postgres.json
 node scripts/check-postgres-report.mjs vitest-postgres.json
 ```
 
 The second command fails unless every PostgreSQL test that ran passed (none
-skipped, failed or todo, at least 98 passed, and each of the nine suites
+skipped, failed or todo, at least 108 passed, and each of the ten suites
 above present with at least one passed test). CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs
 all of the above: the first block on Node 20 and 22 (with the proof-vectors
 check and a replay benchmark smoke test), the PostgreSQL block on Node 20

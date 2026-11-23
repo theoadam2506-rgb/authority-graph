@@ -145,14 +145,17 @@ describe("3. CONCURRENT_WRITE_DETECTED consumes the ticket without authorizing t
     expect((await store.getEvents()).length).toBe(n);
   });
 
-  it("KNOWN COST: the consumed ticket stays engaged, so re-authorizing the same action against a total_budget can fail with CAPACITY_EXCEEDED", async () => {
+  it("KNOWN COST: the consumed ticket stays engaged, so a new action against a total_budget can fail with CAPACITY_EXCEEDED (and, since I32, re-authorizing the same action is refused outright)", async () => {
     const racing = await harness({ storeFactory: (clock) => new RacingStore(clock), totalBudget: EUR(2000) });
     const store = racing.store as RacingStore;
     const id = await racing.issue(T("09:10:00"));
     store.hook = async () => { await store.append([toDraft(actionRequest({ sequence: 99, id: "act-noise", requester: AGENT, delegationId: "d-redeem", parameters: monetaryParameters(EUR(1)) }))], T("09:11:00")); };
     expect(await racing.redemption.redeem(auth(AGENT), racing.command(id), T("09:12:00"))).toMatchObject({ reason: "CONCURRENT_WRITE_DETECTED" });
     const again = await racing.issuance.issue(auth(AGENT), clientIdempotencyKey("again"), { action_id: actionId("act-redeem"), enforcement_point_id: EP }, { nextCapabilityId: () => capabilityId("cap-again"), expiresAt: (t) => iso8601(new Date(Date.parse(t) + 300_000).toISOString()) }, T("09:13:00"));
-    expect(again).toMatchObject({ outcome: "EXECUTED", result: { ok: false, reason: "CAPACITY_EXCEEDED" } });
+    expect(again).toMatchObject({ outcome: "EXECUTED", result: { ok: false, reason: "ACTION_ALREADY_TICKETED" } });
+    await store.append([toDraft(actionRequest({ sequence: 98, id: "act-second", requester: AGENT, delegationId: "d-redeem", parameters: PARAMS }))], T("09:13:00"));
+    const second = await racing.issuance.issue(auth(AGENT), clientIdempotencyKey("second"), { action_id: actionId("act-second"), enforcement_point_id: EP }, { nextCapabilityId: () => capabilityId("cap-second"), expiresAt: (t) => iso8601(new Date(Date.parse(t) + 5 * 60_000).toISOString()) }, T("09:13:00"));
+    expect(second).toMatchObject({ outcome: "EXECUTED", result: { ok: false, reason: "CAPACITY_EXCEEDED" } });
   });
 });
 
