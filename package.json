@@ -17,7 +17,9 @@
     "conformance": "tsx src/conformance/cli.ts",
     "proof:vectors": "tsx scripts/generate-proof-vectors.ts",
     "proof:bench": "tsx scripts/bench-replay.ts",
-    "proof:bench:smoke": "tsx scripts/bench-replay.ts --smoke --budget 60"
+    "proof:bench:smoke": "tsx scripts/bench-replay.ts --smoke --budget 60",
+    "sdk:package": "node scripts/build-sdk-package.mjs --pack",
+    "sdk:package:check": "node scripts/check-sdk-package.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

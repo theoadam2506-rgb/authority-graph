@@ -3,41 +3,28 @@
  * call, then two attempts that must be refused: a replay of the same action and
  * a call whose amount was changed. No database, no network, no API key.
  *
- * `record()` takes events built by hand here; event builders arrive with the
- * packaging pull request (5b). Run with: npm run sdk:example
+ * The delegation is built with the typed event builders. Run with: npm run sdk:example
  */
-import type { DraftAuthorityEvent } from "../src/domain/events.js";
-import { CURRENT_SCHEMA_VERSION, capability, delegationId, eventId, iso8601, money, noExpiry, principalId, thresholds } from "../src/domain/types.js";
-import { createAuthority, memoryBackend, systemClock } from "../src/sdk/index.js";
-
-const OWNER = principalId("human-owner");
-const AGENT = principalId("agent-a");
+import { createAuthority, createEventBuilders, memoryBackend, systemClock } from "../src/sdk/index.js";
 
 const authority = createAuthority({
   backend: memoryBackend(),
   clock: systemClock, // explicit: you choose the time source, and trust it
   enforcementPointId: "purchase-gateway",
 });
+const events = createEventBuilders({ clock: systemClock });
 
-const delegation: DraftAuthorityEvent = {
-  event_id: eventId("evt-delegation-1"),
-  schema_version: CURRENT_SCHEMA_VERSION,
-  occurred_at: iso8601(new Date().toISOString()),
-  principal_id: OWNER,
-  event_type: "DELEGATION_CREATED",
-  payload: {
-    delegation_id: delegationId("d-owner-agent"),
-    grantor_principal_id: OWNER,
-    grantor_type: "HUMAN_ROOT",
-    grantee_principal_id: AGENT,
-    capabilities: [capability("purchase_order", "create")],
-    can_delegate: false,
-    expires_at: noExpiry,
-    thresholds: thresholds(money(2000, "EUR"), money(2000, "EUR")),
-    parent_delegation_id: null,
-  },
-};
-const recorded = await authority.record([delegation]);
+const recorded = await authority.record([
+  events.delegation({
+    delegationId: "d-owner-agent",
+    grantor: "human-owner",
+    grantee: "agent-a",
+    capabilities: [{ resource: "purchase_order", action: "create" }],
+    canDelegate: false,
+    expiresAt: null, // an explicit "no expiry"
+    thresholds: { automaticMax: { value: 2000, currency: "EUR" }, approvalMax: { value: 2000, currency: "EUR" } },
+  }),
+]);
 if (recorded.status !== "RECORDED" || !recorded.outcomes.every((o) => o.accepted)) throw new Error("delegation refused");
 
 const order = {
