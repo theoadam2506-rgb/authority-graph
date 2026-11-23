@@ -109,6 +109,23 @@ An effect's own error is treated the same way: it is not in `EFFECT_FAILED`. To
 handle it in your code, catch inside the effect; the operator gets it through
 `onDiagnostic` (`operation: "guard.effect"`).
 
+**Precautions that stay in force.**
+
+- `onDiagnostic` is **trusted operator code**. It receives raw errors, which can
+  hold credentials. Give it only code you control: never a callback taken from
+  an agent, a plugin, a prompt or user configuration, and never one that writes
+  to a model, a tool result or an HTTP response.
+- The SDK sends **no raw diagnostic to an agent**, and nothing in your integration
+  should either. Pass an agent the public result (status, code, `diagnosticId`) at
+  most.
+- **Programming errors and business outcomes are two separate channels.** Malformed
+  configuration or input (`AuthorityConfigError`, `AuthorityInputError`) is
+  **thrown** before anything runs: treat it as a bug to fix, not as an outcome,
+  and do not forward its message. Decisions and failures of a dependency are
+  **returned** as results and never thrown: `REFUSED`, `DENIED`,
+  `REQUIRES_APPROVAL`, `UNAVAILABLE`, `UNKNOWN_OUTCOME`. Handle both: a
+  `try/catch` for the first, a switch on `status` for the second.
+
 What remains outside this protection: exceptions the SDK **throws** are for the
 developer, not for an agent. `AuthorityInputError` can quote an invalid value
 you passed (for example an amount); `ClockError` has a fixed message and keeps
