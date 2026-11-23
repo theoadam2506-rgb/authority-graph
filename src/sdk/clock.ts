@@ -17,9 +17,10 @@ export const systemClock: TrustedClock = { now: () => new Date().toISOString() }
 
 const CANONICAL_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
+/** Thrown when the injected clock fails. The message is fixed text: whatever the clock threw is kept in `cause` (non-enumerable), never in the message. */
 export class ClockError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = "ClockError";
   }
 }
@@ -30,7 +31,7 @@ export function readClock(clock: TrustedClock): Iso8601 {
   try {
     value = clock.now();
   } catch (cause) {
-    throw new ClockError(`The clock threw: ${cause instanceof Error ? cause.message : String(cause)}`);
+    throw new ClockError("The clock threw", { cause });
   }
   if (typeof value !== "string" || !CANONICAL_INSTANT.test(value) || Number.isNaN(Date.parse(value)) || new Date(value).toISOString() !== value) {
     throw new ClockError("The clock must return a canonical UTC instant such as 2026-01-01T00:00:00.000Z");

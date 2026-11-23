@@ -178,7 +178,8 @@ describe("guard: the effect runs only after a successful redemption", () => {
       runs++;
       throw boom;
     });
-    expect(r).toMatchObject({ status: "EFFECT_FAILED", error: boom, ticketConsumed: true, report: { status: "REPORTED" } });
+    expect(r).toMatchObject({ status: "EFFECT_FAILED", code: "EFFECT_THREW", ticketConsumed: true, report: { status: "REPORTED" } });
+    expect(r).not.toHaveProperty("error"); // the thrown value is not in the result (see diagnostics.test.ts)
     const again = await s.authority.guard(call("a1"), async () => ++runs);
     expect(again.status).toBe("BLOCKED");
     expect(runs).toBe(1);

@@ -56,11 +56,12 @@ import { selectInvokedGrant } from "../engine/grantValidation.js";
 import { validateRedemptionEvent } from "../engine/redeemCapability.js";
 import { RedemptionSchemaError } from "../storage/postgresCapabilityRedemptionTransaction.js";
 import type { Backend, BackendParts } from "./backend.js";
-import { readClock, type TrustedClock } from "./clock.js";
+import { ClockError, readClock, type TrustedClock } from "./clock.js";
 import {
   AuthorityConfigError,
   AuthorityInputError,
   type AuthorizeResult,
+  type Diagnostic,
   type EffectContext,
   type GuardResult,
   type RecordResult,
@@ -68,6 +69,7 @@ import {
   type ReportResult,
   type Ticket,
   type ToolCall,
+  type UnavailableCode,
 } from "./types.js";
 
 export interface AuthorityConfig {
@@ -80,6 +82,13 @@ export interface AuthorityConfig {
   readonly capabilityTtlMs?: number;
   /** Source of ticket identifiers. Default: `cap-<random UUID>`. */
   readonly newId?: () => string;
+  /**
+   * OPERATOR-ONLY diagnostics. Called, synchronously and best-effort, with the full detail
+   * (including the raw error) of every failure whose public result carries only a fixed code and a
+   * `diagnosticId`. Send it to your own log, never to an agent or a client. Without it the detail is
+   * dropped. An exception or a rejected promise from the hook is swallowed: it never changes a result.
+   */
+  readonly onDiagnostic?: (diagnostic: Diagnostic) => void | Promise<void>;
 }
 
 export interface Authority {
@@ -202,6 +211,24 @@ function validateTicket(ticket: Ticket): void {
   }
 }
 
+/** Error codes (Node, PostgreSQL) that mean "could not reach the server". Matched on `code`, never on the message. */
+const UNREACHABLE_CODES = new Set([
+  "ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "ETIMEDOUT", "EPIPE", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH",
+  "57P01", "57P02", "57P03", "08000", "08001", "08003", "08004", "08006",
+]);
+
+/** A fixed code for an unavailable dependency, from the error's TYPE and CODE only; the message is never read. */
+function classify(cause: unknown): UnavailableCode {
+  try {
+    if (cause instanceof ClockError) return "CLOCK_INVALID";
+    if (cause instanceof RedemptionSchemaError) return "SCHEMA_NOT_READY";
+    const code = typeof cause === "object" && cause !== null ? (cause as { code?: unknown }).code : undefined;
+    return typeof code === "string" && UNREACHABLE_CODES.has(code) ? "BACKEND_UNREACHABLE" : "BACKEND_ERROR";
+  } catch {
+    return "INTERNAL_ERROR"; // a hostile error (a throwing getter) is still contained
+  }
+}
+
 export function createAuthority(config: AuthorityConfig): Authority {
   if (typeof config !== "object" || config === null) throw new AuthorityConfigError("A configuration object is required");
   if (typeof config.backend?.build !== "function") throw new AuthorityConfigError("backend is required: memoryBackend() or postgresBackend(pool)");
@@ -219,6 +246,27 @@ export function createAuthority(config: AuthorityConfig): Authority {
   const enforcementPoint = toEnforcementPointId(config.enforcementPointId);
   const parts: BackendParts = config.backend.build({ authorityTime: () => readClock(clock) });
   const { store, issuance, redemption } = parts;
+
+  /** Hands the raw detail to the operator (if a hook is set) and returns the id that correlates it with the public result. */
+  function diagnose(operation: Diagnostic["operation"], code: Diagnostic["code"], cause: unknown, actionId?: string): string {
+    const id = `diag-${randomUUID()}`;
+    const hook = config.onDiagnostic;
+    if (hook !== undefined) {
+      try {
+        const diagnostic = { id, operation, code, ...(actionId !== undefined ? { actionId } : {}) } as Diagnostic;
+        Object.defineProperty(diagnostic, "cause", { value: cause, enumerable: false, writable: false });
+        const pending = hook(diagnostic);
+        if (pending !== undefined && typeof (pending as Promise<void>).then === "function") (pending as Promise<void>).then(undefined, () => undefined);
+      } catch {
+        // an operator hook must never change a result
+      }
+    }
+    return id;
+  }
+  const unavailable = (operation: Diagnostic["operation"], cause: unknown, actionId?: string) => {
+    const code = classify(cause);
+    return { status: "UNAVAILABLE" as const, code, diagnosticId: diagnose(operation, code, cause, actionId) };
+  };
 
   const dependencies = {
     nextCapabilityId: () => toCapabilityId(newId()),
@@ -295,7 +343,7 @@ export function createAuthority(config: AuthorityConfig): Authority {
         },
       };
     } catch (cause) {
-      return { status: "UNAVAILABLE", cause };
+      return unavailable("authorize", cause, normalized.actionId);
     }
   }
 
@@ -307,7 +355,7 @@ export function createAuthority(config: AuthorityConfig): Authority {
     try {
       at = readClock(clock);
     } catch (cause) {
-      return { status: "UNAVAILABLE", cause };
+      return unavailable("redeem", cause, ticket.actionId);
     }
     try {
       const result = await redemption.redeem(
@@ -326,8 +374,8 @@ export function createAuthority(config: AuthorityConfig): Authority {
       return { status: "REFUSED", reason: result.reason, ticketConsumed: result.detail?.ticketConsumed === true };
     } catch (cause) {
       // The schema check runs before anything is written: nothing can have been consumed.
-      if (cause instanceof RedemptionSchemaError) return { status: "UNAVAILABLE", cause };
-      return { status: "UNKNOWN_OUTCOME", cause };
+      if (cause instanceof RedemptionSchemaError) return unavailable("redeem", cause, ticket.actionId);
+      return { status: "UNKNOWN_OUTCOME", code: "OUTCOME_UNCERTAIN", diagnosticId: diagnose("redeem", "OUTCOME_UNCERTAIN", cause, ticket.actionId) };
     }
   }
 
@@ -385,7 +433,7 @@ export function createAuthority(config: AuthorityConfig): Authority {
       if (isReported(await store.getEvents())) return { status: "ALREADY_REPORTED" };
       return { status: "REJECTED", reason: result !== undefined && !result.accepted ? result.reasonCode : "NO_OUTCOME" };
     } catch (cause) {
-      return { status: "UNAVAILABLE", cause };
+      return unavailable("report", cause, ticket.actionId);
     }
   }
 
@@ -402,7 +450,8 @@ export function createAuthority(config: AuthorityConfig): Authority {
     try {
       value = await effect({ idempotencyKey: ticket.capabilityId, ticket });
     } catch (error) {
-      return { status: "EFFECT_FAILED", error, ticketConsumed: true, report: await report(ticket, { resultCode: "EFFECT_FAILED" }) };
+      const diagnosticId = diagnose("guard.effect", "EFFECT_THREW", error, ticket.actionId);
+      return { status: "EFFECT_FAILED", code: "EFFECT_THREW", diagnosticId, ticketConsumed: true, report: await report(ticket, { resultCode: "EFFECT_FAILED" }) };
     }
     return { status: "EXECUTED", value, report: await report(ticket, { resultCode: "EXECUTED" }) };
   }
@@ -415,7 +464,7 @@ export function createAuthority(config: AuthorityConfig): Authority {
         outcomes: appended.outcomes.map((o) => (o.accepted ? { accepted: true, detail: `sequence:${Number(o.sequence)}` } : { accepted: false, detail: o.reasonCode })),
       };
     } catch (cause) {
-      return { status: "UNAVAILABLE", cause };
+      return unavailable("record", cause);
     }
   }
 

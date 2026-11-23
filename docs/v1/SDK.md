@@ -41,13 +41,13 @@ throws (`AuthorityInputError`, `AuthorityConfigError`) before anything runs.
 | `AUTHORIZED` | A ticket was issued (or the same ticket is returned on retry). |
 | `REQUIRES_APPROVAL` | A human approval for this exact action is missing. |
 | `DENIED` / `UNKNOWN` | The engine refused, or could not decide. Both mean "do not run". |
-| `UNAVAILABLE` | Store or clock failed. Never "allowed". Retrying is safe. |
+| `UNAVAILABLE` | Store or clock failed (`code` says which kind, see below). Never "allowed". Retrying is safe. |
 
 | `redeem` | Meaning |
 |---|---|
 | `REDEEMED` | The only status after which an effect may start. |
 | `REFUSED` | A reason such as `ALREADY_REDEEMED`, `ARGUMENTS_MISMATCH`, `AUTHORITY_NO_LONGER_VALID`, `EXPIRED`, `WRONG_ENFORCEMENT_POINT`. |
-| `UNKNOWN_OUTCOME` | The call failed in a way that does not say whether the redemption was written. **Do not run the effect.** |
+| `UNKNOWN_OUTCOME` | The call failed in a way that does not say whether the redemption was written (`code: "OUTCOME_UNCERTAIN"`). **Do not run the effect.** |
 | `UNAVAILABLE` | A failure before anything could have been written. |
 
 ## Uncertain outcomes
@@ -62,7 +62,62 @@ look at the journal. The price of this choice is that an effect can be
 
 If the effect throws, the ticket stays consumed, the failure is reported
 (`EFFECT_FAILED`) and the effect is not retried. If `report` fails, the result
-is still `EXECUTED` with `report: { status: "UNAVAILABLE" }`.
+is still `EXECUTED` with `report: { status: "UNAVAILABLE", ... }`.
+
+## Errors and diagnostics: public results never contain a raw error
+
+A raw error can carry a host name, a user, a connection URL, a password or a
+path. So **no public result contains one**: a result is plain, JSON-safe data
+(statuses, fixed codes, ids that Authority chose) that can be logged,
+serialised or handed to an agent as it is.
+
+| Result | Fields about the failure |
+|---|---|
+| `UNAVAILABLE` (authorize, redeem, report, record) | `code`, `diagnosticId` |
+| `UNKNOWN_OUTCOME` (redeem) | `code: "OUTCOME_UNCERTAIN"`, `diagnosticId` |
+| `EFFECT_FAILED` (guard) | `code: "EFFECT_THREW"`, `diagnosticId`, `ticketConsumed: true`; **not** the thrown value |
+
+`code` for `UNAVAILABLE` is one of `CLOCK_INVALID`, `BACKEND_UNREACHABLE`
+(connection refused, timeout, DNS, server shutdown), `BACKEND_ERROR`,
+`SCHEMA_NOT_READY` and `INTERNAL_ERROR`. It is chosen from the error's **type and
+code**, never copied from, or decided by, its message. The three families stay
+distinct: a failure (`UNAVAILABLE`, nothing written), a refusal (`REFUSED`,
+`DENIED`, `REQUIRES_APPROVAL`) and an uncertain outcome (`UNKNOWN_OUTCOME`). No
+error is ever reported as `AUTHORIZED`, `REDEEMED` or `EXECUTED`, and an
+uncertain redemption is never downgraded to a plain failure or hidden.
+
+**Operator diagnostics.** The detail goes to one place, an explicit hook:
+
+```ts
+const authority = createAuthority({
+  // ...
+  onDiagnostic: (d) => ownerLogger.error({ id: d.id, operation: d.operation, code: d.code, actionId: d.actionId }, d.cause),
+});
+```
+
+`diagnostic.id` is the `diagnosticId` of the public result, so an operator can
+find the raw error for a result an agent saw. `diagnostic.cause` is the raw
+error, by reference, and is **non-enumerable**, so `JSON.stringify(diagnostic)`
+or a spread leaves it out: read it explicitly, and only in an operator log.
+Rules: send diagnostics to your own log, **never** to an agent or a client; the
+hook is called synchronously and best effort; an exception or a rejected
+promise from it is swallowed and never changes a result; without a hook the
+detail is dropped (the results still carry a code and a `diagnosticId`). The SDK
+itself writes nothing: no console, no process output, no network.
+
+An effect's own error is treated the same way: it is not in `EFFECT_FAILED`. To
+handle it in your code, catch inside the effect; the operator gets it through
+`onDiagnostic` (`operation: "guard.effect"`).
+
+What remains outside this protection: exceptions the SDK **throws** are for the
+developer, not for an agent. `AuthorityInputError` can quote an invalid value
+you passed (for example an amount); `ClockError` has a fixed message and keeps
+the clock's own error in its (non-enumerable) `cause`. And `events()` returns
+the journal, which is data, not diagnostics. Tests: `tests/sdk/diagnostics.test.ts`
+(errors with a fictitious internal host, user, connection URL and password,
+thrown from every layer, in several shapes; JSON, `util.inspect`, a deep
+property walk and `structuredClone`; hook failures; a property over random
+faults) and the static checks in `tests/sdk/surface.test.ts`.
 
 ## What `report` checks
 
