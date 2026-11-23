@@ -113,7 +113,41 @@ async function insertIdempotencyRow(
  * of these per call, and never shared with any other call or with
  * `PostgresEventStore.append()`'s own, entirely separate transactions.
  */
+const TICKETED_ACTION_INDEX = "authority_events_ticketed_action_id_uidx";
+
+/** Thrown by `issue` when the I32 index is missing, INVALID, not unique or mis-defined: nothing was written. */
+export class IssuanceSchemaError extends Error {
+  readonly problems: readonly string[];
+  constructor(problems: readonly string[]) {
+    super(`issuance schema check failed: ${problems.join("; ")}`);
+    this.name = "IssuanceSchemaError";
+    this.problems = problems;
+  }
+}
+
+/** Problems with the I32 backstop index (empty when it is in force). Mirrors `checkRedemptionSchema`. */
+export async function checkTicketPerActionSchema(db: Pick<Pool, "query"> | Pick<PoolClient, "query">): Promise<string[]> {
+  const r = await (db as Pick<Pool, "query">).query<{ indisvalid: boolean; indisunique: boolean; def: string }>(
+    `SELECT i.indisvalid, i.indisunique, pg_get_indexdef(i.indexrelid) AS def
+       FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE c.relname = $1 AND i.indrelid = to_regclass('authority_events')`,
+    [TICKETED_ACTION_INDEX],
+  );
+  const row = r.rows[0];
+  if (row === undefined) return [`index ${TICKETED_ACTION_INDEX} is missing: apply src/storage/schema.sql`];
+  const problems: string[] = [];
+  if (!row.indisvalid) problems.push(`index ${TICKETED_ACTION_INDEX} is INVALID (a failed CONCURRENTLY build?): drop it and rebuild; it enforces nothing`);
+  if (!row.indisunique) problems.push(`index ${TICKETED_ACTION_INDEX} is not UNIQUE`);
+  if (!/WHERE \(?event_type = 'CAPABILITY_ISSUED'/.test(row.def) || !/payload ->> 'action_id'/.test(row.def)) {
+    problems.push(`index ${TICKETED_ACTION_INDEX} does not have the expected definition (partial on CAPABILITY_ISSUED, over payload->>'action_id'): ${row.def}`);
+  }
+  return problems;
+}
+
+export { TICKETED_ACTION_INDEX };
+
 export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuanceTransaction {
+  private schemaVerified = false;
   private readonly pool: Pool;
   private readonly readInfrastructureClock: () => string;
 
@@ -142,6 +176,15 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
   ): Promise<CapabilityIssuanceOutcome> {
     const client = await this.pool.connect();
     try {
+      // I32: no issuance runs against a database whose one-ticket-per-action
+      // index is missing, INVALID or mis-defined (the database-level backstop
+      // would not be in force). Checked until it has passed once; a failure
+      // throws, writes nothing and is not cached. Apply src/storage/schema.sql.
+      if (!this.schemaVerified) {
+        const problems = await checkTicketPerActionSchema(client);
+        if (problems.length > 0) throw new IssuanceSchemaError(problems);
+        this.schemaVerified = true;
+      }
       await client.query("BEGIN");
       // Same lock domain as PostgresEventStore.append() — see this
       // module's own docstring and postgresEventStore.ts's.
@@ -235,6 +278,10 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
         // capability_id that ingest.ts's businessIdOf already protects.
         // Fail-closed, never an infrastructure exception — this is a
         // business outcome, and it is idempotent exactly like any other.
+        // I32: a ticket for the same ACTION is refused by the kernel (ACTION_ALREADY_TICKETED) before
+        // this point, under the same lock and the same fresh snapshot; a writer that bypasses the lock
+        // cannot reach here either, it hits the unique index and the transaction throws. What is left
+        // is the generator handing out a capability_id that is already taken.
         const failureResult: IssueCapabilityResult = { ok: false, reason: "CAPABILITY_ID_COLLISION", capability_id: decision.capability.capability_id };
         await insertIdempotencyRow(client, authenticatedPrincipal, clientIdempotencyKey, command, failureResult, undefined, undefined, undefined, this.readInfrastructureClock());
         await client.query("COMMIT");

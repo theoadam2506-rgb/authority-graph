@@ -65,6 +65,7 @@ import type { IssueCapabilityCommand } from "../domain/capabilityCommand.js";
 export type IssueCapabilityRejectionReason =
   | "REQUESTER_MISMATCH"
   | "STALE_AUTHORITY_TIME"
+  | "ACTION_ALREADY_TICKETED"
   | GrantSelectionRejectionReason
   | "CAPACITY_EXCEEDED"
   | "CAPABILITY_ID_COLLISION";
@@ -265,6 +266,20 @@ export function issueCapability(
   const maxVisibleAuthorityTimeMs = computeMaxVisibleAuthorityTimeMs(store);
   if (maxVisibleAuthorityTimeMs !== undefined && Date.parse(authorityTime) < maxVisibleAuthorityTimeMs) {
     return { ok: false, reason: "STALE_AUTHORITY_TIME" };
+  }
+
+  // I32: at most one ticket per action, definitively. Placed after the two
+  // authentication-shaped checks above (their priority is unchanged) and before
+  // any authority resolution, capacity accounting or call to `dependencies`: a
+  // second ticket for an action must never reserve capacity nor consume an id.
+  // An expired or redeemed ticket does not free the action (D36): a new action
+  // is required. The check reads the canonical store, so it also sees a ticket
+  // issued by a different idempotency key, by another transaction instance, or
+  // written by hand.
+  for (const event of store) {
+    if (event.event_type === "CAPABILITY_ISSUED" && event.payload.action_id === command.action_id) {
+      return { ok: false, reason: "ACTION_ALREADY_TICKETED" };
+    }
   }
 
   // 3. snapshotSequence = the last canonical sequence visible right now.

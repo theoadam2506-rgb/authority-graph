@@ -176,7 +176,7 @@ describe("L1: every byte of the document and the signature is bound", () => {
 
   it("a signature that is not canonical base64url, or padded, is refused before any cryptography", async () => {
     const { redemption } = await samples();
-    for (const sig of [redemption.signature.sig + "=", redemption.signature.sig.slice(0, -1), redemption.signature.sig.replace(/-/g, "+")]) {
+    for (const sig of [redemption.signature.sig + "=", redemption.signature.sig.slice(0, -1), "+" + redemption.signature.sig.slice(1)]) {
       const r = verifyAttestation(JSON.stringify({ ...redemption, signature: { ...redemption.signature, sig } }), { keys: testKeys() });
       expect(r.result).toBe("REJECTED");
     }

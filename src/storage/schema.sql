@@ -91,6 +91,42 @@ CREATE UNIQUE INDEX IF NOT EXISTS authority_events_redeemed_capability_id_uidx
   ON authority_events ((payload ->> 'capability_id'))
   WHERE event_type = 'CAPABILITY_REDEEMED';
 
+-- I32 (D36): at most one CAPABILITY_ISSUED row per action, definitively: an
+-- expired or redeemed ticket does not free the action. Same design as the two
+-- indexes above: computed from the existing JSONB payload, additive, idempotent
+-- (IF NOT EXISTS), and the LAST-RESORT guarantee: the issuance transaction
+-- already decides under the writer lock and refuses a second ticket
+-- (ACTION_ALREADY_TICKETED); this index turns any path that bypasses both (a raw
+-- INSERT, a writer that does not take the lock) into a unique violation.
+--
+-- MIGRATION: an installation written before I32 may already hold several tickets
+-- for one action (the engine allowed it). The index cannot be created over such
+-- rows and nothing is rewritten: this block refuses, once, with the offending
+-- action ids, so that the operator decides (the journal is append-only). Nothing
+-- is checked again once the index exists.
+DO $$
+DECLARE
+  offenders text;
+BEGIN
+  IF to_regclass('authority_events_ticketed_action_id_uidx') IS NULL THEN
+    SELECT string_agg(action_id || ' (' || n || ' tickets)', ', ' ORDER BY action_id) INTO offenders
+      FROM (SELECT payload ->> 'action_id' AS action_id, count(*) AS n
+              FROM authority_events
+             WHERE event_type = 'CAPABILITY_ISSUED'
+             GROUP BY payload ->> 'action_id'
+            HAVING count(*) > 1) d;
+    IF offenders IS NOT NULL THEN
+      RAISE EXCEPTION 'I32: cannot create authority_events_ticketed_action_id_uidx: several CAPABILITY_ISSUED rows exist for the same action: %', offenders
+        USING HINT = 'The journal is append-only and is not rewritten. Do not delete the extra ticket. See docs/v1/COMPATIBILITY_I32.md (and D36 in docs/v1/DECISIONS.md) for the checks, the backup and the options.';
+    END IF;
+  END IF;
+END
+$$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS authority_events_ticketed_action_id_uidx
+  ON authority_events ((payload ->> 'action_id'))
+  WHERE event_type = 'CAPABILITY_ISSUED';
+
 -- PR4B-3B: idempotency persistence for the ISSUE_CAPABILITY command. This
 -- table is NOT part of the append-only canonical journal above — it
 -- records the OUTCOME of a command (successful or rejected), not an

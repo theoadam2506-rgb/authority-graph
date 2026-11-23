@@ -940,9 +940,9 @@ PostgreSQL transaction (`PostgresCapabilityRedemptionTransaction`).
     that was written. Consequences, stated plainly: the ticket cannot be
     retried (`ALREADY_REDEEMED`); the event is recognisable because its
     sequence is not `decision_sequence + 1`; the capacity the ticket engaged
-    stays engaged (I29), so re-authorizing the same action against a
-    `total_budget` may be refused `CAPACITY_EXCEEDED`; the effect must not be
-    performed.
+    stays engaged (I29), and since I32 the action is closed (a new action is
+    required, which under a `total_budget` may be refused `CAPACITY_EXCEEDED`);
+    the effect must not be performed.
 
     **PostgreSQL difference, stated plainly.** If a writer that BYPASSES the
     lock commits a row at the sequence the redemption is about to use, the
@@ -957,9 +957,9 @@ PostgreSQL transaction (`PostgresCapabilityRedemptionTransaction`).
     **Accepted V1 trade-off (availability, decided by the project owner).**
     A ticket consumed this way keeps its capacity engaged (I29): capacity
     accounting is deliberately NOT changed in V1. The cost is availability, not
-    safety: under a `total_budget`, re-authorizing the same action after a
-    `CONCURRENT_WRITE_DETECTED` may be refused `CAPACITY_EXCEEDED` until the
-    budget is adjusted by other means. Nothing here, or anywhere in redemption,
+    safety: under a `total_budget`, a new action after a
+    `CONCURRENT_WRITE_DETECTED` (the consumed one cannot be re-ticketed, I32) may
+    be refused `CAPACITY_EXCEEDED` until the budget is adjusted by other means. Nothing here, or anywhere in redemption,
     guarantees that an external effect happens, happens once, or does not
     happen: redemption bounds authorizations only. Revisiting the accounting
     (for example releasing capacity for a redemption that fails I31) is a
@@ -986,8 +986,9 @@ observed, so the effect MUST NOT run on that call. The protocol is:
 (1) retry the same ticket; (2) `REDEEMED` means the first attempt had not
 committed: run the effect once; (3) `ALREADY_REDEEMED` means the ticket is
 consumed (by the lost attempt or by another caller, which Authority cannot
-tell apart): do NOT run the effect, authorize again (a new capability, subject
-to the capacity cost accepted in D12). The result is at-most-once
+tell apart): do NOT run the effect. Since I32 the action is closed: open a new
+action (a new `ACTION_REQUESTED`, and a new approval if one was needed), subject
+to the capacity cost accepted in D12. The result is at-most-once
 AUTHORIZATION: a legitimate effect may be lost (liveness), Authority never
 produces a second `ok:true`. Telling the lost attempt apart from another caller
 (a per-attempt recovery token) is NOT provided in V1. Tests:
@@ -1026,9 +1027,9 @@ Redemption outcomes (what each result means for the ticket and for the log):
 | Result | Event written | Ticket consumed | Effect may run | Caller should |
 |---|---|---|---|---|
 | `REDEEMED` | yes, at `decision_sequence + 1` | yes | yes | perform the effect, once |
-| `CAPABILITY_NOT_FOUND`, `CAPABILITY_NOT_VALID`, `REQUESTER_MISMATCH`, `WRONG_ENFORCEMENT_POINT`, `EXPIRED`, `ARGUMENTS_MISMATCH`, `AUTHORITY_NO_LONGER_VALID`, `STALE_AUTHORITY_TIME` | no | no | no | fix the cause or authorize again |
+| `CAPABILITY_NOT_FOUND`, `CAPABILITY_NOT_VALID`, `REQUESTER_MISMATCH`, `WRONG_ENFORCEMENT_POINT`, `EXPIRED`, `ARGUMENTS_MISMATCH`, `AUTHORITY_NO_LONGER_VALID`, `STALE_AUTHORITY_TIME` | no | no | no | fix the cause and retry the same ticket; if it expired, open a new action (I32) |
 | `ALREADY_REDEEMED`, `REDEMPTION_COLLISION` | no (by this call) | yes, by another call | no | not retry; this call never authorized the effect |
-| `CONCURRENT_WRITE_DETECTED` (in memory) | yes, but not at `decision_sequence + 1` | yes | **no** | authorize again (may hit `CAPACITY_EXCEEDED`) |
+| `CONCURRENT_WRITE_DETECTED` (in memory) | yes, but not at `decision_sequence + 1` | yes | **no** | open a new action (I32); it may hit `CAPACITY_EXCEEDED` |
 | `CONCURRENT_WRITE_DETECTED` (PostgreSQL: a lock-bypassing writer took the sequence, or the journal has a gap) | no (rolled back) | no | **no** | retry; the decision is re-made on the new journal |
 | `RedemptionSchemaError` (PostgreSQL: the redemption index is missing, invalid, not unique or mis-defined) | no (thrown before anything is written) | no | **no** | apply the migration, then retry the same ticket (the failure is not cached) |
 | any other exception (PostgreSQL: connection lost, server error; the outcome is unknown) | unknown | unknown | **no** | retry the same ticket (see "Unknown outcome and recovery") |
@@ -1067,6 +1068,61 @@ behaviour under production load (never
 benchmarked); a PostgreSQL major version other than the one CI runs, or a driver
 other than node-postgres; the external effect; and any independent review (none
 has taken place).
+
+## One ticket per action (V1): I32
+
+32. **I32: At most one `CAPABILITY_ISSUED` exists per `action_id`, definitively.**
+    A ticket is the right to run ONE action, and an approval is bound to one
+    action (I6); several tickets for one approved action would let one approval
+    buy several effects. Observed before I32: with different idempotency keys one
+    approved action obtained two tickets and both were redeemed (the approval is
+    consumed only by `ACTION_EXECUTED`). The rule is definitive (decision D36,
+    variant A): **an expired, redeemed or burned ticket does not free the
+    action**; a new action (a new `ACTION_REQUESTED`, and a new approval where one
+    is needed) is required. It is enforced in four independent layers, like I28:
+    1. *Kernel.* `issueCapability` refuses with `ACTION_ALREADY_TICKETED` when the
+       canonical log holds a ticket for the action, whatever its `capability_id`,
+       idempotency key, enforcement point or issuance instance. The refusal
+       precedence is fixed: action not found, requester mismatch, stale instant,
+       **action already ticketed**, authority resolution, capacity. It runs before
+       any capacity accounting and before any call to the injected `nextCapabilityId`
+       and `expiresAt`.
+    2. *Ingestion.* A `CAPABILITY_ISSUED` carries two business ids, its
+       `capability_id` and a `ticketed_action_id` (a kind distinct from the
+       `action_id` of the `ACTION_REQUESTED` it serves). A second ticket for an
+       action is refused as `BUSINESS_ID_COLLISION` for every writer that goes
+       through ingestion, including hand-written events and a store rebuilt from
+       persisted rows. An exact duplicate of the existing ticket stays an I8 no-op.
+    3. *Transactions.* Issuance decides and writes under the writer lock after a
+       fresh read (PostgreSQL) or under the per-instance queue (in memory); an
+       action ticketed in between by a writer that bypassed the transaction is
+       reported as `ACTION_ALREADY_TICKETED`, not as a `capability_id` collision.
+    4. *PostgreSQL backstop.* A partial unique index
+       `authority_events_ticketed_action_id_uidx` over `payload->>'action_id'`
+       for `CAPABILITY_ISSUED`. A raw INSERT or a lock-bypassing writer gets a
+       unique violation, never a second row; the issuance transaction throws
+       and caches nothing. `IssuanceSchemaError` is raised, before anything is
+       written, when the index is missing, INVALID, not unique or mis-defined
+       (the same discipline as `RedemptionSchemaError`).
+
+    Idempotency is unchanged: the same key still replays the original result; a
+    different key for the same action is a fresh refusal, and that refusal replays
+    like any other (I23). **Replay and proof.** `replayCanonicalStore` re-ingests
+    with the same rule, so a journal that tickets an action twice is
+    `REPLAY_REJECTED` at the second ticket and fails L3 verification. The
+    published proof vectors were regenerated because the fixture journal now holds
+    one more `ACTION_REQUESTED` (its second ticket serves its own action).
+    **Migration.** An installation written before I32 may already hold several
+    tickets for one action. `schema.sql` refuses once, listing the offending
+    action ids, and rewrites nothing; the operator decides (D36; read-only checks, backup and
+    options in `docs/v1/COMPATIBILITY_I32.md`). **Not changed:**
+    approval consumption stays with `ACTION_EXECUTED`; moving it to redemption is a
+    separate, deferred decision. **Limits:** in memory the rule rests on ingestion
+    and the queue (no database); a superuser or the table owner can still drop the
+    index or alter rows (P2A scope). Tests: `tests/engine/ticketPerAction.test.ts`
+    and, on PostgreSQL 16, `tests/storage/postgresTicketPerAction.test.ts`
+    (concurrent pools, real OS processes, a writer interleaving between the
+    snapshot and the INSERT, the index, the schema check and the migration).
 
 ## I6 — action-instance approval binding
 
