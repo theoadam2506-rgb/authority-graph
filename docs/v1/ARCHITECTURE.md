@@ -7,7 +7,7 @@ Status: experimental. **exists today** and **planned** are marked. Authority Cor
         | guard(request, effect)
         v
  +-----------------------------------------------------------------+
- | Authority SDK  (planned, src/sdk)                               |
+ | Authority SDK  (5a exists in src/sdk; see SDK.md)                |
  |   authorize / redeem / report / guard                           |
  |   injected: TrustedClock, authenticate, ProofSigner?, id source |
  |   failure policy: fail-closed (the only option in V1)           |
@@ -46,7 +46,7 @@ The SQL schema needs no change for it: `authority_events.event_type` is
 (`src/storage/schema.sql`). The PostgreSQL transaction adds an additive, idempotent partial unique index on
 redeemed `capability_id` in `schema.sql` (the migration).
 
-## The cycle of a sensitive action (the transactions exist; the SDK that orchestrates them is planned)
+## The cycle of a sensitive action (the transactions and the SDK 5a that orchestrates them exist)
 
 1. **authorize.** The application asks for a decision bound to this exact
    call: tool name, canonical arguments digest, amount, recipient. If the
