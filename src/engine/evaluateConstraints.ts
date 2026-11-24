@@ -10,6 +10,7 @@
 import { computeActionFingerprint } from "../domain/events.js";
 import type { AuthorityEvent, CanonicalStore, ChainLink } from "../domain/events.js";
 import { MAX_CHAIN_DEPTH, isWellFormedActionParameters, isWellFormedMoney, monetaryUnitOf, type ActionId, type ActionParameters, type ApprovalId, type AuthorityDecision, type Capability, type DelegationId, type Money, type PrincipalId } from "../domain/types.js";
+import { JournalLookup } from "./journalIndex.js";
 import { isNotCausallyAfter } from "./causality.js";
 import { recordedChainIntegrity, recordedTerminalId } from "./provenance.js";
 import type { DelegationEvent } from "./validateChain.js";
@@ -54,17 +55,23 @@ function findDelegation(delegationId: DelegationId, visibleStore: CanonicalStore
  * of the array is trustworthy — recordedChainIntegrity (provenance.ts)
  * answers that separate, stricter, audit-only question.
  */
+/** Optional call-local index: same answers as `findDelegation`, same error on a malformed journal (journalIndex.ts). */
+function findDelegationVia(lookup: JournalLookup | undefined, delegationId: DelegationId, visibleStore: CanonicalStore): DelegationEvent | undefined {
+  return lookup === undefined ? findDelegation(delegationId, visibleStore) : lookup.delegation(delegationId, (id) => findDelegation(id, visibleStore));
+}
+
 function terminalDelegationOf(
   chain: readonly ChainLink[],
   invokedDelegationId: DelegationId,
   executor: PrincipalId,
   visibleStore: CanonicalStore,
+  lookup?: JournalLookup,
 ): DelegationId | undefined {
   const citesInvokedDelegation = chain.some((link) => link.kind === "delegation" && link.delegation_id === invokedDelegationId);
   if (!citesInvokedDelegation) {
     return undefined;
   }
-  const delegation = findDelegation(invokedDelegationId, visibleStore);
+  const delegation = findDelegationVia(lookup, invokedDelegationId, visibleStore);
   return delegation?.payload.grantee_principal_id === executor ? invokedDelegationId : undefined;
 }
 
@@ -92,13 +99,13 @@ function terminalDelegationOf(
  * avec la livraison hors-ordre"). Cycle/depth-bounded exactly like I10, so
  * a maliciously cyclic graph can never make this loop unboundedly.
  */
-function ancestorDelegationIds(terminalId: DelegationId, visibleStore: CanonicalStore): ReadonlySet<DelegationId> {
+function ancestorDelegationIds(terminalId: DelegationId, visibleStore: CanonicalStore, lookup?: JournalLookup): ReadonlySet<DelegationId> {
   const reachable = new Set<DelegationId>();
   let currentId: DelegationId | undefined = terminalId;
   let steps = 0;
   while (currentId !== undefined && !reachable.has(currentId)) {
     reachable.add(currentId);
-    const node = findDelegation(currentId, visibleStore);
+    const node = findDelegationVia(lookup, currentId, visibleStore);
     if (node === undefined || node.event_type === "DELEGATION_CREATED") {
       break;
     }
@@ -121,7 +128,7 @@ function ancestorDelegationIds(terminalId: DelegationId, visibleStore: Canonical
  * checks are cheap and non-recursive: they only compare fields already
  * immutable on already-ingested events, never re-derive a decision.
  */
-function isDemonstrablyTiedToItsExecutor(execution: Extract<AuthorityEvent, { readonly event_type: "ACTION_EXECUTED" }>, request: ActionRequestedEvent, visibleStore: CanonicalStore): boolean {
+function isDemonstrablyTiedToItsExecutor(execution: Extract<AuthorityEvent, { readonly event_type: "ACTION_EXECUTED" }>, request: ActionRequestedEvent, visibleStore: CanonicalStore, lookup?: JournalLookup): boolean {
   if (request.payload.requesting_principal_id !== execution.payload.executed_by_principal_id) {
     return false; // someone other than the requester claims to have executed it
   }
@@ -130,8 +137,9 @@ function isDemonstrablyTiedToItsExecutor(execution: Extract<AuthorityEvent, { re
     request.payload.delegation_id,
     execution.payload.executed_by_principal_id,
     visibleStore,
+    lookup,
   );
-  const terminalDelegation = terminalDelegationId === undefined ? undefined : findDelegation(terminalDelegationId, visibleStore);
+  const terminalDelegation = terminalDelegationId === undefined ? undefined : findDelegationVia(lookup, terminalDelegationId, visibleStore);
   if (terminalDelegation === undefined || terminalDelegation.payload.grantee_principal_id !== execution.payload.executed_by_principal_id) {
     return false; // the cited chain does not even terminate at the executor
   }
@@ -150,6 +158,8 @@ function isDemonstrablyTiedToItsExecutor(execution: Extract<AuthorityEvent, { re
 export function remainingBudget(delegationId: DelegationId, totalBudget: Money, visibleStore: CanonicalStore): number {
   let spent = 0;
   const chargedActionIds = new Set<ActionRequestedEvent["payload"]["action_id"]>();
+  // Call-local index (journalIndex.ts): replaces the repeated linear scans below; identical answers and errors.
+  const lookup = new JournalLookup(visibleStore);
   for (const event of visibleStore) {
     if (event.event_type !== "ACTION_EXECUTED") {
       continue;
@@ -160,7 +170,7 @@ export function remainingBudget(delegationId: DelegationId, totalBudget: Money, 
     if (!citesDelegation) {
       continue;
     }
-    const request = findActionRequested(event.payload.action_id, visibleStore);
+    const request = lookup.actionRequested(event.payload.action_id, (id) => findActionRequested(id, visibleStore));
     if (request === undefined) {
       continue;
     }
@@ -180,15 +190,16 @@ export function remainingBudget(delegationId: DelegationId, totalBudget: Money, 
       request.payload.delegation_id,
       event.payload.executed_by_principal_id,
       visibleStore,
+      lookup,
     );
-    const ancestry = terminalDelegationId === undefined ? undefined : ancestorDelegationIds(terminalDelegationId, visibleStore);
+    const ancestry = terminalDelegationId === undefined ? undefined : ancestorDelegationIds(terminalDelegationId, visibleStore, lookup);
     if (ancestry === undefined || !ancestry.has(delegationId)) {
       continue;
     }
     if (chargedActionIds.has(request.payload.action_id)) {
       continue; // I20: multiple ACTION_EXECUTED for the same action_id (retry/replay under a new event_id) debit exactly once
     }
-    if (!isDemonstrablyTiedToItsExecutor(event, request, visibleStore)) {
+    if (!isDemonstrablyTiedToItsExecutor(event, request, visibleStore, lookup)) {
       continue; // I20: not a legitimate debit against this chain — PROMPT 6b finding #2
     }
     // I25: only an amount in the budget's own currency is ever debited from

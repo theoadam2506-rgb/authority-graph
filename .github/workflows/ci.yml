@@ -104,6 +104,7 @@ jobs:
           tests/redemption/redemptionContract.postgres.test.ts
           tests/sdk/authority.postgres.test.ts
           tests/storage/postgresTicketPerAction.test.ts
+          tests/engine/o1Backends.test.ts
           --reporter=default
           --reporter=json
           --outputFile.json=vitest-postgres.json

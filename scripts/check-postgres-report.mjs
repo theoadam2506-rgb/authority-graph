@@ -17,15 +17,15 @@
 import { readFileSync } from "node:fs";
 
 /**
- * Floor on the number of passed PostgreSQL tests: the count of the ten
- * required suites below (3 + 15 + 14 + 21 + 2 + 28 + 1 + 8 + 9 + 13 = 114). Raised from 30
+ * Floor on the number of passed PostgreSQL tests: the count of the eleven
+ * required suites below (3 + 15 + 14 + 21 + 2 + 28 + 1 + 8 + 9 + 13 + 2 = 116). Raised from 30
  * when the five redemption and proof suites were added to the job: the guard
  * used to require only the first three files, so dropping any of the later five
  * from the CI command went unnoticed. New tests may raise the real count;
  * `numPassedTests === numTotalTests` covers them. Never lower this floor
  * silently.
  */
-const MIN_PASSED_TESTS = 114;
+const MIN_PASSED_TESTS = 116;
 
 /**
  * The test files the PostgreSQL job must run, relative to the repository root.
@@ -44,6 +44,7 @@ const REQUIRED_TEST_FILES = [
   "tests/redemption/redemptionContract.postgres.test.ts",
   "tests/sdk/authority.postgres.test.ts",
   "tests/storage/postgresTicketPerAction.test.ts",
+  "tests/engine/o1Backends.test.ts",
 ];
 
 const COUNT_FIELDS = ["numTotalTests", "numPassedTests", "numFailedTests", "numPendingTests", "numTodoTests"];
