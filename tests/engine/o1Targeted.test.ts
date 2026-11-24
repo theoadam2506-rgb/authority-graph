@@ -4,7 +4,7 @@
  * semantics and malformed events placed after a match.
  */
 import { describe, expect, it } from "vitest";
-import { issueProbe, OPTIMIZED, REFERENCE, scenario, singleFaults, observe } from "./helpers/o1.js";
+import { compareEngines, genJournal, issueProbe, OPTIMIZED, REFERENCE, scenario, singleFaults, observe } from "./helpers/o1.js";
 import { JournalLookup } from "../../src/engine/journalIndex.js";
 import { isJournalShapeSound } from "../../src/engine/journalShape.js";
 
@@ -40,6 +40,64 @@ describe("O1 targeted fault injection with guaranteed reach", () => {
         if (!b.ok) expect({ fault: f.label, sound: isJournalShapeSound(f.journal) }).toEqual({ fault: f.label, sound: false });
       }
     }
+  });
+});
+
+describe("shape check contract on CAPABILITY_ISSUED", () => {
+  it("every required field of a grant, expires_at included, is checked: a missing or mistyped one is shape-unsound, and the engines still agree", async () => {
+    const prefix = await scenario(true);
+    const i = prefix.findIndex((e) => e.event_type === "CAPABILITY_ISSUED");
+    expect(i).toBeGreaterThan(0);
+    for (const field of Object.keys(prefix[i].payload)) {
+      for (const bad of [undefined, null, [], {}, true, "zzz"]) {
+        if (bad === "zzz" && field !== "decision_sequence") continue; // a string is a valid value for the string fields
+        if (Array.isArray(bad) && field === "granted_chain_ref") continue; // an empty chain is structurally valid (the engine rejects it by its own rules)
+        const j: any[] = JSON.parse(JSON.stringify(prefix));
+        if (bad === undefined) delete j[i].payload[field]; else j[i].payload[field] = bad;
+        expect({ field, bad, sound: isJournalShapeSound(j) }).toEqual({ field, bad, sound: false });
+        expect(issueProbe(OPTIMIZED, j, "agent", "act-2")).toEqual(issueProbe(REFERENCE, j, "agent", "act-2"));
+      }
+    }
+  });
+});
+
+describe("ACTION_EXECUTED.payload.execution_result", () => {
+  const BAD = [undefined, null, 42, true, [], {}, ["EXECUTED"]];
+
+  it("a missing or non-string execution_result makes the journal shape-unsound (original path), and the engines agree on result and errors", async () => {
+    for (const bounded of [false, true]) {
+      const prefix = await scenario(bounded);
+      expect(isJournalShapeSound(prefix)).toBe(true);
+      const idx = prefix.map((e, i) => (e.event_type === "ACTION_EXECUTED" ? i : -1)).filter((i) => i >= 0);
+      expect(idx.length).toBeGreaterThan(0);
+      for (const i of idx) {
+        for (const bad of BAD) {
+          const j: any[] = JSON.parse(JSON.stringify(prefix));
+          if (bad === undefined) delete j[i].payload.execution_result; else j[i].payload.execution_result = bad;
+          expect({ i, bad, sound: isJournalShapeSound(j) }).toEqual({ i, bad, sound: false });
+          expect(issueProbe(OPTIMIZED, j, "agent", "act-2")).toEqual(issueProbe(REFERENCE, j, "agent", "act-2"));
+          expect(compareEngines(j).divergences).toEqual([]);
+        }
+      }
+    }
+  });
+
+  it("random journals with a damaged execution_result: no result, error or evaluation-order divergence", async () => {
+    let damaged = 0;
+    for (let s = 1; s <= 120; s++) {
+      const base = await genJournal(s, 60, { budgetBias: s % 2 ? 0.7 : 0 });
+      for (let i = 0; i < base.length; i++) {
+        if (base[i].event_type !== "ACTION_EXECUTED") continue;
+        for (const bad of BAD) {
+          const j: any[] = JSON.parse(JSON.stringify(base));
+          if (bad === undefined) delete j[i].payload.execution_result; else j[i].payload.execution_result = bad;
+          damaged++;
+          expect(compareEngines(j).divergences).toEqual([]);
+        }
+        break; // one ACTION_EXECUTED per journal keeps the run short
+      }
+    }
+    expect(damaged).toBeGreaterThan(300);
   });
 });
 

@@ -52,7 +52,7 @@ function isPayloadSound(type: unknown, p: unknown): boolean {
     case "APPROVAL_DENIED":
       return isStr(p.approval_id) && isStr(p.action_id) && isStr(p.denying_principal_id) && isStr(p.reason_code);
     case "ACTION_EXECUTED":
-      return isStr(p.action_id) && isStr(p.executed_by_principal_id) && isStr(p.action_fingerprint) && isInt(p.decision_sequence) && isChain(p.authority_chain_ref);
+      return isStr(p.action_id) && isStr(p.executed_by_principal_id) && isStr(p.action_fingerprint) && isInt(p.decision_sequence) && isChain(p.authority_chain_ref) && isStr(p.execution_result);
     case "CAPABILITY_ISSUED":
       return isStr(p.capability_id) && isStr(p.action_id) && isStr(p.action_fingerprint) && isInt(p.decision_sequence) && isChain(p.granted_chain_ref) && isStr(p.enforcement_point_id) && isStr(p.expires_at);
     case "CAPABILITY_REDEEMED":

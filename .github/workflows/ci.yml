@@ -59,6 +59,12 @@ jobs:
       - name: Check the README demo excerpt against the real demo output
         run: node scripts/check-readme-demo-excerpt.mjs
 
+      # O1 targeted mutations: fails the job if the baseline fails, a mutant definition is broken, a mutant survives
+      # (the differential tests still pass) or the script itself fails. Linux, one Node version: it is slow by design.
+      - name: O1 mutation check (every mutant must be killed)
+        if: ${{ matrix.node-version == 22 }}
+        run: scripts/o1-mutation-check.sh
+
   postgres:
     name: PostgreSQL 16
     runs-on: ubuntu-latest
