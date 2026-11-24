@@ -122,3 +122,35 @@ jobs:
           name: vitest-postgres-report
           path: vitest-postgres.json
           if-no-files-found: warn
+
+  # Experimental example (architecture A of the OpenAI Agents SDK integration): an isolated package with its own
+  # lockfile, on Node 22 only. It consumes the SDK from a locally built tarball (nothing is published), uses a scripted
+  # model (no API key, no network call to OpenAI) and adds no dependency to the root package.
+  openai-agents-example:
+    name: OpenAI Agents SDK example (Node 22)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            examples/openai-agents/package-lock.json
+
+      - run: npm ci
+
+      - name: Build the SDK tarball (nothing is published)
+        run: npm run sdk:package
+
+      - name: Install the example's pinned dependencies and the SDK tarball
+        run: npm ci
+        working-directory: examples/openai-agents
+
+      - run: npm run typecheck
+        working-directory: examples/openai-agents
+
+      - run: npm test
+        working-directory: examples/openai-agents

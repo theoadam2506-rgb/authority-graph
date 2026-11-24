@@ -1,0 +1,25 @@
+{
+  "name": "authority-openai-agents-example",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Experimental example: Authority Graph guard() in front of a simulated supplier-order tool of the OpenAI Agents SDK, run with a scripted model (no API key). Architecture A only.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0 <23"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "demo": "tsx src/demo.ts"
+  },
+  "dependencies": {
+    "@openai/agents": "0.22.0",
+    "authority-graph-sdk": "file:../../authority-graph-sdk-0.0.0.tgz",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.3",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3"
+  }
+}
