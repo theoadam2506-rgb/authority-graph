@@ -108,3 +108,4 @@
       supplier holds: 0 order(s)
       journal       : DELEGATION_CREATED, ACTION_REQUESTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED
       host-side fact: the supplier holds 0 order(s)
+   NOT shown here: The order reference is written by the (scripted) model, and zod checks only its format. Nothing ties it to an order the host registered, so a model can invent a new reference to retry an uncertain operation (7b). A real host must bind the reference to a recorded order and refuse new references for such a retry. This example does not provide that protection.

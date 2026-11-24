@@ -155,6 +155,8 @@ export async function runScenarios(): Promise<Scenario[]> {
   // 7. An uncertain external result.
   scenarios.push({
     id: 7,
+    notShown:
+      "The order reference is written by the (scripted) model, and zod checks only its format. Nothing ties it to an order the host registered, so a model can invent a new reference to retry an uncertain operation (7b). A real host must bind the reference to a recorded order and refuse new references for such a retry. This example does not provide that protection.",
     title: "The supplier completes the order but its reply is lost: the result is uncertain, never 'failed'",
     parts: [
       await withHost({ supplier: "completes-then-loses-reply" }, async (h) => {

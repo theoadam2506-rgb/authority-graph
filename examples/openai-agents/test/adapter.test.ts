@@ -76,3 +76,17 @@ test("the effect is run at most once per ticket: asking twice in one run calls t
   assert.equal(modelCalls, 3, "two tool calls and a final answer, no pause for approval");
   assert.equal(host.supplier.orders.length, 1);
 });
+
+test("the order reference is a MODEL argument: its format is checked, its legitimacy is not (the example does not register orders)", async () => {
+  const host = await createHost();
+  // A reference that no order ever had, invented by the (scripted) model: accepted, because the delegation allows it.
+  const invented = await askModel(host, [order("NEVER-REGISTERED-42")]);
+  assert.equal(invented.toolOutputs[0]?.status, "EXECUTED");
+  // A second invented reference for the same purchase is a different action: nothing links the two.
+  const again = await askModel(host, [order("A-DIFFERENT-REFERENCE")]);
+  assert.equal(again.toolOutputs[0]?.status, "EXECUTED");
+  assert.equal(host.supplier.orders.length, 2);
+  // Only the format is validated by zod.
+  const badFormat = await askModel(host, [order("x".repeat(65))]);
+  assert.equal(badFormat.toolOutputs[0]?.status, "SDK_TOOL_ERROR");
+});

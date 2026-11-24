@@ -2,8 +2,12 @@
  * Architecture A: `authority.guard()` inside the `execute` of an OpenAI Agents SDK function tool.
  *
  * What this adapter does, and nothing more:
- *  - It turns the model's already validated arguments into an Authority `ToolCall`, using an identity and a
- *    business reference that the HOST supplies (never anything the model wrote).
+ *  - It turns the model's already validated arguments into an Authority `ToolCall`. Two things are different:
+ *      - The IDENTITY (`agentId`, `delegationId`) comes from the HOST, given when the tool is built. Nothing the
+ *        model writes can change it.
+ *      - The BUSINESS REFERENCE that becomes the action id comes, in this example, from the MODEL's arguments (the
+ *        host's `describeAction` reads it from the validated input). The schema checks its format, not whether it
+ *        is legitimate: see `describeAction` below.
  *  - It runs the external effect only through `authority.guard()`: `authorize`, single-use `redeem`, the
  *    effect, `report`. `guard` never retries the effect.
  *  - It turns every `GuardResult` into a small JSON string for the model, without a raw error and without a
@@ -43,10 +47,18 @@ export interface AuthorityToolConfig<S extends z.ZodObject> {
   readonly parameters: S;
   readonly principal: HostPrincipal;
   /**
-   * Maps the validated arguments to the action. `actionId` MUST be derived from a stable BUSINESS reference that
-   * the arguments carry (an order number), never from the model's tool-call id: that id changes every time the
-   * model asks again, so the same order would look like a new action. The same `actionId` with different
-   * arguments is refused by Authority (`ACTION_ID_REUSED_WITH_DIFFERENT_CALL`).
+   * Maps the validated arguments to the action. `actionId` MUST be derived from a stable BUSINESS reference (an
+   * order number), never from the model's tool-call id: that id changes every time the model asks again, so the
+   * same order would look like a new action. The same `actionId` with different arguments is refused by Authority
+   * (`ACTION_ID_REUSED_WITH_DIFFERENT_CALL`).
+   *
+   * WHERE THE REFERENCE COMES FROM IS THE HOST'S RESPONSIBILITY, AND THIS ADAPTER DOES NOT ENFORCE IT. In the
+   * example, `orderRef` is one of the MODEL's arguments: zod validates its format (a non-empty string of at most 64
+   * characters), not whether it is legitimate. Nothing here ties it to an order the host recorded, and nothing stops
+   * the model from inventing a new reference, which is a new action with a new ticket, to retry an operation whose
+   * outcome is uncertain. A real application must bind the reference to an order it registered itself (for example
+   * by issuing the reference and checking it here before the call), and must refuse new references for the retry of
+   * an operation that may already have happened. The example does NOT provide that protection.
    */
   readonly describeAction: (input: z.infer<S>) => ActionDescription;
   /**

@@ -37,7 +37,7 @@ npm run sdk:package        # writes authority-graph-sdk-0.0.0.tgz at the reposit
 cd examples/openai-agents
 npm ci                     # installs the pinned dependencies and the SDK tarball
 npm run typecheck
-npm test                   # 18 tests
+npm test                   # 19 tests
 npm run demo               # prints the scenarios; compare with expected-output.txt
 ```
 
@@ -69,7 +69,9 @@ The adapter is [`src/authorityTool.ts`](./src/authorityTool.ts) (about 150 lines
 - `principal` (`agentId`, `delegationId`) is given by the **host** when the tool is built. The model's arguments cannot
   change it; keys the model adds that the schema does not know are dropped.
 - `describeAction(input)` maps the validated arguments to the action Authority evaluates. Its `actionId` must come from a
-  **business reference** carried by the arguments (here `orderRef`), never from the model's tool-call id (see below).
+  **business reference**, never from the model's tool-call id (see below). **In this example that reference, `orderRef`,
+  is one of the model's own arguments**: zod validates its format, not its legitimacy, and nothing ties it to an order
+  the host registered (see "Where the order reference comes from").
 - `effect(input, { idempotencyKey })` runs only after a successful redemption.
 - `toModelResult` turns every `GuardResult` into one of four answers for the model. It never contains a raw error: the
   operator receives that through `onDiagnostic`.
@@ -94,7 +96,7 @@ Each scenario is in [`src/scenarios.ts`](./src/scenarios.ts), asserted in
 | 4 | After the approval, the same order reference with another amount, sku or supplier | Refused (`ACTION_ID_REUSED_WITH_DIFFERENT_CALL`); the honest request still runs; the supplier got the approved amount | The ticket-level `ARGUMENTS_MISMATCH` check is not reachable through this adapter (it builds the call from one input); it is in Authority's own agent demo |
 | 5 | The delegation is revoked after the approval | The order, and any new one, is refused (`C12_DELEGATION_REVOKED`); the supplier is never called | A revocation **between** authorization and redemption: `guard()` does both back to back. The re-check at the instant of redemption needs B2 |
 | 6 | The same order is asked for again | Never rerun: `ALREADY_REDEEMED`, or `C7_APPROVAL_ALREADY_CONSUMED` for an approved order; also when the journal write after the effect failed | |
-| 7 | The supplier completes the order and its reply is lost (7a), the model retries under another reference (7b), the supplier refuses cleanly (7c), the redemption's acknowledgement is lost (7d) | `OUTCOME_UNKNOWN` journaled `EFFECT_FAILED`, never rerun; a refusal and a lost reply look the same to the model; a lost redemption acknowledgement is `OUTCOME_UNCERTAIN` and the supplier is never called | 7b: the duplicate is **not** prevented (below) |
+| 7 | The supplier completes the order and its reply is lost (7a), the model retries under another reference (7b), the supplier refuses cleanly (7c), the redemption's acknowledgement is lost (7d) | `OUTCOME_UNKNOWN` journaled `EFFECT_FAILED`, never rerun; a refusal and a lost reply look the same to the model; a lost redemption acknowledgement is `OUTCOME_UNCERTAIN` and the supplier is never called | 7b: the duplicate is **not** prevented (below); the reference is a model argument |
 
 What the scripted model cannot show: how a language model reacts to these messages, whether it follows
 "do not send it again", or resistance to prompt injection.
@@ -113,9 +115,32 @@ it can and cannot do:
   Scenario 7b shows it: two orders at the supplier, one business purchase, two keys.
 - Below the automatic limit a new action needs no approval, so nothing human stands in the way of that duplicate.
   Above it, a new action needs its own approval and spends budget of its own.
-- What protects you is a stable business key that **you** carry in the arguments and that your target deduplicates on,
-  plus checking with the target before retrying. Keep the model's tool-call id out of the action id: it changes each
+- What protects you is a stable business key that **your application** issues (not one the model is free to invent) and
+  that your target deduplicates on, plus checking with the target before retrying. Keep the model's tool-call id out of the action id: it changes each
   time the model asks, so the same order would look like a new action.
+
+## Where the order reference comes from: not the host, in this example
+
+Two different things must not be confused:
+
+| | Comes from | Protected by this example? |
+|---|---|---|
+| `agentId`, `delegationId` | The **host**, given when the tool is built | Yes: the model cannot change them (a test checks it) |
+| `orderRef`, which becomes the Authority action id | The **model's arguments** | **No** |
+
+`orderRef` is validated by zod as a non-empty string of at most 64 characters. That is a format check. It does not say
+that the order exists, that the host issued the reference, or that the model is entitled to place it. Consequences:
+
+- The model can invent a reference that was never registered, and the order runs if the delegation allows it
+  (a test shows this).
+- The model can use a **new** reference to retry an operation whose outcome is uncertain. That is a new action with a
+  new ticket, so Authority treats it as a different order (scenario 7b).
+- Authority never sees that two references are the same purchase.
+
+**In a real application the host must do this, and the example does not:** issue the order reference itself (or check
+it against an order it recorded) before calling the tool, bind it to the order's arguments, and refuse new references
+for the retry of an operation that may already have happened. Without that, the protection of "the same order is never
+run twice" holds only for the same reference.
 
 ## What the host must provide
 
@@ -124,7 +149,9 @@ Authority does not provide, and this example only simulates:
 - **Identity.** `agentId`, `delegationId` and the human (`alice`) are asserted by host code. Anyone who can call the SDK
   as `alice` can approve. Authority authenticates nobody.
 - **The clock.** A fixed one here.
-- **The business reference** of each order, and the check that it is stable.
+- **The business reference of each order, and its legitimacy.** In this example the model writes it and only its format
+  is checked. A real host must issue it or bind it to a registered order, and prevent arbitrary new references from
+  being used to retry an uncertain operation. The example does not do this.
 - **Recording the human's decision**, outside the Agents SDK, in this architecture.
 - **A trusted, durable journal.** The in-memory backend is lost with the process. The journal is trusted, not
   authenticated, and its completeness is not established.
@@ -132,6 +159,8 @@ Authority does not provide, and this example only simulates:
 
 ## Limits
 
+- The order reference is a model argument whose legitimacy nothing checks (see above): the example does not stop a
+  model from retrying an uncertain operation under a new reference.
 - Architecture A only: no `needsApproval`, no interruptions, no `RunState`. Do not read these results as a demonstration
   of the approval bridge.
 - `@openai/agents` is pinned at 0.22.0, a pre-1.0 release; upgrading it means re-running the tests. The Authority SDK
@@ -149,5 +178,5 @@ Authority does not provide, and this example only simulates:
 | `src/supplier.ts` | The simulated supplier |
 | `src/scripted.ts` | Runs the real Agents SDK loop with `ScriptedModel` |
 | `src/scenarios.ts`, `src/demo.ts` | The scenarios as data, and the printer |
-| `test/*.test.ts` | 18 tests (`node:test`) |
+| `test/*.test.ts` | 19 tests (`node:test`) |
 | `expected-output.txt` | What `npm run demo` prints |

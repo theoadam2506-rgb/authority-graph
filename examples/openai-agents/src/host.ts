@@ -1,8 +1,12 @@
 /**
  * The "host application" of the example: everything Authority deliberately leaves to the host.
  *  - The clock (a fixed one you control: Authority has no default clock).
- *  - The identity of the agent and of the human (asserted here; Authority verifies neither).
- *  - The business reference of each order, which becomes the Authority action id.
+ *  - The identity of the agent (`agentId`, `delegationId`) and of the human (asserted here by host code; Authority
+ *    verifies neither). This is the part that really comes from the host: the model cannot change it.
+ *  - The business reference of each order, which becomes the Authority action id. In THIS example it is NOT issued or
+ *    checked by the host: `orderRef` is an argument the MODEL writes, and zod validates only its format. A real host
+ *    must bind it to an order it registered and prevent arbitrary new references from being used to retry an
+ *    operation whose outcome is uncertain. The example does not do that.
  *  - Recording the human's decision and the revocation (out of band: architecture A has no native pause).
  *  - The delegation: `alice` lets `procurement-agent` create purchase orders, up to 2,000 EUR on its own, up to
  *    5,000 EUR with a human approval, and 5,000 EUR in total.
@@ -15,7 +19,11 @@ import { SimulatedSupplier } from "./supplier.js";
 /** Asserted by the host. The model never provides, and cannot change, either field. */
 export const PRINCIPAL: HostPrincipal = { agentId: "procurement-agent", delegationId: "d-1" };
 
-/** The arguments the model may provide. `orderRef` is the business reference: the host's stable identifier of the order. */
+/**
+ * The arguments the model may provide. `orderRef` is the business reference that becomes the action id. It is a MODEL
+ * argument here: zod checks its format (non-empty, at most 64 characters), not its legitimacy. Nothing ties it to a
+ * registered order.
+ */
 export const orderParameters = z.object({
   orderRef: z.string().min(1).max(64),
   sku: z.string().min(1).max(64),
@@ -25,7 +33,10 @@ export const orderParameters = z.object({
 });
 export type OrderInput = z.infer<typeof orderParameters>;
 
-/** The Authority action id of an order: derived from the business reference, never from the model's tool-call id. */
+/**
+ * The Authority action id of an order: derived from the business reference (`orderRef`, a model argument in this
+ * example), never from the model's tool-call id. Whoever controls `orderRef` controls which action is evaluated.
+ */
 export const actionIdOf = (orderRef: string): string => `po:${orderRef}`;
 
 /** A clock you control. */
