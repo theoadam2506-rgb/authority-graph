@@ -27,15 +27,22 @@
       supplier holds: 0 order(s)
       journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, DELEGATION_REVOKED
 
-== B4. Who may approve: the host authenticates, Authority decides who is allowed
-      no credential approves: REFUSED (NOT_AUTHENTICATED)
+== B4. Who may decide: authenticated and authorized by the host, accepted by Authority
+   -- B4a. the host authenticates, then authorizes, before anything is claimed or written
+      an unauthenticated caller asks about an unknown id and about the real id: REFUSED (NOT_AUTHENTICATED) and REFUSED (NOT_AUTHENTICATED)
       an unknown token approves: REFUSED (NOT_AUTHENTICATED)
-      mallory (authenticated, not the grantor) approves: REFUSED (NOT_ACCEPTED_BY_AUTHORITY: UNAUTHORIZED_APPROVAL_DECISION)
-      the agent itself (authenticated) approves: REFUSED (NOT_ACCEPTED_BY_AUTHORITY: UNAUTHORIZED_APPROVAL_DECISION)
+      mallory (authenticated, not authorized for this approval) approves: REFUSED (NOT_AUTHORIZED_FOR_THIS_APPROVAL)
+      the agent itself (authenticated, not authorized) approves: REFUSED (NOT_AUTHORIZED_FOR_THIS_APPROVAL)
+      alice sends the decision "yes": REFUSED (INVALID_DECISION)
+      journal after all of that: DELEGATION_CREATED, ACTION_REQUESTED
       alice approves: DECIDED (approve)
       resume: DONE, the model was told: EXECUTED {"confirmation":"CONF-1"}
       supplier holds: 1 order(s)
-      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+   -- B4b. a MISCONFIGURED host that lets every authenticated reviewer decide: Authority is the second layer
+      mallory approves: REFUSED (NOT_ACCEPTED_BY_AUTHORITY: UNAUTHORIZED_APPROVAL_DECISION)
+      the agent itself approves: REFUSED (NOT_ACCEPTED_BY_AUTHORITY: UNAUTHORIZED_APPROVAL_DECISION)
+      the approval is still pending: true
+      supplier holds: 0 order(s)
    NOT shown here: The tokens are SIMULATED (a plain object). Authority compares the asserted name with the delegation's grantor; it authenticates nobody.
 
 == B5. Authority and the OpenAI state disagree
@@ -93,9 +100,9 @@
       alice approves: REFUSED (PERSISTENCE_FAILED)
       journal holds the approval: true
       resume: REFUSED (DECISIONS_PENDING)
-      alice tries again: REFUSED (ALREADY_DECIDED)
-      recovery releases 1 stuck decision(s)
-      alice decides again: DECIDED (approve)
+      alice tries the OPPOSITE decision (reject): REFUSED (ALREADY_DECIDED)
+      stuck decisions listed for the operator: appr-1 (approve by alice)
+      the operator completes the stuck decision, with the SAME intent: DECIDED (approve)
       resume: DONE, the model was told: EXECUTED {"confirmation":"CONF-1"}
       supplier holds: 1 order(s)
       journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
@@ -114,4 +121,34 @@
       the restarted coordinator resumes the same snapshot: DONE, the model was told: NOT_EXECUTED (ALREADY_REDEEMED)
       supplier holds: 1 order(s)
       journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED
-   NOT shown here: The restart is simulated at the application level: the Authority journal here is in memory and would not survive a real restart. A real deployment needs the PostgreSQL backend and a durable store.
+   -- B9e. a restart, then a new run: no id is reused and nothing is overwritten
+      run ids differ: true; approval ids differ: true
+      the reviewer who saw ORDER-7 decides on the first approval id: DECIDED (approve)
+      the action behind that id: po:ORDER-7; the second approval is still PENDING
+   -- B9f. the process dies in the middle of a resume
+      resume: REFUSED (NOT_RESUMABLE)
+      retry the resume: REFUSED (NOT_RESUMABLE)
+      stuck runs listed for the operator: run-1
+      the operator recovers the run (it becomes FAILED: nothing assumes that the effect did not run): RECOVERED
+      retry the resume (it goes through guard() again): DONE, the model was told: EXECUTED {"confirmation":"CONF-1"}
+      supplier holds: 1 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+   -- B9g. Authority is unreachable while the reviewer decides: the decision is not lost
+      alice approves: REFUSED (UNAVAILABLE)
+      the approval is still pending: true
+      Authority is back, alice approves: DECIDED (approve)
+      resume: DONE, the model was told: EXECUTED {"confirmation":"CONF-1"}
+   NOT shown here: The restart is simulated at the application level: the Authority journal here is in memory and would not survive a real restart. A real deployment needs the PostgreSQL backend and a durable store. A stuck decision or run is completed or recovered by an explicit operator action, never automatically: there is no lease, so a slow worker cannot be told from a dead one.
+
+== B10. A human rejection cannot be bypassed by a concurrent late decision
+      alice rejects; the Authority write is slow; the approval is DECIDING with the intent "reject"
+      a late concurrent decision to APPROVE: REFUSED (ALREADY_DECIDED)
+      a decision to reject again: REFUSED (ALREADY_DECIDED)
+      the operator completes the stuck decision (same intent: reject): DECIDED (reject)
+      the original, slow writer finishes: REFUSED (PERSISTENCE_FAILED)
+      the approval is REJECTED; the journal holds an approval: false
+      resume: DONE, the model was told: SDK_MESSAGE "A human rejected this order. It was not placed."
+      the model asks for the rejected order again: WAITING, appr-2 for po:ORDER-7 (2,400 EUR to vendor-1)
+      supplier holds: 0 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_DENIED, APPROVAL_REQUESTED, APPROVAL_DENIED
+   NOT shown here: The slow Authority write cannot be cancelled: the original writer may still land a duplicate of the SAME intent (here a second refusal). The duplicate cannot conflict, but this prototype cannot prevent it, and there is no lease to tell a slow worker from a dead one.

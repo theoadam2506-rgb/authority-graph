@@ -12,13 +12,15 @@ import {
   ApprovalCoordinator,
   InMemoryApprovalStore,
   SimulatedTokenAuthenticator,
+  type ApprovalCoordinatorConfig,
+  type ApprovalPatch,
   type ApprovalRecord,
   type ApprovalStatus,
   type ApprovalStore,
   type RunRecord,
   type RunStatus,
 } from "./approval.js";
-import { createHost, type Host, type HostFaults } from "./host.js";
+import { GRANTOR, createHost, type Host, type HostFaults } from "./host.js";
 import { InMemoryOrderRegistry, type RegisteredOrder } from "./orderRegistry.js";
 import type { SupplierBehaviour } from "./supplier.js";
 
@@ -55,19 +57,22 @@ export class FaultyApprovalStore implements ApprovalStore {
   getApproval(approvalId: string) {
     return this.inner.getApproval(approvalId);
   }
-  async transitionApproval(approvalId: string, from: readonly ApprovalStatus[], to: ApprovalStatus, patch?: { decidedBy?: string; voidReason?: string }) {
+  async transitionApproval(approvalId: string, from: readonly ApprovalStatus[], to: ApprovalStatus, patch?: ApprovalPatch, expectClaimToken?: string) {
     const index = this.failTransitionTo.indexOf(to);
     if (index >= 0) {
       this.failTransitionTo.splice(index, 1);
       throw new Error("store unavailable");
     }
-    return this.inner.transitionApproval(approvalId, from, to, patch);
+    return this.inner.transitionApproval(approvalId, from, to, patch, expectClaimToken);
   }
-  transitionRun(runId: string, from: readonly RunStatus[], to: RunStatus) {
-    return this.inner.transitionRun(runId, from, to);
+  transitionRun(runId: string, from: readonly RunStatus[], to: RunStatus, options?: { expectToken?: string; setToken?: string | null }) {
+    return this.inner.transitionRun(runId, from, to, options);
   }
   listDeciding() {
     return this.inner.listDeciding();
+  }
+  listResuming() {
+    return this.inner.listResuming();
   }
 }
 
@@ -76,6 +81,8 @@ export interface BridgeKit {
   readonly registry: InMemoryOrderRegistry;
   readonly store: FaultyApprovalStore;
   coordinator: ApprovalCoordinator;
+  /** The configuration of the kit's coordinator, to build another one with a changed part (a test of a misconfiguration). */
+  coordinatorConfig(overrides?: Partial<ApprovalCoordinatorConfig>): ApprovalCoordinatorConfig;
   /** Registers an order as the HOST would (never the model). */
   register(order: RegisteredOrder): RegisteredOrder;
   /** An agent whose scripted model follows `steps`. */
@@ -89,25 +96,44 @@ export interface BridgeKit {
   restart(mutate?: (exported: StoreExport) => void): void;
 }
 
-export async function createBridgeKit(options: { readonly faults?: HostFaults; readonly supplier?: SupplierBehaviour } = {}): Promise<BridgeKit> {
+export interface BridgeKitOptions {
+  readonly faults?: HostFaults;
+  readonly supplier?: SupplierBehaviour;
+  /** A MISCONFIGURED host that lets every authenticated reviewer decide: shows that Authority is a second layer. */
+  readonly permissiveReviewerCheck?: boolean;
+  /** Use the production-style default ids (unique across restarts) instead of the deterministic ones of the demo. */
+  readonly randomIds?: boolean;
+}
+
+export async function createBridgeKit(options: BridgeKitOptions = {}): Promise<BridgeKit> {
   const registry = new InMemoryOrderRegistry();
-  const host = await createHost({ approval: "authority", registry, ...(options.faults ? { faults: options.faults } : {}) });
+  // Deterministic ids for the demo and its pinned output. They live in the KIT, not in a coordinator, so they keep counting across restarts.
+  const counters = { run: 0, appr: 0, ap: 0 };
+  const host = await createHost({
+    approval: "authority",
+    registry,
+    ...(options.faults ? { faults: options.faults } : {}),
+    ...(options.randomIds ? {} : { newApprovalId: () => `ap-${++counters.ap}` }),
+  });
   if (options.supplier) host.supplier.behaviour = options.supplier;
   const resumeScripts: Steps[] = [];
   const authenticator = new SimulatedTokenAuthenticator(TOKENS);
 
   const agentOf = (steps: Steps): Agent<any, any> => new Agent({ name: "buyer", model: new ScriptedModel(steps as never), tools: [host.tool] });
+  const configOf = (store: ApprovalStore, overrides: Partial<ApprovalCoordinatorConfig> = {}): ApprovalCoordinatorConfig => ({
+    authority: host.authority,
+    recorder: host.recorder,
+    describeInterruption: host.describeInterruption,
+    store,
+    authenticator,
+    authorizeReviewer: options.permissiveReviewerCheck ? async () => true : async (principalId) => principalId === GRANTOR,
+    agentFactory: () => agentOf(resumeScripts.shift() ?? [[assistantMessage("done")]]),
+    ...(options.randomIds ? {} : { newId: (prefix: "run" | "appr") => `${prefix}-${++counters[prefix]}` }),
+    ...overrides,
+  });
   const build = (inner: ApprovalStore): [FaultyApprovalStore, ApprovalCoordinator] => {
     const store = new FaultyApprovalStore(inner);
-    const coordinator = new ApprovalCoordinator({
-      authority: host.authority,
-      recorder: host.recorder,
-      describeInterruption: host.describeInterruption,
-      store,
-      authenticator,
-      agentFactory: () => agentOf(resumeScripts.shift() ?? [[assistantMessage("done")]]),
-    });
-    return [store, coordinator];
+    return [store, new ApprovalCoordinator(configOf(store))];
   };
 
   const [store, coordinator] = build(new InMemoryApprovalStore());
@@ -116,6 +142,7 @@ export async function createBridgeKit(options: { readonly faults?: HostFaults; r
     registry,
     store,
     coordinator,
+    coordinatorConfig: (overrides) => configOf(kit.store, overrides),
     register(o) {
       registry.register(o);
       return o;

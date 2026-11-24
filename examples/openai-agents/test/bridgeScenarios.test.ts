@@ -13,9 +13,9 @@ test("the architecture B demo prints exactly expected-output-b.txt, twice in a r
 });
 
 test("the demo covers every scenario and states its limits", () => {
-  assert.deepEqual(scenarios.map((s) => s.id), ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B9"]);
+  assert.deepEqual(scenarios.map((s) => s.id), ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B9", "B10"]);
   const text = formatBridgeScenarios(scenarios);
-  for (const needle of ["SIMULATED", "atomic only inside one event loop", "Neither is authentication", "the target must deduplicate", "would not survive a real restart", "guard(), never by the SDK's pause or approval"]) {
+  for (const needle of ["SIMULATED", "atomic only inside one event loop", "Neither is authentication", "the target must deduplicate", "would not survive a real restart", "guard(), never by the SDK's pause or approval", "there is no lease", "cannot be cancelled"]) {
     assert.ok(text.includes(needle), needle);
   }
 });

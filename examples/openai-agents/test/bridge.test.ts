@@ -72,15 +72,36 @@ test("the reviewer is authenticated before anything is recorded: no credential, 
   assert.equal((await kit.store.getApproval(id))?.status, "PENDING");
 });
 
-test("an authenticated reviewer who is not the grantor is refused BY AUTHORITY, and the approval stays pending for alice", async () => {
+test("an authenticated reviewer who is not authorized for the approval is refused by the HOST before anything is claimed or written", async () => {
   const kit = await createBridgeKit();
   const paused = await pause(kit);
   const id = paused.approvals[0]!.approvalId;
   for (const token of ["token-mallory", "token-agent"]) {
-    assert.deepEqual(await decideAs(kit, id, token), { status: "REFUSED", reason: "NOT_ACCEPTED_BY_AUTHORITY", detail: "UNAUTHORIZED_APPROVAL_DECISION" });
+    assert.deepEqual(await decideAs(kit, id, token), { status: "REFUSED", reason: "NOT_AUTHORIZED_FOR_THIS_APPROVAL" });
+    assert.deepEqual(await decideAs(kit, id, token, "reject"), { status: "REFUSED", reason: "NOT_AUTHORIZED_FOR_THIS_APPROVAL" });
   }
-  assert.ok(!(await kit.host.journal()).includes("APPROVAL_GRANTED"));
-  assert.equal((await kit.store.getApproval(id))?.status, "PENDING");
+  const journal = await kit.host.journal();
+  assert.ok(!journal.includes("APPROVAL_REQUESTED") && !journal.includes("APPROVAL_GRANTED") && !journal.includes("APPROVAL_DENIED"));
+  const record = await kit.store.getApproval(id);
+  assert.equal(record?.status, "PENDING");
+  assert.equal(record?.claimToken, undefined, "nothing was claimed");
+  assert.equal((await decideAs(kit, id, ALICE)).status, "DECIDED");
+  assert.equal(results(await kit.coordinator.resume(paused.runId))[0]?.status, "EXECUTED");
+});
+
+test("a MISCONFIGURED host check does not matter: Authority refuses a non-grantor too, an explicit refusal releases the claim, alice can still decide", async () => {
+  const kit = await createBridgeKit({ permissiveReviewerCheck: true });
+  const paused = await pause(kit);
+  const id = paused.approvals[0]!.approvalId;
+  for (const token of ["token-mallory", "token-agent"]) {
+    assert.deepEqual(await decideAs(kit, id, token), { status: "REFUSED", reason: "NOT_ACCEPTED_BY_AUTHORITY", detail: "UNAUTHORIZED_APPROVAL_DECISION" });
+    assert.deepEqual(await decideAs(kit, id, token, "reject"), { status: "REFUSED", reason: "NOT_ACCEPTED_BY_AUTHORITY", detail: "UNAUTHORIZED_APPROVAL_DECISION" });
+  }
+  assert.ok(!(await kit.host.journal()).some((e) => e === "APPROVAL_GRANTED" || e === "APPROVAL_DENIED"));
+  const released = await kit.store.getApproval(id);
+  assert.equal(released?.status, "PENDING", "Authority refused explicitly: nothing was decided, so the claim is released");
+  assert.equal(released?.intent, undefined);
+  assert.equal(released?.decidedBy, undefined);
   assert.equal((await decideAs(kit, id, ALICE)).status, "DECIDED");
   assert.equal(results(await kit.coordinator.resume(paused.runId))[0]?.status, "EXECUTED");
 });
@@ -195,14 +216,7 @@ test("an interruption for a tool the coordinator cannot bind is rejected at once
   let ran = 0;
   const stray = tool({ name: "delete_everything", description: "x", parameters: z.object({}), needsApproval: true, execute: async () => { ran++; return "deleted"; } });
   const strayAgent = (steps: unknown[]) => new Agent({ name: "buyer", model: new ScriptedModel(steps as never), tools: [stray] });
-  const coordinator = new ApprovalCoordinator({
-    authority: kit.host.authority,
-    recorder: kit.host.recorder,
-    describeInterruption: kit.host.describeInterruption,
-    store: new InMemoryApprovalStore(),
-    authenticator: new SimulatedTokenAuthenticator({}),
-    agentFactory: () => strayAgent([FINAL]),
-  });
+  const coordinator = new ApprovalCoordinator(kit.coordinatorConfig({ store: new InMemoryApprovalStore(), authenticator: new SimulatedTokenAuthenticator({}), agentFactory: () => strayAgent([FINAL]) }));
   const outcome = await coordinator.start(strayAgent([[functionCall("delete_everything", {}, { callId: "call_9" })], FINAL]), "go");
   assert.equal(outcome.status, "DONE");
   assert.match(JSON.stringify(results(outcome)), /could not be matched/);
@@ -347,34 +361,43 @@ test("the registry: a reference is registered once and only by the host", async 
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
-test("window 1: Authority wrote the approval, the coordinator could not persist it: nothing resumes, recovery lets the decision complete, one execution", async () => {
+test("window 1: Authority wrote the approval, the coordinator could not persist it: nothing resumes, the decision cannot be flipped, the operator completes the SAME intent", async () => {
   const kit = await createBridgeKit();
   const paused = await pause(kit);
   const id = paused.approvals[0]!.approvalId;
   kit.store.failTransitionTo = ["APPROVED"];
   assert.deepEqual(await decideAs(kit, id, ALICE), { status: "REFUSED", reason: "PERSISTENCE_FAILED" });
   assert.ok((await kit.host.journal()).includes("APPROVAL_GRANTED"), "Authority holds the approval");
-  assert.equal((await kit.store.getApproval(id))?.status, "DECIDING");
+  const stuck = await kit.store.getApproval(id);
+  assert.equal(stuck?.status, "DECIDING");
+  assert.equal(stuck?.intent, "approve");
+  assert.equal(stuck?.decidedBy, "alice");
   assert.deepEqual(await kit.coordinator.resume(paused.runId), { status: "REFUSED", reason: "DECISIONS_PENDING" });
   assert.equal(kit.host.supplier.orders.length, 0, "nothing runs from a decision that was not persisted");
   assert.deepEqual(await decideAs(kit, id, ALICE), { status: "REFUSED", reason: "ALREADY_DECIDED" });
-  assert.equal(await kit.coordinator.recoverStuckDecisions(), 1);
-  assert.deepEqual(await decideAs(kit, id, ALICE), { status: "DECIDED", decision: "approve" });
+  assert.deepEqual(await decideAs(kit, id, ALICE, "reject"), { status: "REFUSED", reason: "ALREADY_DECIDED" }, "the opposite decision cannot follow");
+  assert.deepEqual((await kit.coordinator.listStuckDecisions()).map((r) => r.approvalId), [id]);
+  assert.deepEqual(await kit.coordinator.completeStuckDecision(id), { status: "DECIDED", decision: "approve" });
   assert.equal(results(await kit.coordinator.resume(paused.runId))[0]?.status, "EXECUTED");
   assert.equal(kit.host.supplier.orders.length, 1);
-  assert.equal((await kit.host.journal()).filter((e) => e === "APPROVAL_GRANTED").length, 1, "the decision was not written twice");
+  assert.equal((await kit.host.journal()).filter((e) => e === "APPROVAL_GRANTED").length, 1, "the already-recorded approval was not written twice");
+  assert.ok(!(await kit.host.journal()).includes("APPROVAL_DENIED"));
 });
 
-test("window 1b: Authority could not take the approval (unavailable): the claim is released and a retry works", async () => {
+test("window 1b: an Authority write whose outcome is not known keeps the approval DECIDING: it is not released, and only the same intent can complete it", async () => {
   const faults: HostFaults = { failToRecordApproval: true };
   const kit = await createBridgeKit({ faults });
   const paused = await pause(kit);
   const id = paused.approvals[0]!.approvalId;
-  assert.deepEqual(await decideAs(kit, id, ALICE), { status: "REFUSED", reason: "UNAVAILABLE" });
-  assert.equal((await kit.store.getApproval(id))?.status, "PENDING");
+  assert.deepEqual(await decideAs(kit, id, ALICE), { status: "REFUSED", reason: "DECISION_UNCERTAIN" });
+  const held = await kit.store.getApproval(id);
+  assert.equal(held?.status, "DECIDING", "not released to PENDING: the write may have reached the journal");
+  assert.equal(held?.intent, "approve");
+  assert.deepEqual(await decideAs(kit, id, ALICE, "reject"), { status: "REFUSED", reason: "ALREADY_DECIDED" });
   faults.failToRecordApproval = false;
-  assert.equal((await decideAs(kit, id, ALICE)).status, "DECIDED");
+  assert.deepEqual(await kit.coordinator.completeStuckDecision(id), { status: "DECIDED", decision: "approve" });
   assert.equal(results(await kit.coordinator.resume(paused.runId))[0]?.status, "EXECUTED");
+  assert.ok(!(await kit.host.journal()).includes("APPROVAL_DENIED"));
 });
 
 test("window 2: the decision is persisted, the process restarts before the resume: the rebuilt coordinator resumes it, once", async () => {
@@ -451,4 +474,349 @@ test("describeInterruption fails closed: another tool, malformed JSON or argumen
   assert.equal(kit.host.describeInterruption(make("place_supplier_order", "{not json")), undefined);
   assert.equal(kit.host.describeInterruption(make("place_supplier_order", JSON.stringify({ orderRef: "ORDER-7" }))), undefined);
   assert.equal(kit.host.describeInterruption({ rawItem: { type: "hosted_tool_call", name: "place_supplier_order" } } as never), undefined);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// F-1: ONE decision per approval; a late concurrent decision cannot bypass a human rejection
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** Holds an Authority write of the human's decision until `release()`: a slow worker, not a dead one. */
+function slowWrite(kit: BridgeKit, which: "approve" | "deny") {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const real = kit.host.recorder[which].bind(kit.host.recorder);
+  kit.host.recorder[which] = async (actionId: string, who: string) => {
+    await gate;
+    return real(actionId, who);
+  };
+  return { release, restore: () => (kit.host.recorder[which] = real) };
+}
+const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+const eventTypes = async (kit: BridgeKit) => await kit.host.journal();
+
+test("F-1: a human REJECTION in flight cannot be bypassed by a late concurrent APPROVE; the rejected order needs a human again", async () => {
+  const kit = await createBridgeKit();
+  const paused = await pause(kit);
+  const id = paused.approvals[0]!.approvalId;
+  const slow = slowWrite(kit, "deny");
+  const rejection = decideAs(kit, id, ALICE, "reject"); // the Authority write of the rejection is slow
+  await tick();
+  slow.restore();
+  const claimed = await kit.store.getApproval(id);
+  assert.equal(claimed?.status, "DECIDING");
+  assert.equal(claimed?.intent, "reject");
+
+  assert.deepEqual(await decideAs(kit, id, ALICE, "approve"), { status: "REFUSED", reason: "ALREADY_DECIDED" }, "the late approve cannot take the claim");
+  assert.deepEqual(await kit.coordinator.completeStuckDecision(id), { status: "DECIDED", decision: "reject" }, "the operator completes the SAME intent");
+  slow.release();
+  assert.deepEqual(await rejection, { status: "REFUSED", reason: "PERSISTENCE_FAILED" }, "the original, slow writer is fenced by the claim token");
+
+  assert.equal((await kit.store.getApproval(id))?.status, "REJECTED");
+  const journal = await eventTypes(kit);
+  assert.ok(!journal.includes("APPROVAL_GRANTED"), "no approval was ever written for a rejected decision");
+  assert.match(JSON.stringify(results(await kit.coordinator.resume(paused.runId))), /A human rejected this order/);
+  assert.equal(kit.host.supplier.orders.length, 0);
+
+  // Rejection followed by a new request: it pauses for a human again and does NOT run.
+  const again = await kit.coordinator.start(kit.agent([[callOrder(order("ORDER-7"), "call_2")], FINAL]), "ask again");
+  assert.equal(again.status, "WAITING");
+  assert.equal(kit.host.supplier.orders.length, 0);
+  assert.ok(!(await eventTypes(kit)).includes("APPROVAL_GRANTED"));
+});
+
+test("F-1: an APPROVE in flight cannot be turned into a rejection, or the other way round, by a concurrent decision", async () => {
+  const kit = await createBridgeKit();
+  const paused = await pause(kit);
+  const id = paused.approvals[0]!.approvalId;
+  const slow = slowWrite(kit, "approve");
+  const approval = decideAs(kit, id, ALICE, "approve");
+  await tick();
+  slow.restore();
+  assert.deepEqual(await decideAs(kit, id, ALICE, "reject"), { status: "REFUSED", reason: "ALREADY_DECIDED" });
+  assert.deepEqual(await kit.coordinator.completeStuckDecision(id), { status: "DECIDED", decision: "approve" });
+  slow.release();
+  assert.deepEqual(await approval, { status: "REFUSED", reason: "PERSISTENCE_FAILED" });
+  const journal = await eventTypes(kit);
+  assert.ok(!journal.includes("APPROVAL_DENIED"), "no refusal was ever written next to the approval");
+  assert.equal(results(await kit.coordinator.resume(paused.runId))[0]?.status, "EXECUTED");
+  assert.equal(kit.host.supplier.orders.length, 1);
+});
+
+test("F-1: the original writer that lands AFTER the completion only adds a duplicate of the SAME intent, never a conflicting one", async () => {
+  const kit = await createBridgeKit();
+  const paused = await pause(kit);
+  const id = paused.approvals[0]!.approvalId;
+  const slow = slowWrite(kit, "deny");
+  const rejection = decideAs(kit, id, ALICE, "reject");
+  await tick();
+  slow.restore();
+  await kit.coordinator.completeStuckDecision(id);
+  slow.release();
+  await rejection;
+  const journal = await eventTypes(kit);
+  assert.equal(journal.filter((e) => e === "APPROVAL_DENIED").length, 2, "the documented residual: a duplicate refusal");
+  assert.equal(journal.filter((e) => e === "APPROVAL_GRANTED").length, 0, "and nothing that conflicts with it");
+});
+
+test("F-1: there is no automatic release of a claimed decision: the dangerous recovery is gone, completion is explicit and checks the reviewer again", async () => {
+  const kit = await createBridgeKit();
+  assert.equal((kit.coordinator as unknown as Record<string, unknown>).recoverStuckDecisions, undefined);
+  const paused = await pause(kit);
+  const id = paused.approvals[0]!.approvalId;
+  kit.store.failTransitionTo = ["APPROVED"];
+  await decideAs(kit, id, ALICE);
+  // The host stops authorizing alice (for example her mandate ended): completion must not apply her stale decision.
+  const revoked = new ApprovalCoordinator(kit.coordinatorConfig({ authorizeReviewer: async () => false }));
+  assert.deepEqual(await revoked.completeStuckDecision(id), { status: "REFUSED", reason: "NOT_AUTHORIZED_FOR_THIS_APPROVAL" });
+  assert.equal((await kit.store.getApproval(id))?.status, "DECIDING", "still held, not released");
+  // The delegation is revoked meanwhile: completion re-checks the binding with Authority and voids the decision.
+  await kit.host.revoke();
+  assert.deepEqual(await kit.coordinator.completeStuckDecision(id), { status: "REFUSED", reason: "NO_LONGER_WAITING", detail: "C12_DELEGATION_REVOKED" });
+  assert.equal((await kit.store.getApproval(id))?.status, "VOID");
+  // Not stuck, unknown, or already finished: refused.
+  assert.deepEqual(await kit.coordinator.completeStuckDecision(id), { status: "REFUSED", reason: "NOT_STUCK" });
+  assert.deepEqual(await kit.coordinator.completeStuckDecision("appr-unknown"), { status: "REFUSED", reason: "NOT_STUCK" });
+});
+
+test("F-1: the claim token fences the store: a stale finisher cannot move a record that it no longer owns", async () => {
+  const store = new InMemoryApprovalStore();
+  const call = {} as never;
+  await store.putRun({ runId: "r", snapshot: "{}", approvalIds: ["a"], status: "WAITING" }, [{ approvalId: "a", runId: "r", callId: "c", actionId: "x", call, summary: { actionId: "x", args: {} }, status: "PENDING" }]);
+  assert.equal(await store.transitionApproval("a", ["PENDING"], "DECIDING", { decidedBy: "alice", intent: "approve", claimToken: "t1" }), true);
+  assert.equal(await store.transitionApproval("a", ["DECIDING"], "DECIDING", { claimToken: "t2" }, "t1"), true, "the operator takes the claim over");
+  assert.equal(await store.transitionApproval("a", ["DECIDING"], "APPROVED", { claimToken: null }, "t1"), false, "the stale owner is fenced");
+  assert.equal((await store.getApproval("a"))?.status, "DECIDING");
+  assert.equal(await store.transitionApproval("a", ["DECIDING"], "APPROVED", { claimToken: null }, "t2"), true);
+  assert.equal((await store.getApproval("a"))?.claimToken, undefined);
+  assert.equal((await store.getApproval("a"))?.intent, "approve", "the intent stays on the record");
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// F-2: unique ids, no overwrite
+// ---------------------------------------------------------------------------------------------------------------------
+
+test("F-2: after a restart no id is reused and the first approval still decides ITS action, whatever the id generator", async () => {
+  for (const randomIds of [false, true]) {
+    const kit = await createBridgeKit({ randomIds });
+    const first = await pause(kit, order("ORDER-7"), "call_1");
+    kit.restart();
+    const second = await pause(kit, order("ORDER-9", 2500), "call_2");
+    assert.notEqual(first.runId, second.runId);
+    assert.notEqual(first.approvals[0]!.approvalId, second.approvals[0]!.approvalId);
+    if (randomIds) {
+      assert.match(first.runId, /^run-[0-9a-f-]{36}$/);
+      assert.match(first.approvals[0]!.approvalId, /^appr-[0-9a-f-]{36}$/);
+    }
+    assert.equal((await kit.store.getApproval(first.approvals[0]!.approvalId))?.actionId, "po:ORDER-7", "the first record was not overwritten");
+    assert.equal((await decideAs(kit, first.approvals[0]!.approvalId, ALICE)).status, "DECIDED");
+    const granted = ((await kit.host.authority.events()) as unknown as { event_type: string; payload: { action_id?: string } }[]).filter((e) => e.event_type === "APPROVAL_GRANTED").map((e) => e.payload.action_id);
+    assert.deepEqual(granted, ["po:ORDER-7"], "the reviewer who saw ORDER-7 approved ORDER-7, not ORDER-9");
+    assert.equal((await kit.store.getApproval(second.approvals[0]!.approvalId))?.status, "PENDING");
+  }
+});
+
+test("F-2: a repeated id is an ERROR, never an overwrite: the store refuses it and the first records are intact", async () => {
+  const kit = await createBridgeKit();
+  const first = await pause(kit, order("ORDER-7"), "call_1");
+  const buggy = new ApprovalCoordinator(kit.coordinatorConfig({ newId: (prefix) => `${prefix}-1` })); // a generator that restarts from 1
+  const o9 = kit.register(order("ORDER-9", 2500));
+  await assert.rejects(buggy.start(kit.agent([[callOrder(o9, "call_2")], FINAL]), "go"), /duplicate (run|approval) id/);
+  assert.equal((await kit.store.getApproval(first.approvals[0]!.approvalId))?.actionId, "po:ORDER-7");
+  assert.equal((await kit.store.getRun(first.runId))?.status, "WAITING");
+  const store = new InMemoryApprovalStore();
+  const record = { approvalId: "a", runId: "r", callId: "c", actionId: "x", call: {} as never, summary: { actionId: "x", args: {} }, status: "PENDING" as const };
+  await store.putRun({ runId: "r", snapshot: "{}", approvalIds: ["a"], status: "WAITING" }, [record]);
+  await assert.rejects(store.putRun({ runId: "r2", snapshot: "{}", approvalIds: ["a"], status: "WAITING" }, [record]), /duplicate approval id/);
+  await assert.rejects(store.putRun({ runId: "r", snapshot: "{}", approvalIds: [], status: "WAITING" }, []), /duplicate run id/);
+  await assert.rejects(store.putRun({ runId: "r3", snapshot: "{}", approvalIds: ["b", "b"], status: "WAITING" }, [{ ...record, approvalId: "b" }, { ...record, approvalId: "b" }]), /duplicate approval id/);
+  assert.equal(await store.getRun("r3"), undefined, "a refused putRun writes nothing");
+});
+
+test("F-2: the approval event ids written to the journal are unique across hosts (processes)", async () => {
+  const ids = new Set<string>();
+  for (let n = 0; n < 3; n++) {
+    const host = await createHost({ approval: "authority" }); // a new host, as after a restart: no counter carries over
+    await host.authority.authorize({ actionId: "po:X", agentId: "procurement-agent", delegationId: "d-1", capability: { resource: "purchase_order", action: "create" }, amount: { value: 2400, currency: "EUR" }, recipient: "v", args: {} });
+    await host.recorder.approve("po:X", "alice");
+    const events = (await host.authority.events()) as unknown as { event_type: string; payload: { approval_id?: string } }[];
+    const approvalId = events.find((e) => e.event_type === "APPROVAL_REQUESTED")!.payload.approval_id!;
+    assert.match(approvalId, /^ap-[0-9a-f-]{36}$/);
+    ids.add(approvalId);
+  }
+  assert.equal(ids.size, 3);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// F-3 to F-7
+// ---------------------------------------------------------------------------------------------------------------------
+
+test("F-3: a transient Authority outage during the binding check is not a refusal: the claim is released and the decision can be retried", async () => {
+  for (const failure of ["unavailable", "throws"] as const) {
+    const kit = await createBridgeKit();
+    const paused = await pause(kit);
+    const id = paused.approvals[0]!.approvalId;
+    const real = kit.host.authority.authorize.bind(kit.host.authority);
+    let down = true;
+    (kit.host.authority as { authorize: unknown }).authorize = async (call: never) => {
+      if (!down) return real(call);
+      if (failure === "throws") throw new Error("connection reset");
+      return { status: "UNAVAILABLE", code: "BACKEND_UNREACHABLE", diagnosticId: "diag" };
+    };
+    assert.deepEqual(await decideAs(kit, id, ALICE), { status: "REFUSED", reason: "UNAVAILABLE" }, failure);
+    const released = await kit.store.getApproval(id);
+    assert.equal(released?.status, "PENDING", "not VOID: the decision is not lost");
+    assert.equal(released?.claimToken, undefined);
+    down = false;
+    assert.equal((await decideAs(kit, id, ALICE)).status, "DECIDED");
+    assert.equal(results(await kit.coordinator.resume(paused.runId))[0]?.status, "EXECUTED");
+    assert.equal(kit.host.supplier.orders.length, 1);
+  }
+});
+
+test("F-3: a definite refusal (revoked) is final: VOID", async () => {
+  const kit = await createBridgeKit();
+  const paused = await pause(kit);
+  await kit.host.revoke();
+  assert.equal((await decideAs(kit, paused.approvals[0]!.approvalId, ALICE)).status, "REFUSED");
+  assert.equal((await kit.store.getApproval(paused.approvals[0]!.approvalId))?.status, "VOID");
+});
+
+test("F-4: a non-grantor cannot complete or void a decision when Authority already authorizes the order; alice cannot 'reject' an authorized order either", async () => {
+  const kit = await createBridgeKit();
+  const paused = await pause(kit);
+  const id = paused.approvals[0]!.approvalId;
+  await kit.host.approve("po:ORDER-7"); // the grantor approved out of band: Authority answers AUTHORIZED
+  assert.deepEqual(await decideAs(kit, id, "token-mallory", "approve"), { status: "REFUSED", reason: "NOT_AUTHORIZED_FOR_THIS_APPROVAL" });
+  assert.deepEqual(await decideAs(kit, id, "token-mallory", "reject"), { status: "REFUSED", reason: "NOT_AUTHORIZED_FOR_THIS_APPROVAL" });
+  assert.equal((await kit.store.getApproval(id))?.status, "PENDING");
+  assert.equal((await kit.store.getApproval(id))?.decidedBy, undefined, "no non-grantor is recorded as the decider");
+  assert.deepEqual(await decideAs(kit, id, ALICE, "reject"), { status: "REFUSED", reason: "ALREADY_AUTHORIZED" }, "a refusal would not revoke the existing approval, so it is not accepted");
+  assert.equal((await kit.store.getApproval(id))?.status, "PENDING", "released, not voided");
+  assert.deepEqual(await decideAs(kit, id, ALICE, "approve"), { status: "DECIDED", decision: "approve" });
+  assert.equal((await kit.store.getApproval(id))?.decidedBy, "alice");
+  assert.equal(results(await kit.coordinator.resume(paused.runId))[0]?.status, "EXECUTED");
+});
+
+test("F-5: any decision other than the exact strings 'approve' and 'reject' is refused before anything is claimed or written", async () => {
+  const kit = await createBridgeKit();
+  const paused = await pause(kit);
+  const id = paused.approvals[0]!.approvalId;
+  for (const decision of ["yes", "", "APPROVE", "approve ", "Reject", undefined, null, 1, true, {}, ["approve"]]) {
+    assert.deepEqual(await kit.coordinator.decide({ approvalId: id, decision: decision as never, credential: ALICE }), { status: "REFUSED", reason: "INVALID_DECISION" }, String(JSON.stringify(decision)));
+  }
+  const record = await kit.store.getApproval(id);
+  assert.equal(record?.status, "PENDING");
+  assert.equal(record?.claimToken, undefined);
+  assert.deepEqual(await eventTypes(kit), ["DELEGATION_CREATED", "ACTION_REQUESTED"], "nothing was written to Authority");
+});
+
+test("F-6: an unauthenticated caller gets the same answer for a real and an unknown approval id; an authenticated one does not learn ids it could not guess", async () => {
+  const kit = await createBridgeKit();
+  const paused = await pause(kit);
+  const real = paused.approvals[0]!.approvalId;
+  const answers = await Promise.all([real, "appr-999", "", "appr-unknown"].map((id) => decideAs(kit, id, undefined)));
+  for (const answer of answers) assert.deepEqual(answer, { status: "REFUSED", reason: "NOT_AUTHENTICATED" });
+  assert.deepEqual(await kit.coordinator.decide({ approvalId: { not: "a string" } as never, decision: "approve", credential: ALICE }), { status: "REFUSED", reason: "UNKNOWN_APPROVAL" });
+  const randomKit = await createBridgeKit({ randomIds: true });
+  const a = await pause(randomKit);
+  assert.match(a.approvals[0]!.approvalId, /^appr-[0-9a-f-]{36}$/, "default ids are unguessable");
+});
+
+test("F-7: a run stuck in RESUMING is never resumed by guesswork: the operator marks it FAILED, the retry goes through guard() and nothing assumes that the effect did not run", async () => {
+  const kit = await createBridgeKit();
+  const paused = await pause(kit);
+  await decideAs(kit, paused.approvals[0]!.approvalId, ALICE);
+  kit.restart((data) => {
+    for (const run of data.runs) {
+      run.status = "RESUMING";
+      (run as { resumeToken?: string }).resumeToken = "a-process-that-died";
+    }
+  });
+  assert.deepEqual(await kit.coordinator.resume(paused.runId), { status: "REFUSED", reason: "NOT_RESUMABLE" });
+  assert.deepEqual(await kit.coordinator.retryResume(paused.runId), { status: "REFUSED", reason: "NOT_RESUMABLE" });
+  assert.deepEqual((await kit.coordinator.listStuckRuns()).map((r) => r.runId), [paused.runId]);
+  assert.deepEqual(await kit.coordinator.recoverStuckRun(paused.runId), { status: "RECOVERED" });
+  assert.deepEqual(await kit.coordinator.recoverStuckRun(paused.runId), { status: "NOT_STUCK" }, "only a stuck run can be recovered");
+  assert.equal(results(await kit.coordinator.retryResume(paused.runId))[0]?.status, "EXECUTED");
+  assert.equal(kit.host.supplier.orders.length, 1);
+});
+
+test("F-7: a slow resume that an operator recovered meanwhile cannot finish the run: the effect ran once, the retry is refused by guard()", async () => {
+  const kit = await createBridgeKit();
+  const paused = await pause(kit);
+  await decideAs(kit, paused.approvals[0]!.approvalId, ALICE);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const realPlace = kit.host.supplier.place.bind(kit.host.supplier);
+  kit.host.supplier.place = async (o) => {
+    await gate; // the effect is slow: the resume is "stuck"
+    return realPlace(o);
+  };
+  const slowResume = kit.coordinator.resume(paused.runId);
+  await tick();
+  assert.equal((await kit.store.getRun(paused.runId))?.status, "RESUMING");
+  assert.deepEqual(await kit.coordinator.recoverStuckRun(paused.runId), { status: "RECOVERED" });
+  release();
+  assert.deepEqual(await slowResume, { status: "FAILED", runId: paused.runId, errorName: "ResumeSuperseded" }, "the original resume can no longer finish the run");
+  assert.equal(kit.host.supplier.orders.length, 1, "the effect DID run: recovery never assumed that it had not");
+  const retried = await kit.coordinator.retryResume(paused.runId);
+  assert.equal(retried.status, "DONE");
+  assert.match(JSON.stringify(results(retried)), /already processed by an earlier attempt/);
+  assert.equal(kit.host.supplier.orders.length, 1);
+});
+
+test("F-7: the resume token fences by OWNER, not only by status: with a retry already in flight, the original resume still cannot finish the run", async () => {
+  const kit = await createBridgeKit();
+  const paused = await pause(kit);
+  await decideAs(kit, paused.approvals[0]!.approvalId, ALICE);
+  let releaseEffect!: () => void;
+  const effectGate = new Promise<void>((resolve) => (releaseEffect = resolve));
+  const realPlace = kit.host.supplier.place.bind(kit.host.supplier);
+  kit.host.supplier.place = async (o) => {
+    await effectGate;
+    return realPlace(o);
+  };
+  const original = kit.coordinator.resume(paused.runId);
+  await tick();
+  assert.deepEqual(await kit.coordinator.recoverStuckRun(paused.runId), { status: "RECOVERED" });
+  // The retry starts and is held in flight (its registry lookup is blocked), so the run is RESUMING again, under a NEW token.
+  let releaseRetry!: () => void;
+  const retryGate = new Promise<void>((resolve) => (releaseRetry = resolve));
+  const realLookup = kit.registry.lookup.bind(kit.registry);
+  kit.registry.lookup = async (ref) => {
+    await retryGate;
+    return realLookup(ref);
+  };
+  const retry = kit.coordinator.retryResume(paused.runId);
+  await tick();
+  assert.equal((await kit.store.getRun(paused.runId))?.status, "RESUMING");
+  releaseEffect(); // the original finishes its effect while the retry owns the run
+  assert.deepEqual(await original, { status: "FAILED", runId: paused.runId, errorName: "ResumeSuperseded" });
+  assert.equal((await kit.store.getRun(paused.runId))?.status, "RESUMING", "the original did not mark the run FINISHED");
+  releaseRetry();
+  const retried = await retry;
+  assert.equal(retried.status, "DONE");
+  assert.equal(kit.host.supplier.orders.length, 1, "one effect in total");
+  assert.equal((await kit.store.getRun(paused.runId))?.status, "FINISHED");
+});
+
+test("F-1: a completion never overrides a NEWER decision for the same action that was recorded since the claim", async () => {
+  for (const intent of ["approve", "reject"] as const) {
+    const kit = await createBridgeKit();
+    const paused = await pause(kit);
+    const id = paused.approvals[0]!.approvalId;
+    const real = kit.host.recorder[intent === "approve" ? "approve" : "deny"].bind(kit.host.recorder);
+    kit.host.recorder[intent === "approve" ? "approve" : "deny"] = async () => {
+      throw new Error("write lost"); // the first decision never reached the journal: held DECIDING
+    };
+    assert.deepEqual(await decideAs(kit, id, ALICE, intent), { status: "REFUSED", reason: "DECISION_UNCERTAIN" });
+    // The grantor then records the OPPOSITE decision out of band.
+    if (intent === "approve") await kit.host.recorder.deny("po:ORDER-7", "alice");
+    else await kit.host.approve("po:ORDER-7");
+    kit.host.recorder[intent === "approve" ? "approve" : "deny"] = real;
+    assert.deepEqual(await kit.coordinator.completeStuckDecision(id), { status: "REFUSED", reason: "NO_LONGER_WAITING", detail: "SUPERSEDED" }, intent);
+    assert.equal((await kit.store.getApproval(id))?.status, "VOID");
+    const authorize = await kit.host.authority.authorize((await kit.store.getApproval(id))!.call);
+    assert.equal(authorize.status, intent === "approve" ? "REQUIRES_APPROVAL" : "AUTHORIZED", "Authority keeps the NEWER decision");
+  }
 });

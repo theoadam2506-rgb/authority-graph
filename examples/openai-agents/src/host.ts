@@ -11,11 +11,15 @@
  *  - The delegation: `alice` lets `procurement-agent` create purchase orders, up to 2,000 EUR on its own, up to
  *    5,000 EUR with a human approval, and 5,000 EUR in total.
  */
+import { randomUUID } from "node:crypto";
 import { createAuthority, createEventBuilders, memoryBackend, type Authority, type Backend, type Diagnostic, type EventBuilders } from "authority-graph-sdk";
 import { z } from "zod";
 import { buildAuthorityTool, type AuthorityFunctionTool, type AuthorityToolBundle, type HostPrincipal } from "./authorityTool.js";
 import { registryPrecheck, type OrderRegistry } from "./orderRegistry.js";
 import { SimulatedSupplier } from "./supplier.js";
+
+/** The human who granted the delegation. Only this principal may decide an approval (the host checks it; Authority checks it too). */
+export const GRANTOR = "alice";
 
 /** Asserted by the host. The model never provides, and cannot change, either field. */
 export const PRINCIPAL: HostPrincipal = { agentId: "procurement-agent", delegationId: "d-1" };
@@ -142,6 +146,8 @@ export interface HostOptions {
   readonly faults?: HostFaults;
   /** Architecture B: the tool pauses the run when Authority needs a human (`needsApproval`). Default: architecture A. */
   readonly approval?: "authority";
+  /** Ids of the approval events written to the journal. Default: unique across restarts (`ap-<uuid>`). Inject a deterministic one only in a demo or a test. */
+  readonly newApprovalId?: () => string;
   /** The host's own orders. When given, a reference that is not registered, or arguments that differ from it, are refused. */
   readonly registry?: OrderRegistry;
 }
@@ -161,7 +167,7 @@ export async function createHost(options: HostOptions = {}): Promise<Host> {
   await authority.record([
     events.delegation({
       delegationId: PRINCIPAL.delegationId,
-      grantor: "alice",
+      grantor: GRANTOR,
       grantee: PRINCIPAL.agentId,
       capabilities: [{ resource: "purchase_order", action: "create" }],
       canDelegate: false,
@@ -193,21 +199,21 @@ export async function createHost(options: HostOptions = {}): Promise<Host> {
     },
   });
 
-  let approvalCounter = 0;
+  const newApprovalId = options.newApprovalId ?? (() => `ap-${randomUUID()}`);
   const recorder: ApprovalRecorder = {
     async approve(actionId, approver) {
       clock.advance(60_000);
-      const approvalId = `ap-${actionId}-${++approvalCounter}`;
+      const approvalId = newApprovalId();
       await recordChecked(authority, [
-        events.approvalRequest({ approvalId, actionId, requestedBy: PRINCIPAL.agentId, requestedFrom: "alice", reasonCode: "OVER_AUTOMATIC_LIMIT" }),
+        events.approvalRequest({ approvalId, actionId, requestedBy: PRINCIPAL.agentId, requestedFrom: GRANTOR, reasonCode: "OVER_AUTOMATIC_LIMIT" }),
         events.approvalGranted({ approvalId, actionId, approver }),
       ]);
     },
     async deny(actionId, denier) {
       clock.advance(60_000);
-      const approvalId = `ap-${actionId}-${++approvalCounter}`;
+      const approvalId = newApprovalId();
       await recordChecked(authority, [
-        events.approvalRequest({ approvalId, actionId, requestedBy: PRINCIPAL.agentId, requestedFrom: "alice", reasonCode: "OVER_AUTOMATIC_LIMIT" }),
+        events.approvalRequest({ approvalId, actionId, requestedBy: PRINCIPAL.agentId, requestedFrom: GRANTOR, reasonCode: "OVER_AUTOMATIC_LIMIT" }),
         events.approvalDenied({ approvalId, actionId, denier, reasonCode: "HUMAN_REFUSED" }),
       ]);
     },
@@ -223,11 +229,11 @@ export async function createHost(options: HostOptions = {}): Promise<Host> {
     recorder,
     diagnostics,
     async approve(actionId) {
-      await recorder.approve(actionId, "alice");
+      await recorder.approve(actionId, GRANTOR);
     },
     async revoke() {
       clock.advance(60_000);
-      await recordChecked(authority, [events.revocation({ delegationId: PRINCIPAL.delegationId, revokedBy: "alice", reasonCode: "OWNER_REQUEST" })]);
+      await recordChecked(authority, [events.revocation({ delegationId: PRINCIPAL.delegationId, revokedBy: GRANTOR, reasonCode: "OWNER_REQUEST" })]);
     },
     async journal() {
       const all = (await authority.events()) as unknown as { event_type: string; payload: { execution_result?: string } }[];

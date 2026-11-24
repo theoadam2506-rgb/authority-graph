@@ -110,20 +110,37 @@ export async function runBridgeScenarios(): Promise<BridgeScenario[]> {
     scenarios.push({ id: "B3", title: "The delegation is revoked while a human is deciding", lines });
   }
 
-  // B4. The reviewer's identity.
+  // B4. Who may decide.
   {
-    const kit = await createBridgeKit();
-    const o = kit.register(order("ORDER-7"));
     const lines: string[] = [];
-    const first = waiting(await kit.coordinator.start(kit.agent([[callOrder(o, "call_1")], [assistantMessage("done")]]), "place the order"));
-    const id = first.approvals[0]!.approvalId;
-    for (const [who, credential] of [["no credential", undefined], ["an unknown token", "token-unknown"], ["mallory (authenticated, not the grantor)", "token-mallory"], ["the agent itself (authenticated)", "token-agent"], ["alice", "token-alice"]] as const) {
-      lines.push(`${who} approves: ${decision(await kit.coordinator.decide({ approvalId: id, decision: "approve", credential }))}`);
+    {
+      const kit = await createBridgeKit();
+      const o = kit.register(order("ORDER-7"));
+      const first = waiting(await kit.coordinator.start(kit.agent([[callOrder(o, "call_1")], [assistantMessage("done")]]), "place the order"));
+      const id = first.approvals[0]!.approvalId;
+      lines.push(`-- B4a. the host authenticates, then authorizes, before anything is claimed or written`);
+      lines.push(`an unauthenticated caller asks about an unknown id and about the real id: ${decision(await kit.coordinator.decide({ approvalId: "appr-unknown", decision: "approve", credential: undefined }))} and ${decision(await kit.coordinator.decide({ approvalId: id, decision: "approve", credential: undefined }))}`);
+      for (const [who, credential] of [["an unknown token", "token-unknown"], ["mallory (authenticated, not authorized for this approval)", "token-mallory"], ["the agent itself (authenticated, not authorized)", "token-agent"]] as const) {
+        lines.push(`${who} approves: ${decision(await kit.coordinator.decide({ approvalId: id, decision: "approve", credential }))}`);
+      }
+      lines.push(`alice sends the decision "yes": ${decision(await kit.coordinator.decide({ approvalId: id, decision: "yes" as never, credential: "token-alice" }))}`);
+      lines.push(`journal after all of that: ${(await kit.host.journal()).join(", ")}`);
+      lines.push(`alice approves: ${decision(await kit.coordinator.decide({ approvalId: id, decision: "approve", credential: "token-alice" }))}`, `resume: ${run(await kit.coordinator.resume(first.runId))}`, `supplier holds: ${kit.host.supplier.orders.length} order(s)`);
     }
-    lines.push(`resume: ${run(await kit.coordinator.resume(first.runId))}`, ...(await facts(kit)));
+    {
+      const kit = await createBridgeKit({ permissiveReviewerCheck: true });
+      const o = kit.register(order("ORDER-7"));
+      const first = waiting(await kit.coordinator.start(kit.agent([[callOrder(o, "call_1")], [assistantMessage("done")]]), "place the order"));
+      const id = first.approvals[0]!.approvalId;
+      lines.push(`-- B4b. a MISCONFIGURED host that lets every authenticated reviewer decide: Authority is the second layer`);
+      for (const [who, credential] of [["mallory", "token-mallory"], ["the agent itself", "token-agent"]] as const) {
+        lines.push(`${who} approves: ${decision(await kit.coordinator.decide({ approvalId: id, decision: "approve", credential }))}`);
+      }
+      lines.push(`the approval is still pending: ${(await kit.store.getApproval(id))?.status === "PENDING"}`, `supplier holds: ${kit.host.supplier.orders.length} order(s)`);
+    }
     scenarios.push({
       id: "B4",
-      title: "Who may approve: the host authenticates, Authority decides who is allowed",
+      title: "Who may decide: authenticated and authorized by the host, accepted by Authority",
       lines,
       notShown: "The tokens are SIMULATED (a plain object). Authority compares the asserted name with the delegation's grantor; it authenticates nobody.",
     });
@@ -248,9 +265,10 @@ export async function runBridgeScenarios(): Promise<BridgeScenario[]> {
       kit.store.failTransitionTo = ["APPROVED"];
       lines.push(`-- B9a. Authority records the approval, then the coordinator cannot persist the decision`, `alice approves: ${decision(await kit.coordinator.decide({ approvalId: id, decision: "approve", credential: "token-alice" }))}`);
       lines.push(`journal holds the approval: ${(await kit.host.journal()).includes("APPROVAL_GRANTED")}`, `resume: ${run(await kit.coordinator.resume(first.runId))}`);
-      lines.push(`alice tries again: ${decision(await kit.coordinator.decide({ approvalId: id, decision: "approve", credential: "token-alice" }))}`);
-      lines.push(`recovery releases ${await kit.coordinator.recoverStuckDecisions()} stuck decision(s)`);
-      lines.push(`alice decides again: ${decision(await kit.coordinator.decide({ approvalId: id, decision: "approve", credential: "token-alice" }))}`, `resume: ${run(await kit.coordinator.resume(first.runId))}`, ...(await facts(kit)));
+      lines.push(`alice tries the OPPOSITE decision (reject): ${decision(await kit.coordinator.decide({ approvalId: id, decision: "reject", credential: "token-alice" }))}`);
+      const stuck = await kit.coordinator.listStuckDecisions();
+      lines.push(`stuck decisions listed for the operator: ${stuck.map((r) => `${r.approvalId} (${r.intent} by ${r.decidedBy})`).join(", ")}`);
+      lines.push(`the operator completes the stuck decision, with the SAME intent: ${decision(await kit.coordinator.completeStuckDecision(id))}`, `resume: ${run(await kit.coordinator.resume(first.runId))}`, ...(await facts(kit)));
     }
     {
       const kit = await createBridgeKit();
@@ -280,11 +298,85 @@ export async function runBridgeScenarios(): Promise<BridgeScenario[]> {
       });
       lines.push(`the restarted coordinator resumes the same snapshot: ${run(await kit.coordinator.resume(first.runId))}`, ...(await facts(kit)));
     }
+    {
+      const kit = await createBridgeKit();
+      const o = kit.register(order("ORDER-7"));
+      const first = waiting(await kit.coordinator.start(kit.agent([[callOrder(o, "call_1")], [assistantMessage("done")]]), "place the order"));
+      kit.restart();
+      const o9 = kit.register(order("ORDER-9", 2500));
+      const second = waiting(await kit.coordinator.start(kit.agent([[callOrder(o9, "call_2")], [assistantMessage("done")]]), "a new run after the restart"));
+      lines.push(`-- B9e. a restart, then a new run: no id is reused and nothing is overwritten`, `run ids differ: ${first.runId !== second.runId}; approval ids differ: ${first.approvals[0]!.approvalId !== second.approvals[0]!.approvalId}`);
+      lines.push(`the reviewer who saw ORDER-7 decides on the first approval id: ${decision(await kit.coordinator.decide({ approvalId: first.approvals[0]!.approvalId, decision: "approve", credential: "token-alice" }))}`);
+      lines.push(`the action behind that id: ${(await kit.store.getApproval(first.approvals[0]!.approvalId))?.actionId}; the second approval is still ${(await kit.store.getApproval(second.approvals[0]!.approvalId))?.status}`);
+    }
+    {
+      const kit = await createBridgeKit();
+      const o = kit.register(order("ORDER-7"));
+      const first = waiting(await kit.coordinator.start(kit.agent([[callOrder(o, "call_1")], [assistantMessage("done")]]), "place the order"));
+      await kit.coordinator.decide({ approvalId: first.approvals[0]!.approvalId, decision: "approve", credential: "token-alice" });
+      kit.restart((data) => {
+        for (const r of data.runs) {
+          r.status = "RESUMING";
+          (r as { resumeToken?: string }).resumeToken = "token-of-a-process-that-died";
+        }
+      });
+      lines.push(`-- B9f. the process dies in the middle of a resume`, `resume: ${run(await kit.coordinator.resume(first.runId))}`, `retry the resume: ${run(await kit.coordinator.retryResume(first.runId))}`);
+      lines.push(`stuck runs listed for the operator: ${(await kit.coordinator.listStuckRuns()).map((r) => r.runId).join(", ")}`, `the operator recovers the run (it becomes FAILED: nothing assumes that the effect did not run): ${(await kit.coordinator.recoverStuckRun(first.runId)).status}`);
+      lines.push(`retry the resume (it goes through guard() again): ${run(await kit.coordinator.retryResume(first.runId))}`, ...(await facts(kit)));
+    }
+    {
+      const kit = await createBridgeKit();
+      const o = kit.register(order("ORDER-7"));
+      const first = waiting(await kit.coordinator.start(kit.agent([[callOrder(o, "call_1")], [assistantMessage("done")]]), "place the order"));
+      const id = first.approvals[0]!.approvalId;
+      const real = kit.host.authority.authorize.bind(kit.host.authority);
+      let outage = true;
+      (kit.host.authority as { authorize: unknown }).authorize = async (call: never) => (outage ? { status: "UNAVAILABLE", code: "BACKEND_UNREACHABLE", diagnosticId: "diag" } : real(call));
+      lines.push(`-- B9g. Authority is unreachable while the reviewer decides: the decision is not lost`, `alice approves: ${decision(await kit.coordinator.decide({ approvalId: id, decision: "approve", credential: "token-alice" }))}`, `the approval is still pending: ${(await kit.store.getApproval(id))?.status === "PENDING"}`);
+      outage = false;
+      lines.push(`Authority is back, alice approves: ${decision(await kit.coordinator.decide({ approvalId: id, decision: "approve", credential: "token-alice" }))}`, `resume: ${run(await kit.coordinator.resume(first.runId))}`);
+    }
     scenarios.push({
       id: "B9",
       title: "Failure windows between the Authority write, the coordinator's persistence and the OpenAI resume",
       lines,
-      notShown: "The restart is simulated at the application level: the Authority journal here is in memory and would not survive a real restart. A real deployment needs the PostgreSQL backend and a durable store.",
+      notShown: "The restart is simulated at the application level: the Authority journal here is in memory and would not survive a real restart. A real deployment needs the PostgreSQL backend and a durable store. A stuck decision or run is completed or recovered by an explicit operator action, never automatically: there is no lease, so a slow worker cannot be told from a dead one.",
+    });
+  }
+
+  // B10. A human rejection cannot be bypassed by a concurrent late decision.
+  {
+    const kit = await createBridgeKit();
+    const o = kit.register(order("ORDER-7"));
+    const lines: string[] = [];
+    const first = waiting(await kit.coordinator.start(kit.agent([[callOrder(o, "call_1")], [assistantMessage("done")]]), "place the order"));
+    const id = first.approvals[0]!.approvalId;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const realDeny = kit.host.recorder.deny.bind(kit.host.recorder);
+    kit.host.recorder.deny = async (actionId, who) => {
+      await gate; // the Authority write of the human's rejection is slow
+      return realDeny(actionId, who);
+    };
+    const rejection = kit.coordinator.decide({ approvalId: id, decision: "reject", credential: "token-alice" });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    kit.host.recorder.deny = realDeny;
+    const claimed = await kit.store.getApproval(id);
+    lines.push(`alice rejects; the Authority write is slow; the approval is ${claimed?.status} with the intent "${claimed?.intent}"`);
+    lines.push(`a late concurrent decision to APPROVE: ${decision(await kit.coordinator.decide({ approvalId: id, decision: "approve", credential: "token-alice" }))}`);
+    lines.push(`a decision to reject again: ${decision(await kit.coordinator.decide({ approvalId: id, decision: "reject", credential: "token-alice" }))}`);
+    lines.push(`the operator completes the stuck decision (same intent: reject): ${decision(await kit.coordinator.completeStuckDecision(id))}`);
+    release();
+    lines.push(`the original, slow writer finishes: ${decision(await rejection)}`);
+    lines.push(`the approval is ${(await kit.store.getApproval(id))?.status}; the journal holds an approval: ${(await kit.host.journal()).includes("APPROVAL_GRANTED")}`);
+    lines.push(`resume: ${run(await kit.coordinator.resume(first.runId))}`);
+    kit.queueResume();
+    lines.push(`the model asks for the rejected order again: ${run(await kit.coordinator.start(kit.agent([[callOrder(o, "call_2")], [assistantMessage("done")]]), "ask again"))}`, ...(await facts(kit)));
+    scenarios.push({
+      id: "B10",
+      title: "A human rejection cannot be bypassed by a concurrent late decision",
+      lines,
+      notShown: "The slow Authority write cannot be cancelled: the original writer may still land a duplicate of the SAME intent (here a second refusal). The duplicate cannot conflict, but this prototype cannot prevent it, and there is no lease to tell a slow worker from a dead one.",
     });
   }
 

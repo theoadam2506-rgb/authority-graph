@@ -47,7 +47,7 @@ npm run sdk:package        # writes authority-graph-sdk-0.0.0.tgz at the reposit
 cd examples/openai-agents
 npm ci                     # installs the pinned dependencies and the SDK tarball
 npm run typecheck
-npm test                   # 55 tests (A and B)
+npm test                   # 73 tests (A and B)
 npm run demo               # architecture A scenarios; compare with expected-output.txt
 npm run demo:b             # architecture B scenarios; compare with expected-output-b.txt
 ```
@@ -127,12 +127,18 @@ What the scripted model cannot show: how a language model reacts to these messag
           · store (server side): the call, the summary, the callId, the serialized RunState; status PENDING
                        │
  reviewer ─credential─▶ coordinator.decide(approvalId, approve | reject, credential)
-          1. authenticate (simulated tokens)            → NOT_AUTHENTICATED, nothing written
-          2. claim PENDING → DECIDING (compare-and-set) → ALREADY_DECIDED for a second decision
-          3. authorize(server's copy of the call)       → still REQUIRES_APPROVAL (or already AUTHORIZED, for an approval)
-          4. write to Authority and CHECK outcomes[].accepted
-                                                        → NOT_ACCEPTED_BY_AUTHORITY (for example UNAUTHORIZED_APPROVAL_DECISION)
-          5. persist DECIDING → APPROVED | REJECTED
+          1. authenticate (simulated tokens) FIRST      → NOT_AUTHENTICATED, the same answer for any id: nothing is revealed
+          2. validate the decision (exact "approve" / "reject") → INVALID_DECISION, nothing claimed
+          3. look the approval up; the HOST authorizes this reviewer for it → NOT_AUTHORIZED_FOR_THIS_APPROVAL
+          4. claim PENDING → DECIDING with a CLAIM TOKEN that records the INTENT and the reviewer → ALREADY_DECIDED for any other decision
+          5. authorize(server's copy of the call)       → UNAVAILABLE (claim released: nothing was decided),
+                                                          NO_LONGER_WAITING (revoked, denied: VOID), or already AUTHORIZED
+          6. write the intent to Authority and CHECK outcomes[].accepted
+                                                        → refused by Authority: claim released (nothing recorded)
+                                                        → outcome UNKNOWN: held DECIDING (NOT released): DECISION_UNCERTAIN
+          7. persist DECIDING → APPROVED | REJECTED, presenting the claim token → PERSISTENCE_FAILED: held DECIDING
+                       │
+          held DECIDING: only an explicit operator action, completeStuckDecision(), moves it, with the SAME intent and reviewer
                        │
  coordinator.resume(runId): compare-and-set WAITING → RESUMING; rebuild the agent; RunState.fromString;
           for each interruption: compare the snapshot with the server's record, then state.approve / state.reject
@@ -158,29 +164,70 @@ It does **not** know that two orders the host itself registered are the same pur
 purchase that `ORDER-7` may already have placed, both run, the target receives two requests with two different idempotency
 keys, and nothing prevents the duplicate. That is the host's responsibility, and the target's.
 
-### Scenarios (B1 to B9, `src/bridgeScenarios.ts`, `test/bridge.test.ts`)
+### Scenarios (B1 to B10, `src/bridgeScenarios.ts`, `test/bridge.test.ts`)
 
 | # | Scenario | What is shown |
 |---|---|---|
 | B1 | Approval, interruption, resume, execution | The run pauses with the supplier untouched; an authenticated decision; the resume runs the effect once |
 | B2 | A human rejects | No effect; the refusal is journaled; a refusal is not terminal in Authority: asking again needs a human again |
 | B3 | Revocation during the wait | Revoked before the decision: the decision is not applied (`NO_LONGER_WAITING`). Revoked after: `C12_DELEGATION_REVOKED` at resume. The supplier is never called. |
-| B4 | Who may approve | No credential or an unknown token: refused by the coordinator. An authenticated non-grantor (`mallory`, the agent): refused **by Authority**, the approval stays pending for `alice` |
+| B4 | Who may decide | No credential or an unknown token: `NOT_AUTHENTICATED`, the same answer for a real and an unknown id. An authenticated reviewer the host does not authorize for the approval (`mallory`, the agent): refused by the host before anything is claimed or written. An invalid decision value is refused. With a deliberately MISCONFIGURED host that lets everyone decide, **Authority** still refuses the non-grantor and the claim is released |
 | B5 | Authority and the OpenAI state disagree | SDK approved, Authority not told: `APPROVAL_REQUIRED`. Sticky `alwaysApprove`: the SDK stops asking, `guard()` still refuses the next order. Authority already holds the approval while the run is paused: the decision completes it |
 | B6 | Double decision, double resume | One passes the compare-and-set; the effect runs once |
 | B7 | A tampered snapshot or record | The coordinator compares what it reads with its own record; the SDK also refuses an approved invocation whose arguments changed (tested separately) |
 | B8 | The order registry | Invented reference, changed arguments, the same reference after an uncertain result: refused. A second order the host registers: **not** prevented |
-| B9 | Failure windows | See below |
+| B9 | Failure windows | See below (B9a to B9g) |
+| B10 | A human rejection and a late concurrent decision | The late approve cannot take the claim; the operator completes the SAME intent (reject); the original slow writer is fenced; no approval is ever written; the rejected order needs a human again |
 
 ### Failure windows between the Authority write, the coordinator's persistence and the OpenAI resume
 
 | Window | What happens | Why it is safe, and what is left |
 |---|---|---|
-| Authority wrote the approval, the coordinator could not persist the decision (B9a) | The approval stays `DECIDING`; a resume is refused; `recoverStuckDecisions()` releases it; the same decision then completes without a second write | Nothing runs from an unpersisted decision. A real store needs leases, not a manual call |
-| Authority unavailable during the write (test "window 1b") | The claim is released (`PENDING`); `UNAVAILABLE` | A retry works once Authority is back |
+| Authority wrote the decision, the coordinator could not persist it (B9a) | The approval stays `DECIDING` with its intent; a resume is refused; the OPPOSITE decision is refused (`ALREADY_DECIDED`); the operator's `completeStuckDecision()` applies the SAME intent and the decision completes without a second write | Nothing runs from an unpersisted decision, and a different decision can never follow. Completion is explicit: no lease exists to tell a slow worker from a dead one |
+| An Authority write whose outcome is unknown (window 1b) | `DECISION_UNCERTAIN`; the approval is held `DECIDING`, **not** released | Releasing it would let a rejection follow an approval that may already be in the journal |
+| Authority refuses the write explicitly (a non-grantor, with a misconfigured host) | The claim is released: nothing was recorded | A reviewer who may decide can still do so |
+| Authority unreachable during the binding check (B9g) | `UNAVAILABLE`; the claim is released, the approval stays `PENDING` | A transient outage never costs the reviewer's decision. A definite refusal (revoked, denied) is `VOID` |
+| A decision still in flight while another is attempted (B10) | The late decision is refused; the original writer is fenced by the claim token if an operator completed the decision meanwhile | The original writer's Authority write cannot be cancelled: it may still land a duplicate of the SAME intent (see "What cannot be established") |
 | Decision persisted, process restarts before the resume (B9b) | The rebuilt coordinator resumes from the stored snapshot, once | The restart is simulated: the Authority journal here is in memory |
-| The effect ran, then the next model call failed during the resume (B9c) | `FAILED`; the effect ran; `retryResume` does not rerun it, and the model is told that the order was **already processed**, not that it was not placed | The model-facing text matters: a retry after a successful effect must not read as a failure |
+| A restart, then a new run (B9e) | Ids are unguessable (`randomUUID`) and the store refuses an existing id: nothing is overwritten | A deterministic generator is injected only by the demo and the tests, and its counters live in the kit, across restarts |
+| The effect ran, then the next model call failed during the resume (B9c) | `FAILED`; the effect ran; `retryResume` does not rerun it, and the model is told that the order was **already processed** | A retry after a successful effect must not read as a failure |
 | The effect ran, the journal write failed, the coordinator crashed before `FINISHED` (B9d) | The replay of the same snapshot is `ALREADY_REDEEMED`; the supplier holds one order | The journal has `CAPABILITY_REDEEMED` and no `ACTION_EXECUTED`: that state has no status of its own |
+| The process dies in the middle of a resume (B9f) | The run stays `RESUMING`: `resume` and `retryResume` are refused. The operator's `recoverStuckRun()` marks it `FAILED`; a slow original resume can no longer finish it (resume token) | It never assumes that the effect did not run: the retry goes through `guard()` again, which refuses a second execution |
+
+### Guarantees demonstrated by the tests, and what cannot be established
+
+**Demonstrated (tests in `test/bridge.test.ts`, each killed by a mutation of the code it covers):**
+
+- A human rejection cannot be bypassed by a concurrent or late decision on the same approval, and no approval is ever
+  written for a rejected decision; asking again for the rejected order pauses for a human again.
+- One decision, one intent, one reviewer per approval; a stale finisher cannot move a record it no longer owns (claim token);
+  a resume that was recovered cannot finish the run, even while a retry is in flight (resume token).
+- Ids are never reused after a restart, the store never overwrites, and a reviewer who saw one approval id decides that
+  approval's action and no other.
+- The reviewer is authenticated before anything is looked up, authorized by the host before anything is claimed, and
+  accepted by Authority; every Authority write is checked.
+- No stuck decision or stuck run is ever released automatically, and no recovery assumes that an effect did not happen.
+- The effect still runs only through `authority.guard()`.
+
+**Cannot be established in this architecture (stated, not hidden):**
+
+- **An Authority write that is already in flight cannot be cancelled**, and Authority offers no conditional write on the
+  coordinator's claim. After `completeStuckDecision`, the original writer may still land. Its write has the same intent, so it
+  cannot conflict, but this example cannot prevent the duplicate (the journal then holds two refusals, or two approvals).
+- **A completion re-applies an OLD intent.** `completeStuckDecision` refuses (`SUPERSEDED`) when the journal holds, after the
+  claim, a decision for the same action that contradicts the intent (for example a refusal recorded out of band by the
+  grantor while an approval was stuck). It cannot close the gap between that check and the write that follows, nor see a
+  decision recorded somewhere Authority does not know. `completeStuckDecision` and `recoverStuckRun` are operator actions:
+  restrict them to operators; this example does not authenticate their caller.
+- **There is no lease and no clock**: a slow decision cannot be told from a dead one. That is why recovery is an explicit
+  operator action. An automatic, time-based recovery is deliberately NOT provided: it would reopen the window above.
+- **Authority approvals are per action; decisions here are per interruption.** Two interruptions for the same action can
+  be decided differently by two reviewers (one rejects, one approves); the action then stays authorized. That is a human
+  decision, not a bypass, but it is not prevented.
+- **A rejection does not revoke an approval that already exists in Authority**; a `reject` while Authority already authorizes
+  the order is refused (`ALREADY_AUTHORIZED`) rather than recorded.
+- **Everything is in memory and single-process.** The compare-and-set is atomic only inside one event loop; multi-process
+  safety needs a transactional store and leases, which would still not make the Authority write conditional.
 
 ### What a real deployment still needs
 
@@ -191,13 +238,15 @@ None of the following is provided here, and none of it is optional for real use:
   atomic conditional update. An in-memory journal loses the approvals and everything asks a human again (fail closed).
 - **Authentication and authorization of reviewers.** The simulated token map has no expiry, signature, revocation or
   transport security. A real application takes the reviewer from its authenticated session, never from the request body, and
-  authorizes the reviewer for the displayed order. Authority only checks that the asserted approver is the delegation's
-  grantor: it authenticates nobody.
+  implements `authorizeReviewer` against its own rules (here: only the grantor). Authority only checks that the asserted
+  approver is the delegation's grantor: it authenticates nobody.
 - **Snapshot security.** A serialized `RunState` holds tool arguments, approval decisions and application context, and
   `RunState.fromString` does not authenticate it. Keep it server side, verify its integrity, bind it to the run and the user,
   and treat displayed arguments as untrusted content.
 - **Concurrency across processes.** The compare-and-set here is atomic in one event loop only. Several processes need real
-  transactions or leases, and a recovery policy for claims that never finish.
+  transactions, and leases plus a recovery policy for claims and resumes that never finish (this example offers only the
+  explicit operator actions `completeStuckDecision` and `recoverStuckRun`). A lease still cannot make the Authority write
+  conditional on the claim: see "What cannot be established".
 - **Idempotency at the target.** `idempotencyKey` is the ticket id and changes with a new action. After an uncertain result
   only the target can say what happened, and only the target can deduplicate. No exactly-once guarantee exists anywhere here.
 - **A real order registry** (the application's order table, with its own authorization), rate limiting, audit, and the
@@ -288,7 +337,7 @@ Authority does not provide, and this example only simulates:
 | `src/approval.ts` | Architecture B: the coordinator, the store (in memory), the simulated authenticator |
 | `src/orderRegistry.ts` | Architecture B: the minimal order registry and its precheck |
 | `src/bridgeKit.ts` | Shared setup for B: host, registry, coordinator, scripted agents, restart simulation, faulty store |
-| `src/bridgeScenarios.ts`, `src/demoBridge.ts` | Architecture B scenarios B1 to B9, and the printer |
+| `src/bridgeScenarios.ts`, `src/demoBridge.ts` | Architecture B scenarios B1 to B10, and the printer |
 | `test/adapter.test.ts`, `test/scenarios.test.ts` | Architecture A and adapter tests |
 | `test/bridge.test.ts`, `test/bridgeScenarios.test.ts` | Architecture B tests (adversarial, failure windows, registry) and the demo pin |
 | `expected-output-b.txt` | What `npm run demo:b` prints |
