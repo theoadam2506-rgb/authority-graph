@@ -30,8 +30,8 @@ Run the scripted agent demo (seven scenarios, offline) with `npm run demo:agent`
 |---|---|
 | `authorize(call)` | Records the call (`ACTION_REQUESTED`), evaluates it for this exact action, and if authorized issues a single-use `Ticket` (`CAPABILITY_ISSUED`). |
 | `redeem(ticket, observed)` | One atomic step, immediately before the effect: ticket exists, not expired, not redeemed, this enforcement point, same arguments, authority **still valid now**. Writes `CAPABILITY_REDEEMED`. |
-| `report(ticket, { resultCode })` | Records `ACTION_EXECUTED` for a redeemed ticket, built from the journal (see below). An assertion by the enforcement point, not proof that the effect happened. |
-| `guard(call, effect)` | `authorize`, `redeem`, run `effect` only if redeemed, then `report`. Never retries the effect. |
+| `report(ticket, { resultCode })` | Records `ACTION_EXECUTED` for a redeemed ticket, built from the journal (see below). An assertion by the enforcement point, not proof that the effect happened. The first report of an action wins and cannot be corrected (see [Failed, confirmed and uncertain outcomes](#failed-confirmed-and-uncertain-outcomes)). |
+| `guard(call, effect)` | `authorize`, `redeem`, run `effect` only if redeemed, then `report` (`EXECUTED` if the effect returns, `EFFECT_FAILED` if it throws). Never retries the effect. |
 | `record(events)` | Appends delegations, approvals, revocations through the engine's ingestion rules. Build the events with `createEventBuilders({ clock })` (see below). |
 | `events()` | Read-only journal. |
 
@@ -64,7 +64,102 @@ look at the journal. The price of this choice is that an effect can be
 
 If the effect throws, the ticket stays consumed, the failure is reported
 (`EFFECT_FAILED`) and the effect is not retried. If `report` fails, the result
-is still `EXECUTED` with `report: { status: "UNAVAILABLE", ... }`.
+is still `EXECUTED` with `report: { status: "UNAVAILABLE", ... }`. What these
+words do and do not tell you about the external effect is spelled out in
+[Failed, confirmed and uncertain outcomes](#failed-confirmed-and-uncertain-outcomes).
+
+## Failed, confirmed and uncertain outcomes
+
+> This section describes what the SDK does **today**, including its imperfect
+> parts. Each statement is pinned by a characterization test in
+> [`tests/sdk/effectOutcomes.test.ts`](../../tests/sdk/effectOutcomes.test.ts)
+> (and, on PostgreSQL, in `tests/sdk/authority.postgres.test.ts`). A test that
+> fails after a change means a documented behavior changed: that is a decision,
+> not a refactoring. Nothing here is a promise to change it.
+
+**Four things are easy to confuse.**
+
+| | What it is | What the SDK returns | Was the effect started? |
+|---|---|---|---|
+| **Refusal of authorization** | Authority said no, before the effect | `DENIED`, `REQUIRES_APPROVAL`, `UNKNOWN`, or `REFUSED` at redemption | No. Known outcome. |
+| **Confirmed failure of an effect** | Your target answered "no, it did not happen" | **No status of its own** (see below) | Yes |
+| **Uncertain result** | You do not know whether the target did it | `UNKNOWN_OUTCOME` (redemption), `EFFECT_FAILED` (effect), or no status (crash before `report`) | `UNKNOWN_OUTCOME`: no. The others: maybe, or yes. |
+| **Re-execution attempt** | A second try for the same action | `ALREADY_REDEEMED`, or `BLOCKED` from `guard` | No. The SDK never retries. |
+
+**What each word means.**
+
+- `EFFECT_FAILED` means that **the function you passed to `guard` threw** after
+  the redemption. It says nothing about whether the external effect happened.
+  A target that refused the call and a call that timed out produce the same
+  result and the same journal code. The SDK cannot tell them apart, because it
+  only sees an exception.
+- `EXECUTED` means that **your function returned**. If it returns a value that
+  *you* consider a failure (for example `{ ok: false }`, after catching the
+  error inside the effect as the section above suggests), `guard` still reports
+  `EXECUTED`, and the journal records `ACTION_EXECUTED` with the code
+  `EXECUTED`. The journal then says "executed" about an action that failed.
+- `UNKNOWN_OUTCOME` concerns the **redemption**, never the effect: the effect
+  was not started.
+
+**Recording a result of your own.** `guard` only ever reports `EXECUTED` or
+`EFFECT_FAILED`. To record anything else (for example a confirmed refusal by your
+target), call `authorize`, `redeem` and `report` yourself and pass the code you
+want: any code matching `^[A-Z0-9_]{1,64}$` is accepted. **Authority gives that code
+no meaning**: the engine never reads it. It does not change a later decision, an
+approval's consumption or the budget. The code is a label for people and for your
+own tools.
+
+**`ticketConsumed` describes the call, not the ticket's history.** It is `true`
+only when *this* call consumed the ticket without authorizing anything
+(`CONCURRENT_WRITE_DETECTED`, and the `EFFECT_FAILED` result of `guard`). A
+refusal such as `ALREADY_REDEEMED` carries `ticketConsumed: false` even though the
+ticket was consumed earlier. To know whether a ticket is consumed, look at the
+journal for `CAPABILITY_REDEEMED`.
+
+**A redeemed ticket that was never reported has no status.** If the process stops
+after `redeem` and before `report`, the journal holds `CAPABILITY_REDEEMED` and no
+`ACTION_EXECUTED`: nothing in the results says that the effect may be pending.
+`guard` answers `BLOCKED` with `ALREADY_REDEEMED`; `authorize` on that action
+answers `AUTHORIZED` with the **same ticket** again (so `AUTHORIZED` does not mean
+"still usable"). You can still call `report` afterwards, if you kept the ticket.
+
+**The first report wins, and cannot be corrected.** An action has at most one
+`ACTION_EXECUTED`. After an `EFFECT_FAILED`, a later `report` with `EXECUTED`
+answers `ALREADY_REPORTED` and the journal keeps `EFFECT_FAILED`: if you learn
+afterwards that the effect did complete, the SDK offers no way to record it. Keep
+that knowledge in your own system. A report that failed to be written
+(`report: { status: "UNAVAILABLE" }`) is different: no `ACTION_EXECUTED` exists,
+and one `report` can still be made with the same ticket.
+
+**The idempotency key is the ticket id.** `guard` gives your effect
+`idempotencyKey = ticket.capabilityId`. The same action always has the same
+ticket, and the SDK never runs an action's effect twice, so that key can never
+deduplicate a retry made by the SDK. It is useful for **finding out** what your
+target did for this ticket ("what happened for key K?").
+
+**A new action is a new attempt, with a new key.** After an `EFFECT_FAILED`,
+the only way to try again is a **new action** (a new `ACTION_REQUESTED`; I32 closes
+the first one definitively). It gets a new ticket and therefore a **different
+idempotency key**. If the first attempt did complete, your target will see the
+second as a different request and may do it twice. Authority cannot prevent that.
+Before retrying, check with the target what happened to the first attempt, and
+carry a stable identifier of your own (an order number in the arguments, a
+business key) that your target can deduplicate on. A new action also needs its own
+approval where one was needed.
+
+**A failed effect never releases the budget.** An issued ticket holds capacity
+(`CAPACITY_EXCEEDED` for a further action under a `total_budget`), a redeemed one
+keeps it (I29), and a reported `ACTION_EXECUTED`, whatever its code, counts
+against the budget (`C9_TOTAL_BUDGET_EXCEEDED`). This is deliberate prudence
+(`SPEC.md`, I29 and the accepted V1 trade-off): the cost is availability, never
+safety.
+
+**What stays with the host application.** Knowing whether the effect happened (ask
+the target); deduplicating on the target side; deciding whether to retry; keeping
+its own record of a result learned later; keeping the ticket if it may need to
+`report` later; recovering from a stop between `redeem` and `report`; and, as
+everywhere, identity, the clock, and the durability of the journal (the in-memory
+backend is lost with the process).
 
 ## Errors and diagnostics: public results never contain a raw error
 
@@ -109,7 +204,9 @@ itself writes nothing: no console, no process output, no network.
 
 An effect's own error is treated the same way: it is not in `EFFECT_FAILED`. To
 handle it in your code, catch inside the effect; the operator gets it through
-`onDiagnostic` (`operation: "guard.effect"`).
+`onDiagnostic` (`operation: "guard.effect"`). **Caution:** an error that you catch
+and turn into a returned value is reported as `EXECUTED`, not as a failure (see
+[Failed, confirmed and uncertain outcomes](#failed-confirmed-and-uncertain-outcomes)).
 
 **Precautions that stay in force.**
 
@@ -182,16 +279,25 @@ runs, and mutation checks):
 - Changed arguments, amount, currency or recipient are refused at redemption.
 - A revocation written between `authorize` and `redeem` is honoured.
 - A thrown error, an unreadable store or a bad clock never ends in "allowed".
+- An effect that throws is never run a second time by the SDK, whatever the
+  retries (also under seeded random faults), and its failure is reported once.
+- A failed or unreported effect never releases the budget it used.
 
 Not guaranteed:
 
-- **The external effect happens at most once.** Only the target can dedupe;
-  `guard` hands it `idempotencyKey` for that reason.
+- **The external effect happens at most once.** Only the target can dedupe.
+  `guard` hands it `idempotencyKey`, which is the ticket id: it identifies the
+  attempt, and it changes with a new action.
+- **That the journal tells what happened to the effect.** `EFFECT_FAILED` means
+  "the function threw", `EXECUTED` means "the function returned", and the first
+  report of an action cannot be corrected.
 - **Identity.** `agentId` is asserted by the caller; Authority does not verify it.
 - **The clock.** It is injected, with no default, and whoever controls it
   controls expiry and revocation timing. `systemClock` is an explicit opt-in.
 - **Anyone who can write to the journal around the SDK.** Such a writer can
-  burn a ticket, and can issue extra tickets (below).
+  burn a ticket (write its redemption). It cannot obtain a second ticket for an
+  action: since I32 (D36, `70f4313`) the kernel, ingestion, the issuance
+  transactions and a PostgreSQL index refuse it (see below).
 - **Throughput.** Writes share one PostgreSQL writer lock; not measured.
 - **Independent review.** None.
 
@@ -199,21 +305,27 @@ Tool arguments must be plain JSON; amounts are whole, non-negative integers.
 
 ## Engine behaviour the SDK works around (found while building it)
 
-Both were observed on `main` at `397ba8c`; neither is changed here.
+Both were observed on `main` at `397ba8c` while building the SDK. The first is
+still how the engine behaves. The second **was fixed by I32**, merged in
+`70f4313`; its description is kept below as history.
 
 1. **A refused issuance is cached under its idempotency key and replayed**, even
    after the missing approval was granted. The SDK therefore evaluates the
    action read-only first and calls the issuance transaction only when the
    action is currently authorized, so refusals are never cached by the SDK.
-2. **The engine does not limit tickets per action.** With different idempotency
-   keys, one approved action can obtain two tickets, and both can be redeemed;
-   the approval is consumed only by `ACTION_EXECUTED` (`report`). Through the
-   SDK there is exactly one ticket per action (a fixed idempotency key makes the
-   issuance atomic), but a caller that issues tickets directly, with its own
-   keys, is **not protected**. Documenting this is not considered enough: a
-   separate engine correction is proposed in its own document and is **not part
-   of this change**. Until it is merged and released, do not issue tickets
-   around the SDK.
+2. **(Fixed by I32, since `70f4313`.) The engine used to allow several tickets
+   for one action.** With different idempotency keys, one approved action could
+   obtain two tickets, and both could be redeemed; the approval is consumed only
+   by `ACTION_EXECUTED` (`report`). **Since I32 an action holds at most one ticket,
+   definitively**: an expired, redeemed or burned ticket does not free it, and a
+   new action is required. Four layers enforce it (the issuance kernel,
+   ingestion including journal replay, the issuance transactions, a PostgreSQL
+   unique index); see `SPEC.md` (I32), decision D36 and
+   [`COMPATIBILITY_I32.md`](./COMPATIBILITY_I32.md) for journals written before
+   it. Through the SDK, asking again for the same action returns the same ticket
+   (a fixed idempotency key per action). The old advice not to issue tickets
+   around the SDK no longer protects against a second ticket, but a writer that
+   goes around the SDK can still burn a ticket.
 
 ## Typed event builders
 

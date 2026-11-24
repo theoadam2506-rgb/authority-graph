@@ -10,10 +10,10 @@
  *    all end with the effect NOT started.
  *  - ONE TICKET PER ACTION through this SDK. `authorize` always uses the same
  *    idempotency key for an action (`sdk-authorize.<actionId>`), so a retry
- *    returns the same ticket instead of issuing a second one. The engine
- *    itself does not forbid several tickets for one action (see the design
- *    notes in the pull request); this is why callers must not issue tickets
- *    around the SDK for the same action.
+ *    returns the same ticket instead of issuing a second one. Since I32 the
+ *    engine itself also allows at most one ticket per action, definitively
+ *    (an expired or redeemed ticket does not free the action); a retry after
+ *    a failure is therefore a new action with a new ticket.
  *  - REFUSALS ARE NOT CACHED. The engine records a refused issuance under its
  *    idempotency key and replays it, even after an approval was granted. The
  *    SDK therefore evaluates the action first (read-only) and calls the

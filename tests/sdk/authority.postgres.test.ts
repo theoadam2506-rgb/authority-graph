@@ -141,5 +141,50 @@ describe.skipIf(!available)("SDK on PostgreSQL 16", () => {
     expect(c.runs).toBe(0);
     expect(await count(authority, "CAPABILITY_REDEEMED")).toBe(1);
   });
-});
 
+  // Characterization of what happens AFTER a successful redemption (see tests/sdk/effectOutcomes.test.ts and
+  // docs/v1/SDK.md, "Failed, confirmed and uncertain outcomes"): they pin today's behaviour on PostgreSQL.
+  it("an effect that throws after the redemption is EFFECT_FAILED: ticket consumed, one ACTION_EXECUTED:EFFECT_FAILED, never retried", async () => {
+    const s = await pgSetup("sdk_effect_failed");
+    let runs = 0;
+    const r = await s.authority.guard(call("a1"), async () => {
+      runs++;
+      throw new Error("reply lost");
+    });
+    expect(r).toMatchObject({ status: "EFFECT_FAILED", code: "EFFECT_THREW", ticketConsumed: true, report: { status: "REPORTED" } });
+    expect(await s.authority.guard(call("a1"), async () => ++runs)).toMatchObject({ status: "BLOCKED", stage: "redeem", result: { status: "REFUSED", reason: "ALREADY_REDEEMED" } });
+    expect(runs).toBe(1);
+    expect(await count(s.authority, "CAPABILITY_REDEEMED")).toBe(1);
+    const executed = (await s.authority.events()).filter((e) => e.event_type === "ACTION_EXECUTED");
+    expect(executed.map((e) => (e.event_type === "ACTION_EXECUTED" ? String(e.payload.execution_result) : ""))).toEqual(["EFFECT_FAILED"]);
+  });
+
+  it("the first report wins on PostgreSQL too: a later EXECUTED is ALREADY_REPORTED and the journal keeps EFFECT_FAILED", async () => {
+    const s = await pgSetup("sdk_first_report");
+    let ticket: Parameters<typeof s.authority.report>[0] | undefined;
+    await s.authority.guard(call("a1"), async (context) => {
+      ticket = context.ticket;
+      throw new Error("reply lost");
+    });
+    if (ticket === undefined) throw new Error("the effect did not receive a ticket");
+    expect(await s.authority.report(ticket, { resultCode: "EXECUTED" })).toEqual({ status: "ALREADY_REPORTED" });
+    expect(await count(s.authority, "ACTION_EXECUTED")).toBe(1);
+  });
+
+  it("the idempotency key is the ticket id on PostgreSQL, and a new action carries another key", async () => {
+    const s = await pgSetup("sdk_key");
+    const keys: string[] = [];
+    let first: string | undefined;
+    await s.authority.guard(call("a1"), async (context) => {
+      keys.push(context.idempotencyKey);
+      first = context.ticket.capabilityId;
+      throw new Error("reply lost");
+    });
+    await s.authority.guard(call("a2"), async (context) => {
+      keys.push(context.idempotencyKey);
+      return "sent again";
+    });
+    expect(keys[0]).toBe(first);
+    expect(keys[1]).not.toBe(keys[0]);
+  });
+});

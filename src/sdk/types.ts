@@ -83,7 +83,11 @@ export type RedeemResult =
   | {
       readonly status: "REFUSED";
       readonly reason: RedeemCapabilityRejectionReason | "ACTION_ID_MISMATCH";
-      /** True only when the ticket was consumed even though nothing is authorized (CONCURRENT_WRITE_DETECTED). */
+      /**
+       * Describes THIS call: true only when this call consumed the ticket even though nothing is authorized
+       * (CONCURRENT_WRITE_DETECTED). An earlier consumption does not set it: ALREADY_REDEEMED carries false.
+       * To know whether a ticket is consumed, look for CAPABILITY_REDEEMED in the journal.
+       */
       readonly ticketConsumed: boolean;
     }
   /**
@@ -121,7 +125,10 @@ export type GuardResult<T> =
   /**
    * The effect was started and threw. The ticket is consumed and is never reused; the effect is never retried.
    * The thrown value is NOT in the result (a tool error can carry URLs or tokens): it goes to `onDiagnostic`.
-   * To handle it in your own code, catch inside the effect.
+   * To handle it in your own code, catch inside the effect (but an error you catch and return as a value is
+   * reported as EXECUTED, not as a failure).
+   * It does NOT say whether the external effect happened: a refusal by the target and a timeout look the same.
+   * The first report of an action wins; it cannot be corrected afterwards.
    */
   | { readonly status: "EFFECT_FAILED"; readonly code: "EFFECT_THREW"; readonly diagnosticId: string; readonly ticketConsumed: true; readonly report: ReportResult };
 
