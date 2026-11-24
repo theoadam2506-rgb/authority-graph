@@ -1,0 +1,111 @@
+== 1. An order under the automatic limit is authorized and placed
+   -- 1,800 EUR, the delegation allows 2,000 EUR on its own
+      the model asks: ORDER-1, 1,800 EUR, sku A-100 x 7, vendor-1
+      it is told   : EXECUTED {"confirmation":"CONF-1"}
+      supplier holds: 1 order(s)
+      journal       : DELEGATION_CREATED, ACTION_REQUESTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+
+== 2. An order beyond the delegation is refused, and the supplier is never called
+   -- 9,000 EUR, the delegation allows 5,000 EUR in total
+      the model asks: ORDER-BIG, 9,000 EUR, sku A-100 x 7, vendor-1
+      it is told   : NOT_EXECUTED (C9_TOTAL_BUDGET_EXCEEDED)
+      supplier holds: 0 order(s)
+      journal       : DELEGATION_CREATED, ACTION_REQUESTED
+
+== 3. An order above the automatic limit waits for a human; the host records the approval; the model asks again
+   -- 3,500 EUR, then alice approves po:ORDER-7, then the same order is asked again
+      the model asks: ORDER-7, 3,500 EUR, sku A-100 x 7, vendor-1
+      it is told   : APPROVAL_REQUIRED
+      the model asks: ORDER-7, 3,500 EUR, sku A-100 x 7, vendor-1
+      it is told   : EXECUTED {"confirmation":"CONF-1"}
+      supplier holds: 1 order(s)
+      journal       : DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+      host-side fact: the supplier held 0 order(s) before the approval
+   NOT shown here: No native pause/resume. The run is not interrupted: the model is told to wait, and the host records the decision between two separate runs. That is architecture B.
+
+== 4. After the approval of one order, the same order reference with other arguments is refused
+   -- approved: ORDER-7, 3,500 EUR, A-100, vendor-1
+      the model asks: ORDER-7, 3,500 EUR, sku A-100 x 7, vendor-1
+      it is told   : APPROVAL_REQUIRED
+      the model asks: ORDER-7, 4,900 EUR, sku A-100 x 7, vendor-1
+      it is told   : NOT_EXECUTED (ACTION_ID_REUSED_WITH_DIFFERENT_CALL)
+      the model asks: ORDER-7, 3,500 EUR, sku B-200 x 7, vendor-1
+      it is told   : NOT_EXECUTED (ACTION_ID_REUSED_WITH_DIFFERENT_CALL)
+      the model asks: ORDER-7, 3,500 EUR, sku A-100 x 7, vendor-2
+      it is told   : NOT_EXECUTED (ACTION_ID_REUSED_WITH_DIFFERENT_CALL)
+      the model asks: ORDER-7, 3,500 EUR, sku A-100 x 7, vendor-1
+      it is told   : EXECUTED {"confirmation":"CONF-1"}
+      supplier holds: 1 order(s)
+      journal       : DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+   NOT shown here: The adapter builds the call from one validated input, so the arguments cannot change between authorization and redemption inside it. What is shown is a changed request under the same order reference. The ticket-level check (ARGUMENTS_MISMATCH) is covered by the agent demo of Authority, not through this adapter.
+
+== 5. The delegation is revoked after the approval: the order is refused when the model asks again
+   -- approved, then revoked by alice, then asked again
+      the model asks: ORDER-7, 3,500 EUR, sku A-100 x 7, vendor-1
+      it is told   : APPROVAL_REQUIRED
+      the model asks: ORDER-7, 3,500 EUR, sku A-100 x 7, vendor-1
+      it is told   : NOT_EXECUTED (C12_DELEGATION_REVOKED)
+      the model asks: ORDER-8, 1,800 EUR, sku A-100 x 7, vendor-1
+      it is told   : NOT_EXECUTED (C12_DELEGATION_REVOKED)
+      supplier holds: 0 order(s)
+      journal       : DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, DELEGATION_REVOKED, ACTION_REQUESTED
+   NOT shown here: A revocation between authorization and redemption is NOT covered: guard() authorizes and redeems back to back, so here the revocation is caught when the model asks again, at authorization. The re-check at the instant of redemption would need architecture B2.
+
+== 6. The same order is asked for again: nothing runs twice
+   -- an order placed, then asked again in the same run
+      the model asks: ORDER-1, 1,800 EUR, sku A-100 x 7, vendor-1
+      it is told   : EXECUTED {"confirmation":"CONF-1"}
+      the model asks: ORDER-1, 1,800 EUR, sku A-100 x 7, vendor-1
+      it is told   : NOT_EXECUTED (ALREADY_REDEEMED)
+      supplier holds: 1 order(s)
+      journal       : DELEGATION_CREATED, ACTION_REQUESTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+   -- an approved order is consumed by its execution: the approval cannot be used again
+      the model asks: ORDER-9, 2,400 EUR, sku A-100 x 7, vendor-1
+      it is told   : APPROVAL_REQUIRED
+      the model asks: ORDER-9, 2,400 EUR, sku A-100 x 7, vendor-1
+      it is told   : EXECUTED {"confirmation":"CONF-1"}
+      the model asks: ORDER-9, 2,400 EUR, sku A-100 x 7, vendor-1
+      it is told   : NOT_EXECUTED (C7_APPROVAL_ALREADY_CONSUMED)
+      supplier holds: 1 order(s)
+      journal       : DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+   -- the order is placed, the journal write after it fails, then the order is asked again
+      the model asks: ORDER-2, 1,800 EUR, sku A-100 x 7, vendor-1
+      it is told   : EXECUTED {"confirmation":"CONF-1"} (the journal write failed)
+      the model asks: ORDER-2, 1,800 EUR, sku A-100 x 7, vendor-1
+      it is told   : NOT_EXECUTED (ALREADY_REDEEMED)
+      supplier holds: 1 order(s)
+      journal       : DELEGATION_CREATED, ACTION_REQUESTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED
+      host-side fact: the journal holds CAPABILITY_REDEEMED and no ACTION_EXECUTED: the single-use ticket is consumed, whatever the report says
+
+== 7. The supplier completes the order but its reply is lost: the result is uncertain, never 'failed'
+   -- 7a. the reply is lost; the same order is asked again
+      the model asks: ORDER-3, 1,800 EUR, sku A-100 x 7, vendor-1
+      it is told   : OUTCOME_UNKNOWN
+      the model asks: ORDER-3, 1,800 EUR, sku A-100 x 7, vendor-1
+      it is told   : NOT_EXECUTED (ALREADY_REDEEMED)
+      supplier holds: 1 order(s)
+      journal       : DELEGATION_CREATED, ACTION_REQUESTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EFFECT_FAILED)
+      host-side fact: the supplier holds 1 order(s)
+   -- 7b. the model retries under ANOTHER order reference (a new action)
+      the model asks: ORDER-3, 1,800 EUR, sku A-100 x 7, vendor-1
+      it is told   : OUTCOME_UNKNOWN
+      the model asks: ORDER-3-RETRY, 1,800 EUR, sku A-100 x 7, vendor-1
+      it is told   : EXECUTED {"confirmation":"CONF-2"}
+      supplier holds: 2 order(s)
+      journal       : DELEGATION_CREATED, ACTION_REQUESTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EFFECT_FAILED), ACTION_REQUESTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+      host-side fact: the supplier now holds 2 orders for 1 business purchase, under 2 different idempotency keys
+      host-side fact: Authority cannot see that these two orders are the same purchase
+   -- 7c. the supplier REFUSES the order (nothing is recorded): the model is told the same thing as in 7a
+      the model asks: ORDER-4, 1,800 EUR, sku A-100 x 7, vendor-1
+      it is told   : OUTCOME_UNKNOWN
+      supplier holds: 0 order(s)
+      journal       : DELEGATION_CREATED, ACTION_REQUESTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EFFECT_FAILED)
+   -- 7d. the redemption's acknowledgement is lost (before the supplier is called)
+      the model asks: ORDER-5, 1,800 EUR, sku A-100 x 7, vendor-1
+      it is told   : NOT_EXECUTED (OUTCOME_UNCERTAIN)
+      the model asks: ORDER-5, 1,800 EUR, sku A-100 x 7, vendor-1
+      it is told   : NOT_EXECUTED (ALREADY_REDEEMED)
+      supplier holds: 0 order(s)
+      journal       : DELEGATION_CREATED, ACTION_REQUESTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED
+      host-side fact: the supplier holds 0 order(s)
+   NOT shown here: The order reference is written by the (scripted) model, and zod checks only its format. Nothing ties it to an order the host registered, so a model can invent a new reference to retry an uncertain operation (7b). A real host must bind the reference to a recorded order and refuse new references for such a retry. This example does not provide that protection.

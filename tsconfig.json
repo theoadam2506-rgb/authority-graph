@@ -27,5 +27,8 @@
     "demo",
     "examples",
     "scripts/generate-proof-vectors.ts"
+  ],
+  "exclude": [
+    "examples/openai-agents"
   ]
 }

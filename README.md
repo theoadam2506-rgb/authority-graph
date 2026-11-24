@@ -76,6 +76,11 @@ is a test-only shortcut. The full runnable version, including a historical
 npm run quickstart
 ```
 
+An experimental example puts the SDK's `guard()` in front of a simulated supplier order inside an OpenAI Agents SDK
+tool, with a scripted model (no API key): [`examples/openai-agents/`](./examples/openai-agents/README.md). It is an
+isolated package with its own lockfile and demonstrates a thin layer only: there is no native pause/resume of
+approvals.
+
 ## Run it
 
 ```
