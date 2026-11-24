@@ -1,0 +1,117 @@
+== B1. Approval, interruption, resume, execution
+      the model asks for ORDER-7 (2,400 EUR): WAITING, appr-1 for po:ORDER-7 (2,400 EUR to vendor-1)
+      supplier holds: 0 order(s), the run is paused
+      alice approves appr-1 (with her simulated token): DECIDED (approve)
+      resume run-1: DONE, the model was told: EXECUTED {"confirmation":"CONF-1"}
+      supplier holds: 1 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+
+== B2. A human rejects the order
+      paused: WAITING, appr-1 for po:ORDER-7 (2,400 EUR to vendor-1)
+      alice rejects: DECIDED (reject)
+      resume: DONE, the model was told: SDK_MESSAGE "A human rejected this order. It was not placed."
+      supplier holds: 0 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_DENIED
+   NOT shown here: Authority journals the refusal, but a refusal does not make the action permanently denied: asking again needs a human again.
+
+== B3. The delegation is revoked while a human is deciding
+   -- B3a. alice revokes the delegation BEFORE she decides
+      paused: WAITING, appr-1 for po:ORDER-7 (2,400 EUR to vendor-1)
+      alice approves: REFUSED (NO_LONGER_WAITING: C12_DELEGATION_REVOKED)
+      resume: DONE, the model was told: SDK_MESSAGE "The order is no longer waiting for approval, so it was not placed. Ask again if it is still needed."
+      supplier holds: 0 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, DELEGATION_REVOKED
+   -- B3b. alice approves, THEN the delegation is revoked, then the run resumes
+      alice approves: DECIDED (approve)
+      resume: DONE, the model was told: NOT_EXECUTED (C12_DELEGATION_REVOKED)
+      supplier holds: 0 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, DELEGATION_REVOKED
+
+== B4. Who may approve: the host authenticates, Authority decides who is allowed
+      no credential approves: REFUSED (NOT_AUTHENTICATED)
+      an unknown token approves: REFUSED (NOT_AUTHENTICATED)
+      mallory (authenticated, not the grantor) approves: REFUSED (NOT_ACCEPTED_BY_AUTHORITY: UNAUTHORIZED_APPROVAL_DECISION)
+      the agent itself (authenticated) approves: REFUSED (NOT_ACCEPTED_BY_AUTHORITY: UNAUTHORIZED_APPROVAL_DECISION)
+      alice approves: DECIDED (approve)
+      resume: DONE, the model was told: EXECUTED {"confirmation":"CONF-1"}
+      supplier holds: 1 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+   NOT shown here: The tokens are SIMULATED (a plain object). Authority compares the asserted name with the delegation's grantor; it authenticates nobody.
+
+== B5. Authority and the OpenAI state disagree
+   -- B5a. the SDK approves, nothing is recorded in Authority
+      the model was told: APPROVAL_REQUIRED
+      supplier holds: 0 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED
+   -- B5b. a sticky alwaysApprove, then a second order that no human approved
+      interruptions for ORDER-8: 0 (the SDK stopped asking)
+      the model was told: EXECUTED {"confirmation":"CONF-1"} | APPROVAL_REQUIRED
+      supplier holds: 1 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED), ACTION_REQUESTED
+   -- B5c. Authority already holds the approval, but the SDK run is still paused
+      resume: REFUSED (DECISIONS_PENDING)
+      alice decides: DECIDED (approve)
+      resume: DONE, the model was told: EXECUTED {"confirmation":"CONF-1"}
+      supplier holds: 1 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+   NOT shown here: In every case the effect is decided by guard(), never by the SDK's pause or approval. A sticky approval only removes the pause: the model is then told that approval is required.
+
+== B6. Double decision and double resume
+      two decisions at the same time: DECIDED (approve) and REFUSED (ALREADY_DECIDED)
+      two resumes at the same time: DONE, the model was told: EXECUTED {"confirmation":"CONF-1"} and REFUSED (NOT_RESUMABLE)
+      supplier holds: 1 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+   NOT shown here: The compare-and-set is atomic only inside one event loop. Several processes need a real transactional store.
+
+== B7. A tampered snapshot or record
+   -- B7a. the stored RunState is edited (the amount 2400 becomes 4900)
+      resume: DONE, the model was told: SDK_MESSAGE "The approved request no longer matches what was approved, so the order was not placed."
+      supplier holds: 0 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED
+   -- B7b. the coordinator's own record of the approved call is edited
+      resume: DONE, the model was told: SDK_MESSAGE "The approved request no longer matches what was approved, so the order was not placed."
+      supplier holds: 0 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED
+   NOT shown here: Here the edit is caught by the coordinator, which compares the snapshot with its own record of what was approved (the Agents SDK also checks an approved invocation; a test shows it). Neither is authentication: a real deployment must verify the integrity of the snapshot and bind it to the run and the user.
+
+== B8. The order registry: no invented reference, and the limit of what it can know
+      the model invents a reference: DONE, the model was told: NOT_EXECUTED (UNREGISTERED_ORDER_REFERENCE)
+      the model changes the amount of a registered order (4,900 instead of 2,400): DONE, the model was told: NOT_EXECUTED (ORDER_DOES_NOT_MATCH_REGISTRATION)
+      journal so far: DELEGATION_CREATED
+   -- the registered order is approved; the supplier completes it but its reply is lost
+      resume: DONE, the model was told: OUTCOME_UNKNOWN
+      supplier holds: 1 order(s)
+      the model asks for ORDER-7 again: DONE, the model was told: NOT_EXECUTED (C7_APPROVAL_ALREADY_CONSUMED)
+      the model invents ORDER-7-RETRY to retry: DONE, the model was told: NOT_EXECUTED (UNREGISTERED_ORDER_REFERENCE)
+   -- the HOST registers ORDER-7B for the same purchase and a human approves it
+      resume: DONE, the model was told: EXECUTED {"confirmation":"CONF-2"}
+      supplier holds: 2 order(s), for 1 purchase
+   NOT shown here: The registry stops a model from inventing a reference. It cannot know that two orders the HOST registered are the same purchase: that duplicate is not prevented here, and the target must deduplicate.
+
+== B9. Failure windows between the Authority write, the coordinator's persistence and the OpenAI resume
+   -- B9a. Authority records the approval, then the coordinator cannot persist the decision
+      alice approves: REFUSED (PERSISTENCE_FAILED)
+      journal holds the approval: true
+      resume: REFUSED (DECISIONS_PENDING)
+      alice tries again: REFUSED (ALREADY_DECIDED)
+      recovery releases 1 stuck decision(s)
+      alice decides again: DECIDED (approve)
+      resume: DONE, the model was told: EXECUTED {"confirmation":"CONF-1"}
+      supplier holds: 1 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+   -- B9b. the decision is persisted, then the process restarts before the resume
+      resume after the restart: DONE, the model was told: EXECUTED {"confirmation":"CONF-1"}
+      supplier holds: 1 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+   -- B9c. the effect runs, then the NEXT model call fails during the resume
+      resume: FAILED (Error); the effect may have run
+      supplier holds: 1 order(s)
+      retry the resume: DONE, the model was told: NOT_EXECUTED (C7_APPROVAL_ALREADY_CONSUMED)
+      supplier holds: 1 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED, ACTION_EXECUTED(EXECUTED)
+   -- B9d. the effect runs and the journal write after it fails; the coordinator then crashes before it records FINISHED
+      resume: DONE, the model was told: EXECUTED {"confirmation":"CONF-1"} (the journal write failed)
+      the restarted coordinator resumes the same snapshot: DONE, the model was told: NOT_EXECUTED (ALREADY_REDEEMED)
+      supplier holds: 1 order(s)
+      journal: DELEGATION_CREATED, ACTION_REQUESTED, APPROVAL_REQUESTED, APPROVAL_GRANTED, CAPABILITY_ISSUED, CAPABILITY_REDEEMED
+   NOT shown here: The restart is simulated at the application level: the Authority journal here is in memory and would not survive a real restart. A real deployment needs the PostgreSQL backend and a durable store.
