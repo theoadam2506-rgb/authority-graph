@@ -1,5 +1,5 @@
 /**
- * O2-1 on PostgreSQL 16 (skipped, with a warning, when TEST_DATABASE_URL is unreachable):
+ * O2-1 and O2-2 (T1) on PostgreSQL 16 (skipped, with a warning, when TEST_DATABASE_URL is unreachable):
  *  - differential: current SDK vs frozen SDK + storage on the same scenarios, each on its own schema;
  *  - exact count of full-journal reads per authorize() path, before and after;
  *  - fault injection (journal read, append, issuance): the same fail-closed statuses;
@@ -31,7 +31,7 @@ async function drop(iso: IsolatedSchema): Promise<void> { await iso.drop(); open
 
 /** Counts every `SELECT * FROM authority_events` that reaches PostgreSQL (client-level, so one count per read) and whether a transaction/lock was open. */
 function spyPool(iso: IsolatedSchema) {
-  const counts = { reads: 0, lockedReads: 0, lockFree: 0 };
+  const counts = { reads: 0, lockedReads: 0, lockFree: 0, filtered: 0 };
   const origConnect = iso.pool.connect.bind(iso.pool) as any;
   (iso.pool as any).connect = async (...a: any[]) => {
     if (typeof a[0] === "function") return origConnect(...a);
@@ -42,7 +42,8 @@ function spyPool(iso: IsolatedSchema) {
         const sql = String(typeof x[0] === "string" ? x[0] : x[0]?.text);
         if (/^BEGIN/.test(sql)) locked = false;
         if (/pg_advisory_xact_lock/.test(sql)) locked = true;
-        if (/SELECT \* FROM authority_events/.test(sql)) { counts.reads++; if (locked) counts.lockedReads++; else counts.lockFree++; }
+        if (/SELECT \* FROM authority_events WHERE event_type/.test(sql)) counts.filtered++;
+        else if (/SELECT \* FROM authority_events/.test(sql)) { counts.reads++; if (locked) counts.lockedReads++; else counts.lockFree++; }
         if (/^(COMMIT|ROLLBACK)/.test(sql)) locked = false;
         return q(...x);
       };
@@ -73,8 +74,8 @@ d("O2-1 on PostgreSQL 16", () => {
     expect(ops).toBeGreaterThan(n * 60);
   });
 
-  it("reads per authorize() path: unchanged where the journal changes in between, one lock-free read fewer when the request already exists; the two reads under the lock never change", async () => {
-    const table: Record<string, Record<Impl, { reads: number; lockFree: number; lockedReads: number }>> = {};
+  it("reads per authorize() path: the request lookup reads only the ACTION_REQUESTED rows; one full lock-free read fewer on every path that looks it up; the reads under the lock never change", async () => {
+    const table: Record<string, Record<Impl, { lockFree: number; lockedReads: number; filtered: number }>> = {};
     for (const impl of ["current", "oracle"] as Impl[]) {
       const I = IMPLS[impl];
       const iso = await schema(`o2r${impl[0]}`);
@@ -86,9 +87,9 @@ d("O2-1 on PostgreSQL 16", () => {
       await a.record([ev.delegation({ delegationId: "d", grantor: "alice", grantee: "agent", capabilities: [{ resource: "r", action: "x" }], canDelegate: false, expiresAt: null, thresholds: { automaticMax: { value: 5, currency: "EUR" }, approvalMax: { value: 50, currency: "EUR" } } })]);
       const call = (id: string, v = 3) => ({ actionId: id, agentId: "agent", delegationId: "d", capability: { resource: "r", action: "x" }, amount: { value: v, currency: "EUR" } });
       const measure = async (label: string, fn: () => Promise<any>, status: string) => {
-        spy.reads = spy.lockedReads = spy.lockFree = 0; now += 1000;
+        spy.reads = spy.lockedReads = spy.lockFree = spy.filtered = 0; now += 1000;
         const r = await fn(); expect(r.status).toBe(status);
-        (table[label] ??= {} as any)[impl] = { reads: spy.reads, lockFree: spy.lockFree, lockedReads: spy.lockedReads };
+        (table[label] ??= {} as any)[impl] = { lockFree: spy.lockFree, lockedReads: spy.lockedReads, filtered: spy.filtered };
       };
       await measure("new action, authorized", () => a.authorize(call("a1")), "AUTHORIZED");
       await measure("same action again (request exists, ticket exists)", () => a.authorize(call("a1")), "AUTHORIZED");
@@ -100,15 +101,13 @@ d("O2-1 on PostgreSQL 16", () => {
       await measure("action id reused with a different call", () => a.authorize(call("a1", 4)), "DENIED");
       await drop(iso);
     }
-    console.info("[O2] full-journal reads per call (lock-free / under lock), oracle -> current:\n" + Object.entries(table).map(([k, v]) => `  ${k.padEnd(58)} ${v.oracle.lockFree}/${v.oracle.lockedReads} -> ${v.current.lockFree}/${v.current.lockedReads}`).join("\n"));
+    console.info("[O2-T1] journal reads per call: full lock-free + filtered / full under lock, oracle -> current:\n" + Object.entries(table).map(([k, v]) => `  ${k.padEnd(58)} ${v.oracle.lockFree}+${v.oracle.filtered}/${v.oracle.lockedReads} -> ${v.current.lockFree}+${v.current.filtered}/${v.current.lockedReads}`).join("\n"));
     for (const [label, v] of Object.entries(table)) {
       expect({ label, lockedReads: v.current.lockedReads }).toEqual({ label, lockedReads: v.oracle.lockedReads }); // the reads under the lock are untouched
-      expect(v.current.lockFree).toBeLessThanOrEqual(v.oracle.lockFree);
+      expect({ label, filtered: v.oracle.filtered }).toEqual({ label, filtered: 0 });
+      expect({ label, filtered: v.current.filtered }).toEqual({ label, filtered: 1 }); // exactly one filtered lookup per call
+      expect({ label, lockFree: v.current.lockFree }).toEqual({ label, lockFree: v.oracle.lockFree - 1 }); // and one full lock-free read fewer
     }
-    expect(table["authorize after approval (request exists, issues)"]!.current.lockFree).toBe(table["authorize after approval (request exists, issues)"]!.oracle.lockFree - 1);
-    expect(table["same action again (request exists, ticket exists)"]!.current.lockFree).toBe(table["same action again (request exists, ticket exists)"]!.oracle.lockFree - 1);
-    expect(table["new action, authorized"]!.current).toEqual(table["new action, authorized"]!.oracle);
-    expect(table["action id reused with a different call"]!.current).toEqual(table["action id reused with a different call"]!.oracle);
   });
 
   describe("fault injection (journal read, append, issuance)", () => {
@@ -183,18 +182,56 @@ d("O2-1 on PostgreSQL 16", () => {
       }
     });
 
-    it("a second journal read failing: same fail-closed result when the request is new; when the request already existed there is no second read any more, so the call completes with the result of a healthy run", async () => {
-      const freshNew = await outcome("current", "fresh", { failGetEventsFrom: 2 });
-      const freshOld = await outcome("oracle", "fresh", { failGetEventsFrom: 2 });
-      expect(freshNew).toEqual(freshOld);
-      expect(freshNew.status).toBe("UNAVAILABLE");
-      const reqNew = await outcome("current", "requested", { failGetEventsFrom: 2 });
-      const reqOld = await outcome("oracle", "requested", { failGetEventsFrom: 2 });
-      expect(reqOld.status).toBe("UNAVAILABLE"); // before: the second (redundant) read failed
-      const healthy = await outcome("current", "requested", {});
-      expect({ status: reqNew.status, journal: reqNew.journal }).toEqual({ status: healthy.status, journal: healthy.journal }); // after: it does not exist, so it cannot fail
-      expect(healthy.status).toBe("AUTHORIZED");
+    it("any later journal read failing (the pre-check read after the lookup): the same fail-closed result as before, new or existing request", async () => {
+      for (const setup of ["fresh", "requested"] as const) {
+        const a = await outcome("current", setup, { failGetEventsFrom: 2 });
+        const b = await outcome("oracle", setup, { failGetEventsFrom: 2 });
+        expect(a).toEqual(b);
+        expect(a.status).toBe("UNAVAILABLE");
+        expect(a.journal.includes("CAPABILITY_ISSUED")).toBe(false);
+      }
     });
+  });
+
+  it("malformed and colliding rows (raw INSERTs, as a writer with INSERT could): identical results, errors and journals before and after", { timeout: 300_000 }, async () => {
+    const reqPayload = (id: unknown, who = "agent") => ({ action_id: id, requesting_principal_id: who, delegation_id: "d", capability_requested: { resource: "r", action: "x" }, parameters: { kind: "monetary", amount: { value: 3, currency: "EUR" } } });
+    const longId = (await import("node:crypto")).randomBytes(6000).toString("base64");
+    const CASES: Record<string, { rows: [string, unknown][]; special: string }> = {
+      "JSON null payload before every later request": { rows: [["ACTION_REQUESTED", null]], special: "tgt" },
+      "a string payload and an array payload before": { rows: [["ACTION_REQUESTED", "oops"], ["ACTION_REQUESTED", ["tgt"]]], special: "tgt" },
+      "a numeric action_id 7, then the call for the string 7": { rows: [["ACTION_REQUESTED", reqPayload(7)]], special: "7" },
+      "a missing / null / object action_id before": { rows: [["ACTION_REQUESTED", { ...reqPayload("x"), action_id: undefined }], ["ACTION_REQUESTED", reqPayload(null)], ["ACTION_REQUESTED", reqPayload({ a: 1 })]], special: "tgt" },
+      "a duplicate request for the target by someone else, first by sequence": { rows: [["ACTION_REQUESTED", reqPayload("tgt", "mallory")]], special: "tgt" },
+      "the same action id carried by another event type": { rows: [["CAPABILITY_ISSUED", { action_id: "tgt", capability_id: "c-x" }]], special: "tgt" },
+      "an 8 000-character action id": { rows: [], special: longId },
+    };
+    for (const [name, c] of Object.entries(CASES)) {
+      const run: Record<string, unknown> = {};
+      for (const impl of ["current", "oracle"] as Impl[]) {
+        const I = IMPLS[impl];
+        const iso = await schema(`o2m${impl[0]}`);
+        let now = Date.parse("2026-06-01T09:00:00.000Z");
+        const clock = { now: () => new Date(now).toISOString() };
+        let n = 0;
+        const ev = I.createEventBuilders({ clock, newEventId: () => `evt-${++n}` });
+        const a = I.createAuthority({ backend: I.postgresBackend(iso.pool), clock, enforcementPointId: "ep", newId: () => `cap-${++n}` });
+        await a.record([ev.delegation({ delegationId: "d", grantor: "alice", grantee: "agent", capabilities: [{ resource: "r", action: "x" }], canDelegate: false, expiresAt: null, thresholds: { automaticMax: { value: 5, currency: "EUR" }, approvalMax: { value: 50, currency: "EUR" } } })]);
+        let seq = 2;
+        for (const [type, payload] of c.rows) await iso.pool.query(`INSERT INTO authority_events (sequence,event_id,event_type,principal_id,schema_version,occurred_at,authority_time,recorded_at,assurance_level,payload) VALUES ($1,$2,$3,'agent',1,'2026-06-01T09:00:00Z','2026-06-01T09:00:00Z',now(),'ASSERTED_UNVERIFIED',$4::jsonb)`, [seq++, `raw-${seq}`, type, JSON.stringify(payload)]);
+        const call = (id: string, v = 3) => ({ actionId: id, agentId: "agent", delegationId: "d", capability: { resource: "r", action: "x" }, amount: { value: v, currency: "EUR" } });
+        const results: unknown[] = [];
+        for (const [label, fn] of [["new", () => a.authorize(call("n1"))], ["retry", () => a.authorize(call("n1"))], ["reuse", () => a.authorize(call("n1", 4))], ["special", () => a.authorize(call(c.special))], ["special again", () => a.authorize(call(c.special))], ["special different", () => a.authorize(call(c.special, 4))]] as const) {
+          now += 1000;
+          try { results.push([label, JSON.parse(JSON.stringify(await fn(), (_k, v) => (typeof v === "string" ? v.replace(/diag-[0-9a-f-]{36}/g, "diag-*") : v)))]); } catch (e: any) { results.push([label, { threw: e?.name }]); }
+        }
+        const journal = ((await iso.pool.query("SELECT sequence, event_type, payload FROM authority_events ORDER BY sequence")).rows as any[]).map((r) => ({ s: Number(r.sequence), t: r.event_type, a: r.payload?.action_id === undefined ? null : String(r.payload.action_id).slice(0, 40) }));
+        run[impl] = { results, journal };
+        await drop(iso);
+      }
+      expect({ name, ...(run.current as object) }).toEqual({ name, ...(run.oracle as object) });
+      if (name.startsWith("JSON null payload")) expect(JSON.stringify(run.oracle)).toContain("UNAVAILABLE"); // the reference really fails closed here: the error parity is exercised
+    }
+    console.info(`[O2-T1] PostgreSQL malformed/colliding rows: cases=${Object.keys(CASES).length} divergences=0`);
   });
 
   it("concurrent callers: one request and at most one ticket per action, no budget exceeded, every grant valid for the frozen engine, same status counts as before", { timeout: 600_000 }, async () => {
@@ -235,8 +272,12 @@ d("O2-1 on PostgreSQL 16", () => {
       const pick = (t: Record<string, number>, prefix: string) => Object.fromEntries(Object.entries(t).filter(([k]) => k.startsWith(prefix)));
       const clashStatuses = (t: Record<string, number>) => Object.values(pick(t, "clash:")).reduce((x, y) => x + y, 0);
       expect(clashStatuses(tallies.current!)).toBe(clashStatuses(tallies.oracle!));
-      const sameOk = (t: Record<string, number>) => Object.entries(pick(t, "same:")).filter(([k]) => /AUTHORIZED|DENIED:C9/.test(k)).reduce((x, [, y]) => x + y, 0);
-      expect(sameOk(tallies.current!)).toBe(sameOk(tallies.oracle!));
+      // Which action wins the budget is a race: it may differ between the two runs. What must hold in each run: the six identical concurrent calls
+      // received ONE decision (all authorized with the one ticket, or all refused for capacity), never a mixture.
+      for (const impl of ["current", "oracle"] as const) {
+        const keys = Object.keys(pick(tallies[impl]!, "same:"));
+        expect({ impl, keys }).toEqual({ impl, keys: keys.length === 1 && /^same:(AUTHORIZED|DENIED:CAPACITY_EXCEEDED)$/.test(keys[0]!) ? keys : ["one decision"] });
+      }
     }
   });
 });
