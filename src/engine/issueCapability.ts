@@ -28,6 +28,7 @@ import type {
 } from "../domain/types.js";
 import { isWellFormedActionParameters, sequenceNumber } from "../domain/types.js";
 import type { AuthenticatedPrincipal } from "../domain/authenticatedPrincipal.js";
+import { isJournalShapeSound } from "./journalShape.js";
 import { remainingCapacity, type ValidatedGrant } from "./capacity.js";
 import {
   findActionRequested,
@@ -301,7 +302,13 @@ export function issueCapability(
   // 7-8. remainingCapacity(D) - requestedAmount >= 0 for EVERY bounded
   // delegation in the GRANTED chain — a single insufficient ancestor
   // rejects the WHOLE emission; nothing partial is ever issued.
-  const existingGrants = collectValidatedGrants(store);
+  // Performance (O1-A): the grants are only read by `remainingCapacity`, and only for a delegation that has a
+  // `total_budget`. When no delegation of the chain is bounded, collecting (re-validating) every historical grant is
+  // pure wasted work, quadratic in the journal. It is skipped ONLY when the whole journal is shape-sound, i.e. when
+  // the original code provably cannot throw: on any other journal (malformed, hand-written), the original order of
+  // evaluation runs unchanged, so its errors are unchanged too. Decisions are identical in both cases.
+  const lazyGrants = isJournalShapeSound(store);
+  let existingGrants: readonly ValidatedGrant[] | undefined = lazyGrants ? undefined : collectValidatedGrants(store);
   for (const link of grant.grantedChainRef) {
     if (link.kind !== "delegation") {
       continue;
@@ -314,6 +321,7 @@ export function issueCapability(
     if (totalBudget === undefined) {
       continue; // H: unbounded delegation — never an artificial cap.
     }
+    existingGrants ??= collectValidatedGrants(store);
     const remaining = remainingCapacity(link.delegation_id, totalBudget, existingGrants, store);
     if (remaining - requestedAmount < 0) {
       return { ok: false, reason: "CAPACITY_EXCEEDED" };

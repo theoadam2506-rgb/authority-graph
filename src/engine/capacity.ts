@@ -18,6 +18,7 @@
  * Pure: no I/O, no Date.now(), no mutation of its inputs.
  */
 import type { AuthorityEvent, CanonicalStore, ChainLink } from "../domain/events.js";
+import { JournalLookup } from "./journalIndex.js";
 import { isWellFormedActionParameters, type Branded, type DelegationId, type Iso8601, type Money } from "../domain/types.js";
 
 export type CapabilityIssuedEvent = Extract<AuthorityEvent, { readonly event_type: "CAPABILITY_ISSUED" }>;
@@ -110,11 +111,13 @@ function chainContainsDelegation(chain: readonly ChainLink[], delegationId: Dele
  */
 export function remainingCapacity(delegationId: DelegationId, capacity: Money, grants: readonly ValidatedGrant[], visibleStore: CanonicalStore): number {
   let engaged = 0;
+  // Call-local index (see journalIndex.ts): same answers as the linear scan, and the same error on a malformed journal.
+  const lookup = new JournalLookup(visibleStore);
   for (const grant of grants) {
     if (!chainContainsDelegation(grant.event.payload.granted_chain_ref, delegationId)) {
       continue;
     }
-    const request = findActionRequested(grant.event.payload.action_id, visibleStore);
+    const request = lookup.actionRequested(grant.event.payload.action_id, (id) => findActionRequested(id, visibleStore));
     if (request === undefined) {
       continue;
     }

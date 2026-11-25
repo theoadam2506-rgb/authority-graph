@@ -248,6 +248,12 @@ describe("G7: the engine gives no meaning to the result code", () => {
     };
     walk(root);
     const mentions = files.filter((f) => /execution_result|ExecutionResultCode|executionResultCode/.test(readFileSync(f, "utf8"))).map((f) => f.slice(root.length + 1));
-    expect(mentions.sort()).toEqual(["domain/events.ts", "domain/types.ts", "sdk/authority.ts"]);
+    // engine/journalShape.ts only checks that the field is a string (a structural, one-sided test that gates a performance
+    // fast path, never a decision); that single check is pinned just below so it cannot grow into a reader.
+    expect(mentions.sort()).toEqual(["domain/events.ts", "domain/types.ts", "engine/journalShape.ts", "sdk/authority.ts"]);
+    const shape = readFileSync(join(root, "engine", "journalShape.ts"), "utf8");
+    const lines = shape.split("\n").filter((l) => /execution_result|ExecutionResultCode|executionResultCode/.test(l) && !l.trim().startsWith("*") && !l.trim().startsWith("//"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("isStr(p.execution_result)");
   });
 });
