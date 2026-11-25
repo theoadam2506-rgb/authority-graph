@@ -90,3 +90,14 @@ test("the order reference is a MODEL argument: its format is checked, its legiti
   const badFormat = await askModel(host, [order("x".repeat(65))]);
   assert.equal(badFormat.toolOutputs[0]?.status, "SDK_TOOL_ERROR");
 });
+
+test("a result that means 'an earlier attempt already consumed this action' never tells the model the order was not placed", () => {
+  for (const reason of ["ALREADY_REDEEMED", "C7_APPROVAL_ALREADY_CONSUMED"]) {
+    const out = toModelResult({ status: "BLOCKED", stage: "redeem", result: { status: "REFUSED", reason: reason as never, ticketConsumed: false } });
+    assert.equal(out.status, "NOT_EXECUTED");
+    assert.match((out as { message: string }).message, /already processed by an earlier attempt/);
+    assert.doesNotMatch((out as { message: string }).message, /was not placed/);
+  }
+  const other = toModelResult({ status: "BLOCKED", stage: "authorize", result: { status: "DENIED", reason: "C12_DELEGATION_REVOKED" } });
+  assert.match((other as { message: string }).message, /was not placed/);
+});

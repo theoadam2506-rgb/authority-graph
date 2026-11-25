@@ -203,6 +203,8 @@ const told = (output: ToolOutput): string => {
       return output.status;
     case "SDK_TOOL_ERROR":
       return `SDK_TOOL_ERROR "${output.text}"`;
+    case "SDK_MESSAGE":
+      return `SDK_MESSAGE "${output.text}"`;
   }
 };
 

@@ -14,9 +14,13 @@
  *    diagnostic id (those belong to the operator, through `onDiagnostic`).
  *
  * What it does NOT do:
- *  - No native human approval. The tool does not set `needsApproval`, so the run never pauses and there are no
- *    `interruptions`. When Authority says a human must approve, the model is told so and the tool does not
- *    run. Recording the human's decision is the host's job, outside this adapter (architecture B would bridge it).
+ *  - By default (architecture A) no native human approval: the tool does not set `needsApproval`, so the run never
+ *    pauses and there are no `interruptions`. When Authority says a human must approve, the model is told so and the
+ *    tool does not run. Recording the human's decision is the host's job, outside this adapter.
+ *  - With `approval: "authority"` (architecture B, experimental) `needsApproval` is set to ask Authority, and the run
+ *    PAUSES with interruptions. That pause is only a user-experience mechanism, NEVER an authorization: `execute`
+ *    still goes through `authority.guard()`, so a wrongly approved, sticky-approved or missing SDK approval cannot
+ *    make the effect run. The coordinator in `approval.ts` records the human's decision in Authority.
  *  - No exactly-once guarantee. Authority bounds authorization: one successful redemption per ticket. Only the
  *    target system can deduplicate or confirm an effect.
  *  - No identity verification, and no protection against a model that is persuaded to ask for something else
@@ -24,7 +28,7 @@
  *
  * The SDK it consumes is experimental, not published to npm and not independently reviewed.
  */
-import { tool, type FunctionTool } from "@openai/agents";
+import { tool, type FunctionTool, type RunToolApprovalItem } from "@openai/agents";
 import type { Authority, EffectContext, GuardResult, ToolCall } from "authority-graph-sdk";
 import type { z } from "zod";
 
@@ -67,6 +71,38 @@ export interface AuthorityToolConfig<S extends z.ZodObject> {
    * Whatever it returns must be JSON-safe: it is shown to the model.
    */
   readonly effect: (input: z.infer<S>, context: EffectContext) => Promise<unknown>;
+  /**
+   * Host-side checks that run BEFORE Authority is asked (for example: is this order reference a registered order, and
+   * do the arguments match the registration?). A refusal means the tool does not run and Authority is never asked,
+   * so nothing is journaled for a reference the host does not know. It runs in `needsApproval` too, so that no human
+   * is asked to approve an unregistered order.
+   */
+  readonly precheck?: (input: z.infer<S>) => Promise<PrecheckResult>;
+  /**
+   * `"authority"` enables the experimental bridge (architecture B): `needsApproval` asks Authority and pauses the run
+   * only when Authority answers `REQUIRES_APPROVAL`. Absent: architecture A, the run never pauses.
+   */
+  readonly approval?: "authority";
+}
+
+/** The answer of a host-side `precheck`. */
+export type PrecheckResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+
+/** What a human reviewer is shown, built from the validated arguments (never from the model's free text). */
+export interface ActionSummary {
+  readonly actionId: string;
+  readonly amount?: { readonly value: number; readonly currency: string };
+  readonly recipient?: string;
+  readonly args: unknown;
+}
+
+/** An interruption bound to the validated arguments, the Authority action and the SDK's tool-call id. */
+export interface InterruptionBinding {
+  readonly callId: string;
+  readonly actionId: string;
+  /** The exact call Authority evaluates for this interruption. */
+  readonly call: ToolCall;
+  readonly summary: ActionSummary;
 }
 
 /** The tool this adapter builds: a function tool with a Zod object schema and a string result. */
@@ -95,7 +131,18 @@ const REDEMPTION_UNCERTAIN_MESSAGE =
   "The order was not sent to the supplier, and its authorization is in an uncertain state. " +
   "Do not send it again under another reference. Ask the user to have it checked.";
 
-const notExecuted = (reason: string, message = NOT_RUN): ModelFacingResult => ({ status: "NOT_EXECUTED", reason, message });
+const PRECHECK_MESSAGE =
+  "The order was not placed: this reference does not match an order registered by the application. " +
+  "Do not invent another reference. Ask the user to register the order.";
+
+const ALREADY_PROCESSED_MESSAGE =
+  "This order was already processed by an earlier attempt, so it was not sent again. Do not send it again, under this or " +
+  "another reference. Its outcome is in the application's records: ask the user to check it.";
+
+/** Reasons that mean "an earlier attempt already consumed this action": the order may well have been placed. */
+const ALREADY_PROCESSED = new Set(["ALREADY_REDEEMED", "C7_APPROVAL_ALREADY_CONSUMED"]);
+
+const notExecuted = (reason: string, message = ALREADY_PROCESSED.has(reason) ? ALREADY_PROCESSED_MESSAGE : NOT_RUN): ModelFacingResult => ({ status: "NOT_EXECUTED", reason, message });
 
 /** Every `GuardResult`, one answer for the model. The switches are exhaustive: a new SDK status fails to compile here. */
 export function toModelResult(result: GuardResult<unknown>): ModelFacingResult {
@@ -141,24 +188,74 @@ function assertNever(value: never): never {
   throw new Error(`Unhandled Authority result: ${JSON.stringify(value)}`);
 }
 
+/** The tool and, for the bridge, the way to bind an SDK interruption to an Authority action. */
+export interface AuthorityToolBundle {
+  readonly tool: AuthorityFunctionTool;
+  /**
+   * Re-parses an interruption's arguments with the tool's schema and rebuilds the Authority call from them.
+   * `undefined` for another tool, another item type, or arguments the schema rejects: the caller must fail closed.
+   */
+  describeInterruption(interruption: RunToolApprovalItem): InterruptionBinding | undefined;
+}
+
 /**
  * A function tool whose effect can only run through `authority.guard()`.
  * A programming error (an action description Authority rejects as malformed, such as a fractional amount) throws
  * before any effect can run; the Agents SDK then gives the model its generic tool-error text. It is not masked here.
  */
 export function authorityTool<S extends z.ZodObject>(config: AuthorityToolConfig<S>): AuthorityFunctionTool {
-  const { authority, principal, describeAction, effect } = config;
-  return tool({
+  return buildAuthorityTool(config).tool;
+}
+
+export function buildAuthorityTool<S extends z.ZodObject>(config: AuthorityToolConfig<S>): AuthorityToolBundle {
+  const { authority, principal, describeAction, effect, precheck } = config;
+  const callOf = (input: z.infer<S>): ToolCall => ({ ...describeAction(input), agentId: principal.agentId, delegationId: principal.delegationId });
+
+  const functionTool = tool({
     name: config.name,
     description: config.description,
     // The Agents SDK validates the model's arguments against this schema before `execute` runs.
     parameters: config.parameters as z.ZodObject,
-    // Deliberately no `needsApproval`: this is architecture A. The run never pauses.
+    // Architecture B only. This is a PAUSE, not a permission: execute below always goes through guard().
+    ...(config.approval === "authority"
+      ? {
+          needsApproval: async (_context: unknown, rawInput: unknown): Promise<boolean> => {
+            const input = rawInput as z.infer<S>;
+            try {
+              if (precheck && !(await precheck(input)).ok) return false; // execute refuses it; no human is asked
+              return (await authority.authorize(callOf(input))).status === "REQUIRES_APPROVAL";
+            } catch {
+              return false; // fail closed: execute re-asks Authority through guard() and refuses or throws there
+            }
+          },
+        }
+      : {}),
     execute: async (rawInput: unknown): Promise<string> => {
       const input = rawInput as z.infer<S>;
-      const call: ToolCall = { ...describeAction(input), agentId: principal.agentId, delegationId: principal.delegationId };
-      const result = await authority.guard(call, (context) => effect(input, context));
+      if (precheck) {
+        const checked = await precheck(input);
+        if (!checked.ok) return JSON.stringify(notExecuted(checked.reason, PRECHECK_MESSAGE));
+      }
+      const result = await authority.guard(callOf(input), (context) => effect(input, context));
       return JSON.stringify(toModelResult(result));
     },
   });
+
+  return {
+    tool: functionTool as AuthorityFunctionTool,
+    describeInterruption(interruption) {
+      const raw = interruption.rawItem;
+      if (raw.type !== "function_call" || raw.name !== config.name) return undefined;
+      let json: unknown;
+      try {
+        json = JSON.parse(raw.arguments);
+      } catch {
+        return undefined;
+      }
+      const parsed = config.parameters.safeParse(json);
+      if (!parsed.success) return undefined;
+      const call = callOf(parsed.data as z.infer<S>);
+      return { callId: raw.callId, actionId: call.actionId, call, summary: { actionId: call.actionId, ...(call.amount ? { amount: call.amount } : {}), ...(call.recipient ? { recipient: call.recipient } : {}), args: call.args } };
+    },
+  };
 }

@@ -10,7 +10,14 @@ import type { ModelFacingResult } from "./authorityTool.js";
 import type { Host } from "./host.js";
 
 /** What the model received back from the tool, or the Agents SDK's own text when the tool raised an error. */
-export type ToolOutput = ModelFacingResult | { readonly status: "SDK_TOOL_ERROR"; readonly text: string };
+export type ToolOutput =
+  | ModelFacingResult
+  /** The Agents SDK's own generic error text (a tool error or arguments rejected by the schema). */
+  | { readonly status: "SDK_TOOL_ERROR"; readonly text: string }
+  /** Any other text the SDK gave the model instead of running the tool, such as the message of a rejected approval. */
+  | { readonly status: "SDK_MESSAGE"; readonly text: string };
+
+const SDK_GENERIC_ERROR = "An error occurred while running the tool.";
 
 export interface AskOutcome {
   /** One entry per scripted tool call, in order. */
@@ -19,7 +26,7 @@ export interface AskOutcome {
   readonly modelCalls: number;
 }
 
-function parseToolOutput(raw: unknown): ToolOutput {
+export function parseToolOutput(raw: unknown): ToolOutput {
   const text = typeof raw === "string" ? raw : ((raw as { text?: unknown } | null)?.text as string | undefined) ?? JSON.stringify(raw);
   try {
     const parsed = JSON.parse(text) as { status?: unknown };
@@ -27,7 +34,7 @@ function parseToolOutput(raw: unknown): ToolOutput {
   } catch {
     // Not JSON: it is the Agents SDK's own tool-error text.
   }
-  return { status: "SDK_TOOL_ERROR", text };
+  return text === SDK_GENERIC_ERROR ? { status: "SDK_TOOL_ERROR", text } : { status: "SDK_MESSAGE", text };
 }
 
 /**
@@ -47,4 +54,9 @@ export async function askModel(host: Host, asks: readonly Record<string, unknown
     .filter((item) => item.type === "tool_call_output_item")
     .map((item) => parseToolOutput((item.rawItem as { output?: unknown }).output));
   return { toolOutputs, modelCalls: model.calls.length };
+}
+
+/** The tool outputs of a run result, in order, as the model saw them. */
+export function toolOutputsOf(result: { readonly newItems: readonly { readonly type: string; readonly rawItem?: unknown }[] }): ToolOutput[] {
+  return result.newItems.filter((item) => item.type === "tool_call_output_item").map((item) => parseToolOutput((item.rawItem as { output?: unknown }).output));
 }
