@@ -274,21 +274,18 @@ export function createAuthority(config: AuthorityConfig): Authority {
   };
 
   /** Appends the ACTION_REQUESTED once; an identical retry (or a concurrent identical call) is accepted, a different call under the same actionId is refused. */
-  /**
-   * Returns `{ refusal }` for a refusal; otherwise `{ snapshot }`: the journal read to find the request when the request ALREADY existed
-   * (no write happened since, so it is a valid view for the read-only pre-check that follows, and re-reading it would be redundant),
-   * or `undefined` when this call appended the request (the journal changed: the caller must read it again).
-   */
-  async function ensureRequested(call: NormalizedCall, at: Iso8601): Promise<{ readonly refusal: AuthorizeResult } | { readonly snapshot: CanonicalStore | undefined }> {
+  async function ensureRequested(call: NormalizedCall, at: Iso8601): Promise<AuthorizeResult | undefined> {
     const matches = (existing: NonNullable<ReturnType<typeof findRequest>>): boolean =>
       existing.payload.requesting_principal_id === call.agent &&
       existing.payload.delegation_id === call.delegation &&
       computeActionFingerprint(existing.payload.capability_requested, existing.payload.parameters) === computeActionFingerprint(call.capability, call.parameters);
 
-    const journal = await store.getEvents();
-    const existing = findRequest(journal, call.actionId);
+    // O2-2 (T1): only the ACTION_REQUESTED rows are needed to know whether the request already exists. The filter is the one the
+    // store contract already has (`EventFilter.eventType`); the rows come back in the same order and are scanned by the same
+    // `findRequest`, so the first match, and any error thrown on a malformed row, are those of a scan of the whole journal.
+    const existing = findRequest(await store.getEvents({ eventType: "ACTION_REQUESTED" }), call.actionId);
     if (existing !== undefined) {
-      return matches(existing) ? { snapshot: journal } : { refusal: { status: "DENIED", reason: "ACTION_ID_REUSED_WITH_DIFFERENT_CALL" } };
+      return matches(existing) ? undefined : { status: "DENIED", reason: "ACTION_ID_REUSED_WITH_DIFFERENT_CALL" };
     }
     const draft: DraftAuthorityEvent = {
       event_id: eventId(`sdk-request.${call.actionId}`),
@@ -306,24 +303,21 @@ export function createAuthority(config: AuthorityConfig): Authority {
     };
     const appended = await store.append([draft]);
     const outcome = appended.outcomes[0];
-    if (outcome !== undefined && outcome.accepted) return { snapshot: undefined };
+    if (outcome !== undefined && outcome.accepted) return undefined;
     const raced = findRequest(await store.getEvents(), call.actionId);
-    if (raced !== undefined && matches(raced)) return { snapshot: undefined };
-    return { refusal: { status: "DENIED", reason: `ACTION_REQUEST_REJECTED:${outcome !== undefined && !outcome.accepted ? outcome.reasonCode : "NO_OUTCOME"}` } };
+    if (raced !== undefined && matches(raced)) return undefined;
+    return { status: "DENIED", reason: `ACTION_REQUEST_REJECTED:${outcome !== undefined && !outcome.accepted ? outcome.reasonCode : "NO_OUTCOME"}` };
   }
 
   async function authorize(call: ToolCall): Promise<AuthorizeResult> {
     const normalized = normalize(call);
     try {
       const requested = await ensureRequested(normalized, readClock(clock));
-      if ("refusal" in requested) return requested.refusal;
+      if (requested !== undefined) return requested;
 
       // Read-only evaluation first: a refusal must never be recorded under the idempotency key.
-      // O2-1: when the request already existed, the journal read a moment ago to find it is reused (one read instead of two,
-      // outside the lock); when this call just appended the request, the journal is read again, as before. The issuance below
-      // still reads and decides under the lock: this pre-check never grants anything.
       const at = readClock(clock);
-      const snapshot = requested.snapshot ?? (await store.getEvents());
+      const snapshot = await store.getEvents();
       const grant = selectInvokedGrant(snapshot, normalized.actionId, sequenceNumber(maxSequence(snapshot)), at);
       if (!grant.ok) return refusal(grant.reason, grant.decision);
 

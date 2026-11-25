@@ -1,13 +1,16 @@
 #!/usr/bin/env node
-/** O2-1 targeted mutations: see scripts/mutation-runner.mjs for the rules (every mutant must be killed; non-zero exit otherwise). */
+/** O2 (T1 lookup) targeted mutations: see scripts/mutation-runner.mjs for the rules (every mutant must be killed; non-zero exit otherwise). */
 import { runMutants } from "./mutation-runner.mjs";
 
 /** [name, file, from, to, expected occurrences] */
+const LOOKUP = 'const existing = findRequest(await store.getEvents({ eventType: "ACTION_REQUESTED" }), call.actionId);';
 const MUTANTS = [
-  ["optimization removed (the second read is back)", "src/sdk/authority.ts", "const snapshot = requested.snapshot ?? (await store.getEvents());", "const snapshot = await store.getEvents();", 1],
-  ["a request this call just appended: the stale snapshot is reused", "src/sdk/authority.ts", "if (outcome !== undefined && outcome.accepted) return { snapshot: undefined };", "if (outcome !== undefined && outcome.accepted) return { snapshot: journal };", 1],
-  ["a request appended by a racing identical call: the stale snapshot is reused", "src/sdk/authority.ts", "if (raced !== undefined && matches(raced)) return { snapshot: undefined };", "if (raced !== undefined && matches(raced)) return { snapshot: journal };", 1],
-  ["a different call under an existing action id is no longer refused", "src/sdk/authority.ts", "return matches(existing) ? { snapshot: journal } : { refusal:", "return true ? { snapshot: journal } : { refusal:", 1],
+  ["the lookup reads the whole journal again (optimization removed)", "src/sdk/authority.ts", 'store.getEvents({ eventType: "ACTION_REQUESTED" })', "store.getEvents()", 1],
+  ["the lookup filters on the wrong event type", "src/sdk/authority.ts", 'store.getEvents({ eventType: "ACTION_REQUESTED" })', 'store.getEvents({ eventType: "CAPABILITY_ISSUED" })', 1],
+  ["the pre-check decides on the filtered rows instead of the whole journal", "src/sdk/authority.ts", "const at = readClock(clock);\n      const snapshot = await store.getEvents();", 'const at = readClock(clock);\n      const snapshot = await store.getEvents({ eventType: "ACTION_REQUESTED" });', 1],
+  ["the lookup takes the LAST matching request instead of the first", "src/sdk/authority.ts", "function findRequest(store: CanonicalStore, id: ActionId) {\n  for (const event of store) {", "function findRequest(store: CanonicalStore, id: ActionId) {\n  for (const event of [...store].reverse()) {", 1],
+  ["an error thrown by a malformed row during the lookup is swallowed", "src/sdk/authority.ts", LOOKUP, 'const rows = await store.getEvents({ eventType: "ACTION_REQUESTED" });\n    const existing = (() => { try { return findRequest(rows, call.actionId); } catch { return undefined; } })();', 1],
+  ["a different call under an existing action id is no longer refused", "src/sdk/authority.ts", "return matches(existing) ? undefined : { status: \"DENIED\", reason: \"ACTION_ID_REUSED_WITH_DIFFERENT_CALL\" };", "return undefined;", 1],
 ];
 
 process.exit(runMutants({
