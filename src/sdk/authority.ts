@@ -274,15 +274,21 @@ export function createAuthority(config: AuthorityConfig): Authority {
   };
 
   /** Appends the ACTION_REQUESTED once; an identical retry (or a concurrent identical call) is accepted, a different call under the same actionId is refused. */
-  async function ensureRequested(call: NormalizedCall, at: Iso8601): Promise<AuthorizeResult | undefined> {
+  /**
+   * Returns `{ refusal }` for a refusal; otherwise `{ snapshot }`: the journal read to find the request when the request ALREADY existed
+   * (no write happened since, so it is a valid view for the read-only pre-check that follows, and re-reading it would be redundant),
+   * or `undefined` when this call appended the request (the journal changed: the caller must read it again).
+   */
+  async function ensureRequested(call: NormalizedCall, at: Iso8601): Promise<{ readonly refusal: AuthorizeResult } | { readonly snapshot: CanonicalStore | undefined }> {
     const matches = (existing: NonNullable<ReturnType<typeof findRequest>>): boolean =>
       existing.payload.requesting_principal_id === call.agent &&
       existing.payload.delegation_id === call.delegation &&
       computeActionFingerprint(existing.payload.capability_requested, existing.payload.parameters) === computeActionFingerprint(call.capability, call.parameters);
 
-    const existing = findRequest(await store.getEvents(), call.actionId);
+    const journal = await store.getEvents();
+    const existing = findRequest(journal, call.actionId);
     if (existing !== undefined) {
-      return matches(existing) ? undefined : { status: "DENIED", reason: "ACTION_ID_REUSED_WITH_DIFFERENT_CALL" };
+      return matches(existing) ? { snapshot: journal } : { refusal: { status: "DENIED", reason: "ACTION_ID_REUSED_WITH_DIFFERENT_CALL" } };
     }
     const draft: DraftAuthorityEvent = {
       event_id: eventId(`sdk-request.${call.actionId}`),
@@ -300,21 +306,24 @@ export function createAuthority(config: AuthorityConfig): Authority {
     };
     const appended = await store.append([draft]);
     const outcome = appended.outcomes[0];
-    if (outcome !== undefined && outcome.accepted) return undefined;
+    if (outcome !== undefined && outcome.accepted) return { snapshot: undefined };
     const raced = findRequest(await store.getEvents(), call.actionId);
-    if (raced !== undefined && matches(raced)) return undefined;
-    return { status: "DENIED", reason: `ACTION_REQUEST_REJECTED:${outcome !== undefined && !outcome.accepted ? outcome.reasonCode : "NO_OUTCOME"}` };
+    if (raced !== undefined && matches(raced)) return { snapshot: undefined };
+    return { refusal: { status: "DENIED", reason: `ACTION_REQUEST_REJECTED:${outcome !== undefined && !outcome.accepted ? outcome.reasonCode : "NO_OUTCOME"}` } };
   }
 
   async function authorize(call: ToolCall): Promise<AuthorizeResult> {
     const normalized = normalize(call);
     try {
       const requested = await ensureRequested(normalized, readClock(clock));
-      if (requested !== undefined) return requested;
+      if ("refusal" in requested) return requested.refusal;
 
       // Read-only evaluation first: a refusal must never be recorded under the idempotency key.
+      // O2-1: when the request already existed, the journal read a moment ago to find it is reused (one read instead of two,
+      // outside the lock); when this call just appended the request, the journal is read again, as before. The issuance below
+      // still reads and decides under the lock: this pre-check never grants anything.
       const at = readClock(clock);
-      const snapshot = await store.getEvents();
+      const snapshot = requested.snapshot ?? (await store.getEvents());
       const grant = selectInvokedGrant(snapshot, normalized.actionId, sequenceNumber(maxSequence(snapshot)), at);
       if (!grant.ok) return refusal(grant.reason, grant.decision);
 
