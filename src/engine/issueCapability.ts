@@ -30,11 +30,11 @@ import { isWellFormedActionParameters, sequenceNumber } from "../domain/types.js
 import type { AuthenticatedPrincipal } from "../domain/authenticatedPrincipal.js";
 import { isJournalShapeSound } from "./journalShape.js";
 import { remainingCapacity, type ValidatedGrant } from "./capacity.js";
+import { collectValidatedGrants } from "./grantEvaluation.js";
 import {
   findActionRequested,
   findDelegationById,
   selectInvokedGrant,
-  validateAndSelectGrant,
   type GrantSelectionRejectionReason,
   type SelectedGrant,
 } from "./grantValidation.js";
@@ -162,36 +162,6 @@ function computeMaxVisibleAuthorityTimeMs(store: CanonicalStore): number | undef
     }
   }
   return max;
-}
-
-/**
- * Re-derives every ALREADY-ISSUED, still-valid grant from the canonical
- * store, by re-running `validateAndSelectGrant` (PR4A) against every
- * CAPABILITY_ISSUED event already present. This is the only legitimate
- * way to obtain a `ValidatedGrant[]` in this codebase (see
- * capacity.ts's own docstring: no factory exists to skip validation) —
- * and it is deliberately expensive (O(n) re-validation per issuance, over
- * however many CAPABILITY_ISSUED events already exist) rather than
- * trusting persisted events at face value. That cost is a direct
- * consequence of NOT yet having a real write boundary (PR4B-3): once
- * CAPABILITY_ISSUED events can only ever be produced by an already-
- * validated, atomic Authority transaction, re-validating them again on
- * every read is redundant and should be dropped. Until then, re-checking
- * is the honest choice over silently trusting persisted data this
- * codebase cannot yet prove was never hand-crafted.
- */
-function collectValidatedGrants(store: CanonicalStore): readonly ValidatedGrant[] {
-  const grants: ValidatedGrant[] = [];
-  for (const event of store) {
-    if (event.event_type !== "CAPABILITY_ISSUED") {
-      continue;
-    }
-    const result = validateAndSelectGrant(store, event);
-    if (result.ok) {
-      grants.push(result.grant);
-    }
-  }
-  return grants;
 }
 
 /**

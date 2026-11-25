@@ -69,6 +69,20 @@ jobs:
         if: ${{ matrix.node-version == 22 }}
         run: scripts/o2-mutation-check.sh
 
+      - name: B1 mutation check (every mutant must be killed)
+        if: ${{ matrix.node-version == 22 }}
+        run: scripts/b1-mutation-check.sh
+
+      # B1: the whole suite again with the one-pass and the shadow grant evaluation selected through the environment, so that
+      # nothing the default mode covers is left unchecked under the new modes. The default mode is the `npm test` step above.
+      - name: Whole suite with the one-pass grant evaluation
+        if: ${{ matrix.node-version == 22 }}
+        run: AUTHORITY_GRANT_EVALUATION=one-pass npm test
+
+      - name: Whole suite with the shadow grant evaluation
+        if: ${{ matrix.node-version == 22 }}
+        run: AUTHORITY_GRANT_EVALUATION=shadow npm test
+
   postgres:
     name: PostgreSQL 16
     runs-on: ubuntu-latest
@@ -116,6 +130,7 @@ jobs:
           tests/storage/postgresTicketPerAction.test.ts
           tests/engine/o1Backends.test.ts
           tests/sdk/o2Backends.test.ts
+          tests/engine/b1Backends.test.ts
           --reporter=default
           --reporter=json
           --outputFile.json=vitest-postgres.json

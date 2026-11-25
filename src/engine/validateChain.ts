@@ -24,6 +24,7 @@ import {
 import { CURRENT_SCHEMA_VERSION, MAX_CHAIN_DEPTH } from "../domain/types.js";
 import type { AuthorityEvent, CanonicalStore } from "../domain/events.js";
 import { remainingBudget } from "./evaluateConstraints.js";
+import type { ChainEvaluationContext } from "./evaluationContext.js";
 
 export type DelegationEvent = Extract<
   AuthorityEvent,
@@ -142,7 +143,7 @@ function walkUpChain(
   }
 }
 
-function findRoot(
+export function findRoot(
   delegationId: DelegationId,
   index: ReadonlyMap<DelegationId, DelegationEvent>,
 ): DelegationEvent | undefined {
@@ -233,14 +234,14 @@ function thresholdsBoundOk(child: AmountThresholds | undefined, parent: AmountTh
   return moneyBoundOk(child.automatic_max_amount, parent.automatic_max_amount) && moneyBoundOk(child.approval_max_amount, parent.approval_max_amount);
 }
 
-function totalBudgetBoundOk(child: Money | undefined, parent: Money | undefined, parentId: DelegationId, visibleStore: CanonicalStore): boolean {
+function totalBudgetBoundOk(child: Money | undefined, parent: Money | undefined, parentId: DelegationId, visibleStore: CanonicalStore, context?: ChainEvaluationContext): boolean {
   if (parent === undefined) {
     return true;
   }
   if (child === undefined) {
     return false;
   }
-  return child.currency === parent.currency && child.value <= remainingBudget(parentId, parent, visibleStore);
+  return child.currency === parent.currency && child.value <= (context !== undefined ? context.remainingBudget(parentId, parent) : remainingBudget(parentId, parent, visibleStore));
 }
 
 function capabilitiesSubset(child: readonly Capability[], parent: readonly Capability[]): boolean {
@@ -259,8 +260,11 @@ export function validateChain(
   visibleStore: CanonicalStore,
   expectedHumanRoot: PrincipalId | undefined,
   authorityTime: Iso8601,
+  context?: ChainEvaluationContext,
 ): ChainValidationResult {
-  const index = buildDelegationIndex(visibleStore);
+  // B1: with a `context` the three things that scan the visible store (the delegation index, the revocation check and the
+  // remaining budget of a parent) are answered by an incrementally maintained prefix state; without it, exactly as before.
+  const index = context !== undefined ? context.delegationIndex() : buildDelegationIndex(visibleStore);
   const walk = walkUpChain(candidate.payload.delegation_id, index);
   if (!walk.ok) {
     if (walk.reason === "missing") {
@@ -312,7 +316,7 @@ export function validateChain(
     if (isExpired(node.payload.expires_at, authorityTime)) {
       return { kind: "denied", reasonCode: "C11_CAPABILITY_NOT_COVERED" };
     }
-    if (isRevoked(node, visibleStore, index)) {
+    if (context !== undefined ? context.isRevoked(node, index) : isRevoked(node, visibleStore, index)) {
       return { kind: "denied", reasonCode: "C12_DELEGATION_REVOKED" };
     }
   }
@@ -342,7 +346,7 @@ export function validateChain(
     if (!thresholdsBoundOk(child.payload.thresholds, parent.payload.thresholds)) {
       return { kind: "denied", reasonCode: "C11_CAPABILITY_NOT_COVERED" };
     }
-    if (!totalBudgetBoundOk(child.payload.total_budget, parent.payload.total_budget, parent.payload.delegation_id, visibleStore)) {
+    if (!totalBudgetBoundOk(child.payload.total_budget, parent.payload.total_budget, parent.payload.delegation_id, visibleStore, context)) {
       return { kind: "denied", reasonCode: "C9_TOTAL_BUDGET_EXCEEDED" };
     }
   }
