@@ -243,7 +243,7 @@ d("O2-1 on PostgreSQL 16", () => {
         expect(total(t, "same:"), impl).toBe(6);
         expect(total(t, "other:"), impl).toBe(8);
         // the only outcomes a call under this budget may have
-        for (const k of Object.keys(t)) expect(k, impl).toMatch(/^(same|clash|other):(AUTHORIZED|DENIED:CAPACITY_EXCEEDED|DENIED:ACTION_REQUEST_REJECTED:EVENT_ID_CONFLICT)$/);
+        for (const k of Object.keys(t)) expect(k, impl).toMatch(/^(same|clash|other):(AUTHORIZED|DENIED:CAPACITY_EXCEEDED|DENIED:ACTION_REQUEST_REJECTED:EVENT_ID_CONFLICT|DENIED:ACTION_ID_REUSED_WITH_DIFFERENT_CALL)$/);
         // the six identical calls are one action: all authorized (one ticket) or all refused for capacity, never split
         const same = Object.keys(pick(t, "same:"));
         expect(same.length, impl).toBe(1);
