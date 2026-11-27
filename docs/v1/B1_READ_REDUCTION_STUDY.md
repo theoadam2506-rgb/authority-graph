@@ -37,7 +37,7 @@ decision's serialization point. *Completeness*: nothing in 1..head is missing (c
 ### D1 — coherence, freshness, completeness
 * **Coherence + freshness (provable from the code as it is).** Every protocol-following writer takes `pg_advisory_xact_lock(hashtext('authority_events'))` before reading and writing
   (`postgresEventStore.ts:136`, the issuance and redemption transactions). Locks are granted one at a time, a writer commits before releasing, so a snapshot taken **after** the lock was granted
-  (REPEATABLE READ, the "snapshot-after-lock" rule) sees every transaction committed before and none after. Hence the decision is taken from exactly the journal state at its serialization point.
+  (the code uses the default READ COMMITTED; that is sufficient because the one journal read is a single statement issued after the lock — the "snapshot-after-lock" rule) sees every transaction committed before and none after. Hence the decision is taken from exactly the journal state at its serialization point.
 * **Completeness.** Sequences are assigned under the same lock (max + 1) and there is a unique index on `sequence`; the journal read is contiguous 1..n or the existing code already rejects it
   (`journalHead` refuses a gap). A writer that bypasses the lock (the I32 comment names one) can only create a gap or a unique violation, never a state the snapshot misreads.
 * **Equivalence with today.** Today = C1 (append request) ; P (lock-free pre-check) ; C2 (issue), with foreign commits allowed between them. D1 fuses C1;C2 in one critical section and removes P.
