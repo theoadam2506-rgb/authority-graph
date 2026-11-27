@@ -101,7 +101,7 @@ the guard refuse (forcing the quadratic path); it is **not** a correctness mecha
 | targeted: budgets, sub-delegations, expirations, revocations, late activations, forged references, approvals, currencies | `tests/engine/b1Targeted.test.ts` | 28 tests with explicit expectations, also checked against the oracle |
 | modes, shadow, environment variable, linearity of reads, limits | same + `tests/sdk/b1BoundedFallback.test.ts` | |
 | PostgreSQL 16 parity and concurrency, `one-pass` and `shadow` | `tests/engine/b1Backends.test.ts` | |
-| mutation | `scripts/b1-mutation-check.sh` | 24 mutants of the evaluator and the dispatcher; every one must be killed |
+| mutation | `scripts/b1-mutation-check.sh` | 23 mutants of the evaluator and the dispatcher; every one must be killed |
 | whole suite in each mode | CI | `npm test` default, `AUTHORITY_GRANT_EVALUATION=one-pass`, `=shadow` |
 
 ## 8. Limits of the equivalence (what this does **not** establish)
