@@ -81,15 +81,33 @@ Set with the environment variable `AUTHORITY_GRANT_EVALUATION` or the engine-lev
 the SDK). Proposed rollout: ship with `historical`; run `shadow` where journals are small enough, collect `shadowMismatches` (must
 stay 0); select `one-pass` only after a decision of the owner. Offline comparison of large journals: `compareGrantEvaluators`.
 
-## 6. Bounded fallback (operational limit, off by default)
+## 6. Quadratic fallback, who can trigger it, and the operational limit (off by default)
 
-The historical loop is the only quadratic path. `limits.maxWork` (grants × events, known before the loop starts) and
-`limits.deadlineMs` (checked between two grants) stop it by throwing `GrantEvaluationLimitExceeded`
-(`GRANT_EVALUATION_WORK_LIMIT` / `GRANT_EVALUATION_DEADLINE`). The SDK already maps any exception raised while deciding to
-`UNAVAILABLE`; the cause (class and `code`) goes to `onDiagnostic` only. The public result contains no business refusal, the
-journal gets no refusal event (only the request that was already being recorded), and the same call succeeds once the limit is
-lifted (`tests/sdk/b1BoundedFallback.test.ts`). This is a protection against an attacker who can append journals that make
-the guard refuse (forcing the quadratic path); it is **not** a correctness mechanism.
+**The risk.** The historical loop is quadratic, and the guard sends a journal to it as soon as it finds one late activation (an execution that precedes its request
+or a delegation of its chain). That is **reachable by any caller of the public `record()`**: it accepts raw drafts, and the engine's ingestion accepts an `ACTION_EXECUTED`
+before its `ACTION_REQUESTED` (out-of-order delivery, A5). Checked (`tests/sdk/b1BoundedFallback.test.ts`): after two `record()` calls the guard answers `LATE_ACTIVATION`. So **one hostile
+event moves a journal from linear to quadratic** — measured: 8,000 events 0.72 s, and 443 s at 100,000 events with a budget. The work runs inside the issuance transaction, **under the advisory lock**, so
+it delays every writer, not only the caller. This is the cost the historical path always had; B1 does not make it worse, but `one-pass` does not remove it either.
+
+**The limit.** `limits.maxWork` (grants × events, known before the loop) and `limits.deadlineMs` (checked before every validation) stop the historical loop with `GrantEvaluationLimitExceeded`
+(`GRANT_EVALUATION_WORK_LIMIT` / `GRANT_EVALUATION_DEADLINE`). What is verified, by test, and not just a check after the work:
+
+| property | evidence |
+|---|---|
+| `maxWork` **prevents** the work: refusal before any validation started | `validationsRun === 0` (`b1Targeted`, `b1BoundedFallback`: late activation injected through `record()` + `one-pass` + `maxWork`) |
+| `deadlineMs` **interrupts mid-loop**: the work done is a function of the deadline, not of the journal size | 300 / 600 / 1,200 / 2,400-event journals all stop after the same 3 validations (deadline 25 ms, injected clock) |
+| it is a real-time bound | journal whose full evaluation takes 257 ms, deadline 12.8 ms: stopped at 13.3 ms |
+| overshoot is at most one validation | one `validateAndSelectGrant` at 100,000 events: p50 2.5 ms, max 20.9 ms (n = 20 samples) |
+| the result is `UNAVAILABLE`, never a business refusal | SDK tests for both limits; nothing issued or refused by the interrupted call; the same call succeeds once the limit is lifted |
+| decision rules untouched | no rule file is modified by the limit; with no limit the loop is the historical loop (one counter, `validationsRun`, was added) |
+
+**Contention.** The lock is held for at most `deadlineMs` + one validation (≈ 21 ms measured at 100,000 events) + the O(n) preparatory work (shape check, guard, candidate count), instead of the unbounded
+quadratic time. The price is availability: a legitimate journal that needs the historical path for longer than the deadline is answered `UNAVAILABLE` until the operator raises the limit or the journal is repaired.
+**Recommendation:** enable limits whenever `one-pass` is selected (the guard refusals then show how often the fallback is taken: `guardRefusals.LATE_ACTIVATION`), starting from a deadline around the p99 of the
+one-pass call on the target journal sizes (a few hundred ms) and tuning from the counters.
+
+**What the caller sees today.** The SDK maps any exception to `UNAVAILABLE`; this one is reported as `BACKEND_ERROR`, the precise cause is operator-only (`onDiagnostic`). A specific public code is a proposal awaiting
+the owner's decision (`PROPOSAL_GRANT_LIMIT_UNAVAILABLE_CODE.md`); the public API is unchanged.
 
 ## 7. Verification
 
@@ -102,6 +120,7 @@ the guard refuse (forcing the quadratic path); it is **not** a correctness mecha
 | modes, shadow, environment variable, linearity of reads, limits | same + `tests/sdk/b1BoundedFallback.test.ts` | |
 | PostgreSQL 16 parity and concurrency, `one-pass` and `shadow` | `tests/engine/b1Backends.test.ts` | |
 | mutation | `scripts/b1-mutation-check.sh` | 23 mutants of the evaluator and the dispatcher; every one must be killed |
+| reproducibility of the test generators | `tests/engine/b1Reproducibility.test.ts` | 20,000 seeds of generator + `mutate`, twice: identical journals (the shared, mutable `JUNK` objects made 1,191 of them differ before the fix) |
 | whole suite in each mode | CI | `npm test` default, `AUTHORITY_GRANT_EVALUATION=one-pass`, `=shadow` |
 
 ## 8. Limits of the equivalence (what this does **not** establish)

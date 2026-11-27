@@ -107,7 +107,9 @@ function paths(value: any, prefix: (string | number)[] = [], out: (string | numb
   return out;
 }
 
-const JUNK: readonly unknown[] = [null, undefined, 42, -1, 1.5, "", "zzz", true, false, [], {}, [null], { kind: "delegation" }, "2026-01-01T00:00:00.000Z"];
+const deepFreeze = <T>(v: T): T => { if (typeof v === "object" && v !== null) { Object.freeze(v); for (const k of Object.keys(v)) deepFreeze((v as any)[k]); } return v; };
+/** Frozen: a value taken from here is ALWAYS cloned before it is put in a journal (a shared, mutable junk object made the generator non-reproducible: B1 review). */
+const JUNK: readonly unknown[] = deepFreeze([null, undefined, 42, -1, 1.5, "", "zzz", true, false, [], {}, [null], { kind: "delegation" }, "2026-01-01T00:00:00.000Z"]);
 const TYPES = ["DELEGATION_CREATED", "SUBDELEGATION_CREATED", "DELEGATION_REVOKED", "ACTION_REQUESTED", "APPROVAL_REQUESTED", "APPROVAL_GRANTED", "APPROVAL_DENIED", "ACTION_EXECUTED", "CAPABILITY_ISSUED", "CAPABILITY_REDEEMED", "NOPE"];
 
 /** 1 to 3 random structural damages (missing/null/wrong-typed fields, wrong event_type, dropped/duplicated/nulled events). */
@@ -134,7 +136,7 @@ export function mutate(journal: readonly any[], r: () => number): any[] {
       for (const k of p.slice(0, -1)) parent = parent[k];
       const last = p[p.length - 1]!;
       if (r() < 0.35) { if (Array.isArray(parent)) parent.splice(Number(last), 1); else delete parent[last]; }
-      else parent[last] = JUNK[Math.floor(r() * JUNK.length)];
+      else parent[last] = structuredClone(JUNK[Math.floor(r() * JUNK.length)]);
     }
   }
   return out;
@@ -235,7 +237,7 @@ export function* singleFaults(journal: readonly any[], junk: readonly unknown[])
         let parent: any = copy[i];
         for (const k of p.slice(0, -1)) parent = parent[k];
         const last = p[p.length - 1]!;
-        if (j === undefined) { if (Array.isArray(parent)) parent.splice(Number(last), 1); else delete parent[last]; } else parent[last] = j;
+        if (j === undefined) { if (Array.isArray(parent)) parent.splice(Number(last), 1); else delete parent[last]; } else parent[last] = structuredClone(j);
         yield { label: `event#${i}(${journal[i].event_type}) ${p.join(".")} <- ${JSON.stringify(j) ?? "DELETE"}`, journal: copy };
       }
     }

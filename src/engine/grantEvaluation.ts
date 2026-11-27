@@ -67,6 +67,8 @@ export interface GrantEvaluationStats {
   shadowComparisons: number;
   shadowMismatches: number;
   shadowSkippedTooLarge: number;
+  /** How many `validateAndSelectGrant` calls the historical loop actually started (observability and tests of the operational limits). */
+  validationsRun: number;
 }
 
 const DEFAULT_SHADOW_MAX_EVENTS = 5_000;
@@ -79,7 +81,7 @@ function modeFromEnvironment(): GrantEvaluationMode {
 }
 
 let config: GrantEvaluationConfig = { mode: modeFromEnvironment(), shadowMaxEvents: DEFAULT_SHADOW_MAX_EVENTS };
-const emptyStats = (): GrantEvaluationStats => ({ onePassRuns: 0, historicalRuns: 0, guardRefusals: { NOT_SHAPE_SOUND: 0, SEQUENCE_NOT_STRICTLY_INCREASING: 0, LATE_ACTIVATION: 0 }, shadowComparisons: 0, shadowMismatches: 0, shadowSkippedTooLarge: 0 });
+const emptyStats = (): GrantEvaluationStats => ({ onePassRuns: 0, historicalRuns: 0, guardRefusals: { NOT_SHAPE_SOUND: 0, SEQUENCE_NOT_STRICTLY_INCREASING: 0, LATE_ACTIVATION: 0 }, shadowComparisons: 0, shadowMismatches: 0, shadowSkippedTooLarge: 0, validationsRun: 0 });
 let stats = emptyStats();
 
 export function configureGrantEvaluation(next: Partial<GrantEvaluationConfig>): void {
@@ -125,6 +127,7 @@ export function collectValidatedGrantsHistorical(store: CanonicalStore, limits?:
     if (limits?.deadlineMs !== undefined && now() - started > limits.deadlineMs) {
       throw new GrantEvaluationLimitExceeded("GRANT_EVALUATION_DEADLINE", `the historical grant evaluation exceeded ${limits.deadlineMs} ms after ${grants.length} accepted grants`, candidates, store.length);
     }
+    stats.validationsRun += 1;
     const result = validateAndSelectGrant(store, event);
     if (result.ok) {
       grants.push(result.grant);

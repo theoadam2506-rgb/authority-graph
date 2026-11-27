@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { validateAndSelectGrant as oracleValidate } from "../oracle/engine/grantValidation.js";
 import { onePassGuard, collectValidatedGrantsOnePass } from "../../src/engine/onePassGrants.js";
-import { GrantEvaluationLimitExceeded, collectValidatedGrants, collectValidatedGrantsHistorical, compareGrantEvaluators, configureGrantEvaluation, getGrantEvaluationStats, resetGrantEvaluation } from "../../src/engine/grantEvaluation.js";
+import { GrantEvaluationLimitExceeded, collectValidatedGrants, collectValidatedGrantsHistorical, compareGrantEvaluators, configureGrantEvaluation, getGrantEvaluationStats, resetGrantEvaluation, resetGrantEvaluationStats } from "../../src/engine/grantEvaluation.js";
 import { build, coherentJournal, delegation, grantFor, request, execution, revocation, ALPHABET, cap, grant } from "./helpers/b1.js";
 
 const oracleIds = (store: any[]) => store.filter((e) => e.event_type === "CAPABILITY_ISSUED" && oracleValidate(store as any, e).ok).map((e) => e.event_id);
@@ -161,6 +161,35 @@ describe("B1 bounded fallback (operational limit, off by default)", () => {
   it("a generous limit returns the exact historical result", () => {
     const j = big() as any;
     expect(ids(collectValidatedGrantsHistorical(j, { maxWork: 1e12, deadlineMs: 1e9 }))).toEqual(ids(collectValidatedGrantsHistorical(j)));
+  });
+  it("maxWork refuses BEFORE any validation has run (prevention, not a check after the work)", () => {
+    resetGrantEvaluationStats();
+    expect(() => collectValidatedGrantsHistorical(big() as any, { maxWork: 10 })).toThrow(GrantEvaluationLimitExceeded);
+    expect(getGrantEvaluationStats().validationsRun).toBe(0);
+  });
+  it("deadlineMs interrupts the loop in the MIDDLE of the work: the number of validations started depends on the deadline, not on the size of the journal", () => {
+    const started: number[] = [];
+    for (const events of [300, 600, 1200, 2400]) {
+      const journal = coherentJournal(5, events) as any;
+      const candidates = journal.filter((e: any) => e.event_type === "CAPABILITY_ISSUED").length;
+      let t = 0;
+      resetGrantEvaluationStats();
+      expect(() => collectValidatedGrantsHistorical(journal, { deadlineMs: 25, now: () => (t += 10) })).toThrow(GrantEvaluationLimitExceeded);
+      const run = getGrantEvaluationStats().validationsRun;
+      expect(run).toBeLessThan(candidates); // it stopped long before the end
+      started.push(run);
+    }
+    expect(new Set(started).size).toBe(1); // 3 validations whatever the size: the cost is bounded by the limit
+    expect(started[0]).toBeLessThanOrEqual(4);
+  });
+  it("the deadline is a real-time bound: on a journal whose full historical evaluation takes ~10x longer, the call stops within a small multiple of the deadline", () => {
+    const journal = coherentJournal(11, 6000, { lateActivation: true }) as any;
+    const full = performance.now(); collectValidatedGrantsHistorical(journal); const fullMs = performance.now() - full;
+    const t0 = performance.now();
+    expect(() => collectValidatedGrantsHistorical(journal, { deadlineMs: Math.max(5, fullMs / 20) })).toThrow(GrantEvaluationLimitExceeded);
+    const stoppedMs = performance.now() - t0;
+    console.log("deadline bound", JSON.stringify({ fullMs: +fullMs.toFixed(1), deadlineMs: +(Math.max(5, fullMs / 20)).toFixed(1), stoppedMs: +stoppedMs.toFixed(1) }));
+    expect(stoppedMs).toBeLessThan(fullMs / 2);
   });
   it("in one-pass mode a guard-accepted journal never touches the limits (no quadratic work)", () => {
     configureGrantEvaluation({ mode: "one-pass", limits: { maxWork: 1 } });

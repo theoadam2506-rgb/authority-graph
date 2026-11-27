@@ -44,12 +44,10 @@ re-used action ids, sub-delegations whose parent appears later, revocation of an
 *Open:* no test with non-integer amounts at scale (random amounts are integers).
 
 ## 4. Pathological cost of the historical fallback
-The guard refuses the **whole** journal when it finds one late activation, and the quadratic loop runs on it. Measured in memory, coherent
-journals with one injected late-activation pair: 2,000 events 32 ms · 4,000 events 135 ms · 8,000 events 724 ms (≈ ×5 per doubling), versus
-4.7 / 18.6 / 22.4 ms on the same journals without the pair; with a budget at 100,000 events the historical path took 443 s (single run,
-`B1_EQUIVALENCE.md` §9). So **one hostile event can move a journal from linear to quadratic**. Mitigations present: the operational limit (§6 below),
-shadow-mode counters (`guardRefusals.LATE_ACTIVATION`). *Not done:* making the fast path partial (evaluating the prefix before the first
-late activation with the one-pass state and falling back only for the rest) — a possible improvement, to be judged by the reviewer.
+The guard refuses the **whole** journal when it finds one late activation, and the quadratic loop runs on it, under the advisory lock. **Reachable through the public `record()`** (raw drafts are accepted; an `ACTION_EXECUTED`
+before its request is ingested): one hostile event moves a journal from linear to quadratic (0.72 s at 8,000 events; 443 s at 100,000 with a budget). Mitigation: the operational limit of §6, which prevents (`maxWork`) or
+interrupts mid-loop (`deadlineMs`) the work, bounded by the deadline plus one validation (≈ 21 ms at 100,000 events) — see `B1_EQUIVALENCE.md` §6 for the evidence and for what it costs in availability.
+*Not done:* a partial fast path (evaluate the prefix before the first late activation with the one-pass state, fall back only for the rest) — a possible improvement for the reviewer to judge.
 
 ## 5. Modes
 `historical` default, identical to the pre-B1 code path (existing suites unchanged and green in all three modes). `shadow`: returns the
