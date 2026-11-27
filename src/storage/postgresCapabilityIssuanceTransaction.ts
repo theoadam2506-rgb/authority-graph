@@ -40,7 +40,7 @@ import type { AuthenticatedPrincipal } from "../domain/authenticatedPrincipal.js
 import type { IssueCapabilityCommand } from "../domain/capabilityCommand.js";
 import { issueCapability, type IssueCapabilityDependencies, type IssueCapabilityResult } from "../engine/issueCapability.js";
 import { commandsEqual } from "../engine/issueCapabilityIdempotency.js";
-import { advanceTrustedTime, processDraft } from "../engine/ingest.js";
+import { advanceTrustedTime, processDraft, type IngestionState } from "../engine/ingest.js";
 import { buildCapabilityIssuedDraft, type CapabilityIssuanceOutcome, type CapabilityIssuanceTransaction } from "./capabilityIssuanceTransaction.js";
 import { beginReadCommitted, insertEvent, lockAuthorityEventsTable, readFreshIngestionState, safeRollback, watchClient } from "./postgresEventStore.js";
 
@@ -178,20 +178,50 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
     const watch = watchClient(client);
     let destroy = false;
     try {
-      // I32: no issuance runs against a database whose one-ticket-per-action
-      // index is missing, INVALID or mis-defined (the database-level backstop
-      // would not be in force). Checked until it has passed once; a failure
-      // throws, writes nothing and is not cached. Apply src/storage/schema.sql.
-      if (!this.schemaVerified) {
-        const problems = await checkTicketPerActionSchema(client);
-        if (problems.length > 0) throw new IssuanceSchemaError(problems);
-        this.schemaVerified = true;
-      }
+      await this.ensureSchema(client);
       await beginReadCommitted(client);
       // Same lock domain as PostgresEventStore.append() — see this
       // module's own docstring and postgresEventStore.ts's.
       await lockAuthorityEventsTable(client);
+      const outcome = await this.issueWithin(client, () => readFreshIngestionState(client), authenticatedPrincipal, clientIdempotencyKey, command, dependencies, authorityTime);
+      await client.query("COMMIT");
+      return outcome;
+    } catch (err) {
+      destroy = !(await safeRollback(client));
+      throw err; // fail-closed: the ORIGINAL error, even when the rollback itself fails because the connection is gone
+    } finally {
+      watch.stop();
+      client.release(destroy || watch.broken() ? true : undefined);
+    }
+  }
 
+  /**
+   * I32: no issuance runs against a database whose one-ticket-per-action index is missing, INVALID or mis-defined (the database-level
+   * backstop would not be in force). Checked until it has passed once; a failure throws, writes nothing and is not cached.
+   */
+  async ensureSchema(client: PoolClient): Promise<void> {
+    if (!this.schemaVerified) {
+      const problems = await checkTicketPerActionSchema(client);
+      if (problems.length > 0) throw new IssuanceSchemaError(problems);
+      this.schemaVerified = true;
+    }
+  }
+
+  /**
+   * Steps A–E of `issue()` (idempotence lookup, snapshot, decision, event + idempotency row), WITHOUT the BEGIN / lock / COMMIT / ROLLBACK: the
+   * caller owns the transaction and must already hold the advisory lock. `loadState` returns the fresh canonical state read under that lock
+   * (D1: the single snapshot of the whole call, already advanced by the caller's own appends). The decisions and writes are the ones `issue()` always made.
+   */
+  async issueWithin(
+    client: PoolClient,
+    loadState: () => Promise<IngestionState>,
+    authenticatedPrincipal: AuthenticatedPrincipal,
+    clientIdempotencyKey: ClientIdempotencyKey,
+    command: IssueCapabilityCommand,
+    dependencies: IssueCapabilityDependencies,
+    authorityTime: Iso8601,
+  ): Promise<CapabilityIssuanceOutcome> {
+    {
       // A. lookup idempotence, under the lock.
       const existingRow = await lookupIdempotencyRow(client, authenticatedPrincipal, clientIdempotencyKey);
       if (existingRow !== undefined) {
@@ -200,13 +230,11 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
           // REPLAYED: nothing mutated, no second decision, no new
           // capability_id, no new event — the persisted result IS the
           // answer.
-          await client.query("COMMIT");
           return { outcome: "REPLAYED", result: parseStoredResult(existingRow.result) };
         }
         // IDEMPOTENCY_CONFLICT: same scope, different command. Nothing
         // written, nothing changed — COMMIT here only releases the lock
         // cleanly on a read-only transaction.
-        await client.query("COMMIT");
         return { outcome: "IDEMPOTENCY_CONFLICT" };
       }
 
@@ -216,7 +244,7 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
       // (this class or PostgresEventStore.append()) can mutate
       // authority_events between this read and this transaction's own
       // COMMIT, because both acquire the exact same advisory lock first.
-      const state = await readFreshIngestionState(client);
+      const state = await loadState();
       const snapshot = state.canonicalStore;
 
       // C. the pure decision — issueCapability never touches Postgres,
@@ -231,7 +259,6 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
         // this scope so a retry REPLAYs the same rejection rather than
         // re-deciding against a possibly-different future snapshot.
         await insertIdempotencyRow(client, authenticatedPrincipal, clientIdempotencyKey, command, decision, undefined, undefined, undefined, this.readInfrastructureClock());
-        await client.query("COMMIT");
         return { outcome: "EXECUTED", result: decision };
       }
 
@@ -270,7 +297,6 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
           newEvent.sequence,
           this.readInfrastructureClock(),
         );
-        await client.query("COMMIT");
         return { outcome: "EXECUTED", result: decision };
       }
 
@@ -286,7 +312,6 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
         // is the generator handing out a capability_id that is already taken.
         const failureResult: IssueCapabilityResult = { ok: false, reason: "CAPABILITY_ID_COLLISION", capability_id: decision.capability.capability_id };
         await insertIdempotencyRow(client, authenticatedPrincipal, clientIdempotencyKey, command, failureResult, undefined, undefined, undefined, this.readInfrastructureClock());
-        await client.query("COMMIT");
         return { outcome: "EXECUTED", result: failureResult };
       }
 
@@ -297,12 +322,6 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
       // infrastructure anomaly, not a business outcome to fabricate a
       // result for. Let it roll back and surface.
       throw new Error(`unexpected admission rejection for a freshly-constructed CAPABILITY_ISSUED draft: ${admission.outcome.reasonCode}`);
-    } catch (err) {
-      destroy = !(await safeRollback(client));
-      throw err; // fail-closed: the ORIGINAL error, even when the rollback itself fails because the connection is gone
-    } finally {
-      watch.stop();
-      client.release(destroy || watch.broken() ? true : undefined);
     }
   }
 }

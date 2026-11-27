@@ -7,7 +7,7 @@ const IS = "src/storage/postgresCapabilityIssuanceTransaction.ts";
 const RS = "src/storage/postgresCapabilityRedemptionTransaction.ts";
 /** [name, file, from, to, expected occurrences] */
 const MUTANTS = [
-  ["append opens a bare BEGIN", ES, "      await beginReadCommitted(client);\n      await lockAuthorityEventsTable(client);\n\n      let state", '      await client.query("BEGIN");\n      await lockAuthorityEventsTable(client);\n\n      let state', 1],
+  ["append opens a bare BEGIN", ES, "      await beginReadCommitted(client);\n      await lockAuthorityEventsTable(client);", '      await client.query("BEGIN");\n      await lockAuthorityEventsTable(client);', 1],
   ["issue opens a bare BEGIN", IS, "await beginReadCommitted(client);", 'await client.query("BEGIN");', 1],
   ["redemption opens a bare BEGIN", RS, "await beginReadCommitted(client);", 'await client.query("BEGIN");', 1],
   ["the explicit level is REPEATABLE READ", ES, 'BEGIN ISOLATION LEVEL READ COMMITTED"', 'BEGIN ISOLATION LEVEL REPEATABLE READ"', 1],
