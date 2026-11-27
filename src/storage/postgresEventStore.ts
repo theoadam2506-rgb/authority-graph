@@ -131,6 +131,45 @@ function buildWhere(conditions: readonly { readonly clause: string; readonly val
  * `issue()` can never mutate `authority_events` concurrently — see that
  * module's own docstring for the full argument.
  */
+/**
+ * Every transaction that decides on the journal under the advisory lock opens READ COMMITTED EXPLICITLY.
+ *
+ * Why it matters: the guarantee "the snapshot is read AFTER the lock was granted" holds only if the read gets a snapshot of its own. In READ COMMITTED every
+ * statement does. In REPEATABLE READ / SERIALIZABLE the snapshot is taken by the FIRST statement of the transaction, which is the `pg_advisory_xact_lock`
+ * itself, i.e. BEFORE the wait for the lock ends: the read that follows would see the journal as it was before the writers we waited for. A bare `BEGIN`
+ * inherits the session or role default (`default_transaction_isolation`), which an operator may legitimately set to one of those. A stale decision that writes is stopped by
+ * the primary key on `sequence` (the call fails, UNAVAILABLE); a stale REFUSAL writes nothing and would be returned as if it were fresh. An explicit isolation level
+ * overrides the default, so neither can happen (tests/storage/postgresIsolation.test.ts).
+ */
+export const BEGIN_READ_COMMITTED = "BEGIN ISOLATION LEVEL READ COMMITTED";
+
+/** ROLLBACK that never throws: `false` means the connection is broken and the client must be destroyed, not returned to the pool. */
+export async function safeRollback(client: PoolClient): Promise<boolean> {
+  try {
+    await client.query("ROLLBACK");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A checked-out client whose connection dies (server restart, failover, `pg_terminate_backend`) emits "error" on the CLIENT; with no listener that is an
+ * uncaught exception that takes the host process down (the redemption transaction has always guarded against it). `watchClient` attaches the listener,
+ * remembers that the connection broke, and detaches it again; the owner then releases the client with `release(true)` so the pool does not reuse it.
+ */
+export function watchClient(client: PoolClient): { readonly broken: () => boolean; readonly stop: () => void } {
+  let broken = false;
+  const onError = (): void => {
+    broken = true;
+  };
+  client.on("error", onError);
+  return { broken: () => broken, stop: () => void client.removeListener("error", onError) };
+}
+export async function beginReadCommitted(client: PoolClient): Promise<void> {
+  await client.query(BEGIN_READ_COMMITTED);
+}
+
 export async function lockAuthorityEventsTable(client: PoolClient): Promise<void> {
   // A mutex over writers, not an authority decision (see module docstring).
   await client.query("SELECT pg_advisory_xact_lock(hashtext('authority_events'))");
@@ -168,8 +207,10 @@ export class PostgresEventStore implements EventSource {
 
   async append(drafts: readonly DraftAuthorityEvent[]): Promise<AppendResult> {
     const client = await this.pool.connect();
+    const watch = watchClient(client);
+    let destroy = false;
     try {
-      await client.query("BEGIN");
+      await beginReadCommitted(client);
       await lockAuthorityEventsTable(client);
 
       let state = await readFreshIngestionState(client);
@@ -199,10 +240,11 @@ export class PostgresEventStore implements EventSource {
       await client.query("COMMIT");
       return { outcomes };
     } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
+      destroy = !(await safeRollback(client));
+      throw err; // fail-closed: the ORIGINAL error, even when the rollback itself fails because the connection is gone
     } finally {
-      client.release();
+      watch.stop();
+      client.release(destroy || watch.broken() ? true : undefined);
     }
   }
 

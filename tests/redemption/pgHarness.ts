@@ -35,7 +35,8 @@ export interface PgHarness {
   readonly issuance: PostgresCapabilityIssuanceTransaction;
   readonly redemption: PostgresCapabilityRedemptionTransaction;
   /** A new pool over the same schema: another connection set, as another process would have. */
-  newPool(): Pool;
+  /** `max`: the pool's connection limit (default 10). Tests that fan out many callers pass a small one: all PostgreSQL files run in parallel against one server (default max_connections = 100). */
+  newPool(max?: number): Pool;
   newRedemption(pool?: Pool, options?: PostgresRedemptionOptions): PostgresCapabilityRedemptionTransaction;
   issue(at: Iso8601, key?: string): Promise<CapabilityId>;
   command(id: CapabilityId, overrides?: Partial<RedeemCapabilityCommand>): RedeemCapabilityCommand;
@@ -70,8 +71,8 @@ export async function pgHarness(options: PgHarnessOptions = {}): Promise<PgHarne
 
   let counter = 0;
   let ticketsIssued = 0;
-  const newPool = (): Pool => {
-    const p = new Pool({ connectionString: iso.connectionString, options: `-c search_path=${iso.schema}` });
+  const newPool = (max?: number): Pool => {
+    const p = new Pool({ connectionString: iso.connectionString, ...(max !== undefined ? { max } : {}), options: `-c search_path=${iso.schema}` });
     p.on("error", () => undefined);
     extraPools.push(p);
     return p;

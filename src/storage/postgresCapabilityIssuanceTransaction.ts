@@ -42,7 +42,7 @@ import { issueCapability, type IssueCapabilityDependencies, type IssueCapability
 import { commandsEqual } from "../engine/issueCapabilityIdempotency.js";
 import { advanceTrustedTime, processDraft } from "../engine/ingest.js";
 import { buildCapabilityIssuedDraft, type CapabilityIssuanceOutcome, type CapabilityIssuanceTransaction } from "./capabilityIssuanceTransaction.js";
-import { insertEvent, lockAuthorityEventsTable, readFreshIngestionState } from "./postgresEventStore.js";
+import { beginReadCommitted, insertEvent, lockAuthorityEventsTable, readFreshIngestionState, safeRollback, watchClient } from "./postgresEventStore.js";
 
 interface IdempotencyRow extends QueryResultRow {
   readonly command: unknown;
@@ -175,6 +175,8 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
     authorityTime: Iso8601,
   ): Promise<CapabilityIssuanceOutcome> {
     const client = await this.pool.connect();
+    const watch = watchClient(client);
+    let destroy = false;
     try {
       // I32: no issuance runs against a database whose one-ticket-per-action
       // index is missing, INVALID or mis-defined (the database-level backstop
@@ -185,7 +187,7 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
         if (problems.length > 0) throw new IssuanceSchemaError(problems);
         this.schemaVerified = true;
       }
-      await client.query("BEGIN");
+      await beginReadCommitted(client);
       // Same lock domain as PostgresEventStore.append() — see this
       // module's own docstring and postgresEventStore.ts's.
       await lockAuthorityEventsTable(client);
@@ -296,10 +298,11 @@ export class PostgresCapabilityIssuanceTransaction implements CapabilityIssuance
       // result for. Let it roll back and surface.
       throw new Error(`unexpected admission rejection for a freshly-constructed CAPABILITY_ISSUED draft: ${admission.outcome.reasonCode}`);
     } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
+      destroy = !(await safeRollback(client));
+      throw err; // fail-closed: the ORIGINAL error, even when the rollback itself fails because the connection is gone
     } finally {
-      client.release();
+      watch.stop();
+      client.release(destroy || watch.broken() ? true : undefined);
     }
   }
 }
