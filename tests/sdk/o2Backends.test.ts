@@ -197,7 +197,7 @@ d("O2-1 on PostgreSQL 16", () => {
     });
   });
 
-  it("concurrent callers: one request and at most one ticket per action, no budget exceeded, every grant valid for the frozen engine, same status counts as before", { timeout: 600_000 }, async () => {
+  it("concurrent callers: one request and at most one ticket per action, no budget exceeded, every grant valid for the frozen engine, deterministic counts only", { timeout: 600_000 }, async () => {
     const rounds = Number(process.env.O2_PG_ROUNDS ?? 8);
     for (let round = 0; round < rounds; round++) {
       const tallies: Record<string, Record<string, number>> = {};
@@ -231,12 +231,47 @@ d("O2-1 on PostgreSQL 16", () => {
         expect(sameTickets.size).toBeLessThanOrEqual(1); // every successful concurrent identical call returns the one ticket
         await drop(iso);
       }
-      // the clash and same categories are deterministic in their counts; budget races may pick different winners but never more than the budget allows
+      // What is deterministic: every clash call gets one answer (3 in all), and each implementation stays inside the budget (checked above).
+      // What is NOT: WHICH actions win the three tickets the budget allows. That is a race between independent callers (see the next test), so the
+      // outcome of "same" / "other" is compared neither between the two implementations nor between two runs (an earlier version of this test did,
+      // and failed whenever the scheduler let the other actions reach the budget first: 6 AUTHORIZED against 6 CAPACITY_EXCEEDED, both correct).
       const pick = (t: Record<string, number>, prefix: string) => Object.fromEntries(Object.entries(t).filter(([k]) => k.startsWith(prefix)));
-      const clashStatuses = (t: Record<string, number>) => Object.values(pick(t, "clash:")).reduce((x, y) => x + y, 0);
-      expect(clashStatuses(tallies.current!)).toBe(clashStatuses(tallies.oracle!));
-      const sameOk = (t: Record<string, number>) => Object.entries(pick(t, "same:")).filter(([k]) => /AUTHORIZED|DENIED:C9/.test(k)).reduce((x, [, y]) => x + y, 0);
-      expect(sameOk(tallies.current!)).toBe(sameOk(tallies.oracle!));
+      const total = (t: Record<string, number>, prefix: string) => Object.values(pick(t, prefix)).reduce((x, y) => x + y, 0);
+      for (const impl of ["current", "oracle"] as Impl[]) {
+        const t = tallies[impl]!;
+        expect(total(t, "clash:"), impl).toBe(3);
+        expect(total(t, "same:"), impl).toBe(6);
+        expect(total(t, "other:"), impl).toBe(8);
+        // the only outcomes a call under this budget may have
+        for (const k of Object.keys(t)) expect(k, impl).toMatch(/^(same|clash|other):(AUTHORIZED|DENIED:CAPACITY_EXCEEDED|DENIED:ACTION_REQUEST_REJECTED:EVENT_ID_CONFLICT|DENIED:ACTION_ID_REUSED_WITH_DIFFERENT_CALL)$/);
+        // the six identical calls are one action: all authorized (one ticket) or all refused for capacity, never split
+        const same = Object.keys(pick(t, "same:"));
+        expect(same.length, impl).toBe(1);
+        // the budget itself (10 EUR, whoever wins: a 1-EUR clash call can leave room for a fourth ticket) is checked above with remainingCapacity >= 0
+      }
     }
+  });
+  it("budget race, controlled interleavings: the winner of the last tickets depends only on the order of arrival, and both outcomes are correct and identical in both implementations", { timeout: 600_000 }, async () => {
+    const BUDGET = 10, AMOUNT = 3; // three tickets at most
+    const run = async (impl: Impl, order: string[]) => {
+      const I = IMPLS[impl];
+      const iso = await schema(`o2ord${impl[0]}`);
+      const clock = { now: () => "2026-06-01T09:00:00.000Z" };
+      const ev = I.createEventBuilders({ clock });
+      const a = I.createAuthority({ backend: I.postgresBackend(iso.pool), clock, enforcementPointId: "ep" });
+      await a.record([ev.delegation({ delegationId: "d", grantor: "alice", grantee: "agent", capabilities: [{ resource: "r", action: "x" }], canDelegate: false, expiresAt: null, totalBudget: { value: BUDGET, currency: "EUR" }, thresholds: { automaticMax: { value: 5, currency: "EUR" }, approvalMax: { value: 9, currency: "EUR" } } })]);
+      const out: Record<string, string> = {};
+      for (const id of order) { const r: any = await a.authorize({ actionId: id, agentId: "agent", delegationId: "d", capability: { resource: "r", action: "x" }, amount: { value: AMOUNT, currency: "EUR" } }); out[id] = `${r.status}${r.reason ? ":" + r.reason : ""}`; }
+      await drop(iso);
+      return out;
+    };
+    const sameFirst = ["same", "o0", "o1", "o2", "o3"];
+    const sameLast = ["o0", "o1", "o2", "same", "o3"];
+    const results: Record<string, Record<string, string>> = {};
+    for (const impl of ["current", "oracle"] as Impl[]) for (const [name, order] of [["first", sameFirst], ["last", sameLast]] as const) results[`${impl}/${name}`] = await run(impl, order);
+    expect(results["current/first"]).toEqual(results["oracle/first"]);
+    expect(results["current/last"]).toEqual(results["oracle/last"]);
+    expect(results["current/first"]!["same"]).toBe("AUTHORIZED");
+    expect(results["current/last"]!["same"]).toBe("DENIED:CAPACITY_EXCEEDED"); // same call, same rules: only the order of arrival changed
   });
 });

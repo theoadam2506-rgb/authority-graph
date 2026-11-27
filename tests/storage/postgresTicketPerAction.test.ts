@@ -37,7 +37,7 @@ describe.skipIf(!available)("I32 on PostgreSQL: one ticket per action", () => {
   it("60 callers over 6 independent pools, 60 distinct idempotency keys, one action: exactly one ticket, the others ACTION_ALREADY_TICKETED", async () => {
     const t = await pgHarness({ label: "i32_pools" });
     try {
-      const txs = Array.from({ length: 6 }, () => new PostgresCapabilityIssuanceTransaction(t.newPool()));
+      const txs = Array.from({ length: 6 }, () => new PostgresCapabilityIssuanceTransaction(t.newPool(4)));
       const results = await Promise.all(Array.from({ length: 60 }, (_, i) => issueFor(txs[i % 6]!, `p-${i}`)));
       expect(results.filter(ok)).toHaveLength(1);
       for (const r of results) if (!ok(r)) expect(r).toMatchObject({ outcome: "EXECUTED", result: { ok: false, reason: "ACTION_ALREADY_TICKETED" } });
