@@ -31,7 +31,7 @@ async function fixture(label: string, budget = 50): Promise<Fixture> {
   open.push(iso);
   await iso.create();
   iso.pool.on("error", () => undefined);
-  const rr = new Pool({ connectionString: TEST_DATABASE_URL, options: `-c search_path=${iso.schema} -c default_transaction_isolation=repeatable\\ read` });
+  const rr = new Pool({ connectionString: TEST_DATABASE_URL, max: 4, options: `-c search_path=${iso.schema} -c default_transaction_isolation=repeatable\\ read -c application_name=${iso.schema}` });
   rr.on("error", () => undefined);
   extra.push(rr);
   const ev = createEventBuilders({ clock });
@@ -255,4 +255,125 @@ d("explicit READ COMMITTED on a pool that defaults to REPEATABLE READ", () => {
       expect(next.status, `${name}: the single connection must have been replaced`).toBe("AUTHORIZED");
     }
   });
+
+  // ------------------------------------------------------------------------------------------------ a connection lost BEFORE, DURING and AFTER the write
+  type Phase = "before BEGIN" | "after BEGIN" | "after the lock" | "after the read" | "after the write" | "COMMIT sent, acknowledgement lost";
+  const PHASES: Phase[] = ["before BEGIN", "after BEGIN", "after the lock", "after the read", "after the write", "COMMIT sent, acknowledgement lost"];
+
+  /** A pool whose first transaction loses its connection at `phase`. `commitLastWrite` tells which INSERT is the last write of the operation. */
+  function dyingPool(pool: Pool, f: Fixture, phase: Phase, lastWrite: RegExp, fired: { at?: string }): Pool {
+    let inTx = false, locked = false, read = false;
+    const wrap = (c: any) => new Proxy(c, {
+      get(t, p, r) {
+        if (p !== "query") { const v = Reflect.get(t, p, r); return typeof v === "function" ? v.bind(t) : v; }
+        return async (...a: any[]) => {
+          const text = String(typeof a[0] === "string" ? a[0] : a[0]?.text).replace(/\s+/g, " ").trim();
+          const kill = async () => { const pid = Number((await t.query("SELECT pg_backend_pid() AS pid")).rows[0].pid); await f.owner.query("SELECT pg_terminate_backend($1)", [pid]); await sleep(50); fired.at = text.slice(0, 40); };
+          if (fired.at === undefined && phase === "before BEGIN" && /^BEGIN/.test(text)) await kill();
+          if (fired.at === undefined && phase === "COMMIT sent, acknowledgement lost" && text === "COMMIT") {
+            // the COMMIT is on the wire, the socket dies before the answer: the server may or may not have committed
+            const pending = t.query(...a); fired.at = "COMMIT"; (t as any).connection.stream.destroy(); return pending;
+          }
+          const res = await t.query(...a);
+          if (/^BEGIN/.test(text)) inTx = true;
+          if (/advisory_xact_lock/.test(text)) locked = true;
+          if (inTx && locked && /SELECT \* FROM authority_events/.test(text)) read = true;
+          if (fired.at === undefined) {
+            if (phase === "after BEGIN" && /^BEGIN/.test(text)) await kill();
+            else if (phase === "after the lock" && /advisory_xact_lock/.test(text)) await kill();
+            else if (phase === "after the read" && read && /SELECT \* FROM authority_events/.test(text)) await kill();
+            else if (phase === "after the write" && lastWrite.test(text)) await kill();
+          }
+          return res;
+        };
+      },
+    });
+    return new Proxy(pool, { get(t, p, r) { if (p === "connect") return async () => wrap(await t.connect()); const v = Reflect.get(t, p, r); return typeof v === "function" ? v.bind(t) : v; } }) as Pool;
+  }
+
+  /** What an interruption must never leave behind: an open transaction, a held advisory lock, an unusable pooled connection, an uncaught exception. */
+  async function expectCleanAfter(f: Fixture, pool: Pool, uncaught: unknown[], label: string) {
+    await sleep(150);
+    const app = f.iso.schema;
+    const open = Number((await f.owner.query("SELECT count(*)::int c FROM pg_stat_activity WHERE application_name = $1 AND state LIKE 'idle in transaction%'", [app])).rows[0].c);
+    const locks = Number((await f.owner.query("SELECT count(*)::int c FROM pg_locks l JOIN pg_stat_activity s USING (pid) WHERE s.application_name = $1 AND l.locktype = 'advisory' AND l.granted", [app])).rows[0].c);
+    expect({ openTransactions: open, advisoryLocksHeld: locks }, label).toEqual({ openTransactions: 0, advisoryLocksHeld: 0 });
+    const clients = Math.max(1, pool.totalCount);
+    await Promise.all(Array.from({ length: clients + 2 }, () => pool.query("SELECT 1"))); // every pooled connection, and new ones, work
+    const t0 = Date.now();
+    await f.a.record([f.ev.revocation({ delegationId: `probe-${label.replace(/\W+/g, "-")}`, revokedBy: "alice", reasonCode: "R" })]); // the lock is free
+    expect(Date.now() - t0, `${label}: the lock must be free`).toBeLessThan(3_000);
+    expect(uncaught, `${label}: no uncaught exception`).toHaveLength(0);
+  }
+  const countOf = async (f: Fixture, type: string, extra = "") => Number((await f.owner.query(`SELECT count(*)::int c FROM authority_events WHERE event_type = $1 ${extra}`, [type])).rows[0].c);
+
+  for (const op of ["append (record)", "issue (authorize on an existing request)", "redemption"] as const) {
+    it(`${op}: a connection lost before BEGIN, after BEGIN, the lock, the read, the write, or with the COMMIT acknowledgement lost — nothing leaks, nothing is claimed that is not known, and a retry converges`, { timeout: 180_000 }, async () => {
+      const uncaught: unknown[] = [];
+      const onUncaught = (e: unknown) => { uncaught.push(e); };
+      process.on("uncaughtException", onUncaught);
+      const outcomes: string[] = [];
+      try {
+        for (const phase of PHASES) {
+          const f = await fixture(`isolost${op.slice(0, 3)}${PHASES.indexOf(phase)}`);
+          const label = `${op} / ${phase}`;
+          let operation: (a: Authority) => Promise<any>, retry: () => Promise<any>, effect: () => Promise<number>, lastWrite: RegExp, expectNothing: () => Promise<void>;
+          const fired: { at?: string } = {};
+          if (op === "append (record)") {
+            const draft = f.ev.revocation({ delegationId: "lost", revokedBy: "alice", reasonCode: "R", eventId: "evt-lost-1" } as any);
+            lastWrite = /INSERT INTO authority_events/;
+            operation = (a) => a.record([draft]);
+            retry = () => f.a.record([draft]);
+            effect = () => countOf(f, "DELEGATION_REVOKED", "AND event_id = 'evt-lost-1'");
+            expectNothing = async () => undefined;
+          } else if (op === "issue (authorize on an existing request)") {
+            // a request that needs an approval, then the approval: the next authorize() goes straight to the issuance transaction
+            expect(((await f.a.authorize(call("L1", 7))) as any).status).toBe("REQUIRES_APPROVAL");
+            expect((await f.a.record([f.ev.approvalRequest({ approvalId: "ap-L1", actionId: "L1", requestedBy: "agent", requestedFrom: "alice", reasonCode: "R" }), f.ev.approvalGranted({ approvalId: "ap-L1", actionId: "L1", approver: "alice" })]) as any).status).toBe("RECORDED");
+            lastWrite = /INSERT INTO capability_issuance_idempotency/;
+            operation = (a) => a.authorize(call("L1", 7));
+            retry = () => f.a.authorize(call("L1", 7));
+            effect = () => countOf(f, "CAPABILITY_ISSUED");
+            expectNothing = async () => undefined;
+          } else {
+            const auth: any = await f.a.authorize(call("L2", 3));
+            expect(auth.status).toBe("AUTHORIZED");
+            lastWrite = /INSERT INTO authority_events/;
+            operation = (a) => a.redeem(auth.ticket, call("L2", 3));
+            retry = () => f.a.redeem(auth.ticket, call("L2", 3));
+            effect = () => countOf(f, "CAPABILITY_REDEEMED");
+            expectNothing = async () => undefined;
+          }
+          void expectNothing;
+          const before = await effect();
+          const dying = createAuthority({ backend: postgresBackend(dyingPool(f.rr, f, phase, lastWrite, fired)), clock, enforcementPointId: "ep" });
+          const result: any = await operation(dying);
+          expect(fired.at, `${label}: the fault must have been injected`).toBeDefined();
+          // what the caller is told: never a success, never a business refusal
+          expect(["UNAVAILABLE", "UNKNOWN_OUTCOME"], `${label}: ${JSON.stringify(result)}`).toContain(result.status);
+          const after = await effect();
+          if (phase === "COMMIT sent, acknowledgement lost") {
+            // the honest statement: it MAY have been committed. Both are legal; the answer must not claim either.
+            expect([before, before + 1], label).toContain(after);
+            outcomes.push(`${label}: reported ${result.status}; the write ${after > before ? "WAS" : "was NOT"} committed`);
+          } else {
+            expect(after, `${label}: the interrupted transaction must not have written`).toBe(before);
+            outcomes.push(`${label}: reported ${result.status}; nothing written`);
+          }
+          await expectCleanAfter(f, f.rr, uncaught, label);
+          // a retry converges to exactly one effect, whatever happened to the first attempt
+          const again: any = await retry();
+          expect(["AUTHORIZED", "RECORDED", "REDEEMED", "REFUSED"], `${label} retry: ${JSON.stringify(again)}`).toContain(again.status);
+          if (again.status === "REFUSED") expect(again.reason).toBe("ALREADY_REDEEMED");
+          expect(await effect(), `${label}: exactly one effect after the retry`).toBe(before + 1);
+          await sleep(100);
+          await f.rr.end().catch(() => undefined); extra.splice(extra.indexOf(f.rr), 1); // 18 fixtures in a row must not exhaust the server's connections
+          await f.iso.drop().catch(() => undefined); open.splice(open.indexOf(f.iso), 1);
+        }
+      } finally {
+        process.off("uncaughtException", onUncaught);
+      }
+      console.info(`[isolation] ${op}\n  ` + outcomes.join("\n  "));
+    });
+  }
 });

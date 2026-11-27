@@ -35,6 +35,18 @@ revocation; concurrent redemptions of one ticket; a mixed concurrent batch; a ba
 one-connection pool recovers). Against the code of `main` 8 of the first 10 tests fail. `scripts/isolation-mutation-check.sh`: 6 mutants (bare `BEGIN` in each store, wrong level, no client listener in append or issue), all killed.
 The tests stop only THEIR OWN backend (`pg_backend_pid`): the test files share one database and run in parallel.
 
+## A connection lost before, during and after the write (3 tests, 18 cases)
+For each of `append` (`record`), `issue` (`authorize` on an existing request) and redemption, a connection is lost at one of six points; each case then checks the outcome, that no transaction or advisory lock of the
+session is left open, that every pooled connection (and new ones) works, that the lock is free, that no uncaught exception occurred, and that a **retry converges to exactly one effect**.
+
+| point | what the caller is told | what is in the journal |
+|---|---|---|
+| before `BEGIN`, after `BEGIN`, after the lock, after the read, after the write (before `COMMIT`) | `UNAVAILABLE` (append, issue) / `UNKNOWN_OUTCOME` (redemption) | **nothing** from the interrupted transaction (rolled back by the server when the session ends) |
+| `COMMIT` on the wire, the socket dies before the answer | the same `UNAVAILABLE` / `UNKNOWN_OUTCOME` | **it was committed** in every run (the server had received the COMMIT): the write is there although the caller was told it is uncertain |
+
+The last row is the case the code **cannot** distinguish from the others: it reports an unavailable/unknown outcome and never "nothing was written". A retry is what resolves it: `authorize` replays the ticket from the idempotency
+row; a redemption retry answers `ALREADY_REDEEMED`; `record()` is retry-safe **only if the caller gives the draft an explicit `eventId`** (otherwise a retry creates a second event) — the test uses one.
+
 ## Limits
 * The decision still rests on the advisory lock; a writer that bypasses it is outside the guarantee (the primary key keeps it from corrupting a decision, it can only make the call fail).
 * `statement_timeout` / `lock_timeout` are not set by the code: a transaction blocked behind a stuck lock holder waits. Operators can set them per role.
