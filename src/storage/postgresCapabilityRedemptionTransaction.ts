@@ -61,7 +61,7 @@ import type { Iso8601 } from "../domain/types.js";
 import { advanceTrustedTime, processDraft } from "../engine/ingest.js";
 import { redeemCapability, type RedeemCapabilityResult } from "../engine/redeemCapability.js";
 import { buildCapabilityRedeemedDraft, type CapabilityRedemptionTransaction } from "./capabilityRedemptionTransaction.js";
-import { insertEvent, lockAuthorityEventsTable, readFreshIngestionState } from "./postgresEventStore.js";
+import { beginReadCommitted, insertEvent, lockAuthorityEventsTable, readFreshIngestionState } from "./postgresEventStore.js";
 
 const REDEEMED_INDEX = "authority_events_redeemed_capability_id_uidx";
 
@@ -136,7 +136,7 @@ export class PostgresCapabilityRedemptionTransaction implements CapabilityRedemp
         if (problems.length > 0) throw new RedemptionSchemaError(problems);
         this.schemaVerified = true;
       }
-      await client.query("BEGIN");
+      await beginReadCommitted(client);
       // Same lock domain as every other writer of authority_events.
       await lockAuthorityEventsTable(client);
 

@@ -116,6 +116,7 @@ jobs:
           tests/storage/postgresTicketPerAction.test.ts
           tests/engine/o1Backends.test.ts
           tests/sdk/o2Backends.test.ts
+          tests/storage/postgresIsolation.test.ts
           --reporter=default
           --reporter=json
           --outputFile.json=vitest-postgres.json
@@ -126,6 +127,9 @@ jobs:
       - name: Check that no PostgreSQL test was skipped
         if: ${{ !cancelled() }}
         run: node scripts/check-postgres-report.mjs vitest-postgres.json
+
+      - name: Isolation mutation check (every mutant must be killed)
+        run: scripts/isolation-mutation-check.sh
 
       - name: Upload the Vitest JSON report
         if: ${{ !cancelled() }}
