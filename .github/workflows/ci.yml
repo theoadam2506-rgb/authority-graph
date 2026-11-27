@@ -117,6 +117,7 @@ jobs:
           tests/engine/o1Backends.test.ts
           tests/sdk/o2Backends.test.ts
           tests/storage/postgresIsolation.test.ts
+          tests/sdk/d1SingleSnapshot.test.ts
           --reporter=default
           --reporter=json
           --outputFile.json=vitest-postgres.json
@@ -130,6 +131,14 @@ jobs:
 
       - name: Isolation mutation check (every mutant must be killed)
         run: scripts/isolation-mutation-check.sh
+
+      # D1 (prototype, off by default): the whole suite again with the single-snapshot authorize() selected, against PostgreSQL, so that every invariant test
+      # (I1-I32 included) also runs on the new protocol. The suites that pin the SEQUENTIAL protocol force it themselves.
+      - name: Whole suite with the single-snapshot authorize (D1 prototype)
+        run: AUTHORITY_AUTHORIZE_SNAPSHOT=single npx vitest run
+
+      - name: D1 mutation check (every mutant must be killed)
+        run: scripts/d1-mutation-check.sh
 
       - name: Upload the Vitest JSON report
         if: ${{ !cancelled() }}

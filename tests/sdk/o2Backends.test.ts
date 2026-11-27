@@ -8,7 +8,7 @@
  *
  *   O2_PG_SCENARIOS  differential scenarios (default 15)     O2_PG_ROUNDS  concurrent rounds (default 8)
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { databaseAvailable, TEST_DATABASE_URL } from "../redemption/pgHarness.js";
 import { isolatedSchema, type IsolatedSchema } from "../storage/pgTestSchema.js";
 import { REFERENCE } from "../engine/helpers/o1.js";
@@ -19,6 +19,10 @@ if (!available) console.warn("[o2Backends.test.ts] TEST_DATABASE_URL is not reac
 const open: IsolatedSchema[] = [];
 afterAll(async () => { for (const i of open) await i.drop().catch(() => undefined); });
 const d = available ? describe : describe.skip;
+// These tests pin the SEQUENTIAL protocol (its reads and its statement-level faults); the single-snapshot prototype has its own suite (d1SingleSnapshot.test.ts).
+const savedSnapshotMode = process.env.AUTHORITY_AUTHORIZE_SNAPSHOT;
+beforeAll(() => { delete process.env.AUTHORITY_AUTHORIZE_SNAPSHOT; });
+afterAll(() => { if (savedSnapshotMode !== undefined) process.env.AUTHORITY_AUTHORIZE_SNAPSHOT = savedSnapshotMode; });
 
 async function schema(label: string): Promise<IsolatedSchema> {
   const iso = isolatedSchema(TEST_DATABASE_URL, label);
