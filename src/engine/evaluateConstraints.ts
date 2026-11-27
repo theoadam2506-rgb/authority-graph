@@ -11,6 +11,7 @@ import { computeActionFingerprint } from "../domain/events.js";
 import type { AuthorityEvent, CanonicalStore, ChainLink } from "../domain/events.js";
 import { MAX_CHAIN_DEPTH, isWellFormedActionParameters, isWellFormedMoney, monetaryUnitOf, type ActionId, type ActionParameters, type ApprovalId, type AuthorityDecision, type Capability, type DelegationId, type Money, type PrincipalId } from "../domain/types.js";
 import { JournalLookup } from "./journalIndex.js";
+import type { ConstraintEvaluationContext } from "./evaluationContext.js";
 import { isNotCausallyAfter } from "./causality.js";
 import { recordedChainIntegrity, recordedTerminalId } from "./provenance.js";
 import type { DelegationEvent } from "./validateChain.js";
@@ -60,7 +61,7 @@ function findDelegationVia(lookup: JournalLookup | undefined, delegationId: Dele
   return lookup === undefined ? findDelegation(delegationId, visibleStore) : lookup.delegation(delegationId, (id) => findDelegation(id, visibleStore));
 }
 
-function terminalDelegationOf(
+export function terminalDelegationOf(
   chain: readonly ChainLink[],
   invokedDelegationId: DelegationId,
   executor: PrincipalId,
@@ -99,7 +100,7 @@ function terminalDelegationOf(
  * avec la livraison hors-ordre"). Cycle/depth-bounded exactly like I10, so
  * a maliciously cyclic graph can never make this loop unboundedly.
  */
-function ancestorDelegationIds(terminalId: DelegationId, visibleStore: CanonicalStore, lookup?: JournalLookup): ReadonlySet<DelegationId> {
+export function ancestorDelegationIds(terminalId: DelegationId, visibleStore: CanonicalStore, lookup?: JournalLookup): ReadonlySet<DelegationId> {
   const reachable = new Set<DelegationId>();
   let currentId: DelegationId | undefined = terminalId;
   let steps = 0;
@@ -128,7 +129,7 @@ function ancestorDelegationIds(terminalId: DelegationId, visibleStore: Canonical
  * checks are cheap and non-recursive: they only compare fields already
  * immutable on already-ingested events, never re-derive a decision.
  */
-function isDemonstrablyTiedToItsExecutor(execution: Extract<AuthorityEvent, { readonly event_type: "ACTION_EXECUTED" }>, request: ActionRequestedEvent, visibleStore: CanonicalStore, lookup?: JournalLookup): boolean {
+export function isDemonstrablyTiedToItsExecutor(execution: Extract<AuthorityEvent, { readonly event_type: "ACTION_EXECUTED" }>, request: ActionRequestedEvent, visibleStore: CanonicalStore, lookup?: JournalLookup): boolean {
   if (request.payload.requesting_principal_id !== execution.payload.executed_by_principal_id) {
     return false; // someone other than the requester claims to have executed it
   }
@@ -212,13 +213,13 @@ export function remainingBudget(delegationId: DelegationId, totalBudget: Money, 
   return totalBudget.value - spent;
 }
 
-function budgetExceeded(chain: readonly DelegationEvent[], amount: number, visibleStore: CanonicalStore): boolean {
+function budgetExceeded(chain: readonly DelegationEvent[], amount: number, visibleStore: CanonicalStore, context?: ConstraintEvaluationContext): boolean {
   return chain.some((node) => {
     const budget = node.payload.total_budget;
     if (budget === undefined) {
       return false;
     }
-    return amount > remainingBudget(node.payload.delegation_id, budget, visibleStore);
+    return amount > (context !== undefined ? context.remainingBudget(node.payload.delegation_id, budget) : remainingBudget(node.payload.delegation_id, budget, visibleStore));
   });
 }
 
@@ -291,7 +292,7 @@ function isApprovalConsumed(approvalId: ApprovalId, boundActionId: ActionRequest
  * different action_id and is never proof that a specific action was
  * authorized.
  */
-function findGrantOutcome(
+export function findGrantOutcome(
   terminal: DelegationEvent,
   agentId: PrincipalId,
   capability: Capability,
@@ -349,6 +350,7 @@ export function evaluateConstraints(
   visibleStore: CanonicalStore,
   agentId: PrincipalId,
   queriedActionId?: ActionId,
+  context?: ConstraintEvaluationContext,
 ): AuthorityDecision {
   // Current ingestion rejects malformed parameters. This guard contains old
   // persisted data or a bypassed storage boundary to one UNKNOWN decision.
@@ -384,7 +386,7 @@ export function evaluateConstraints(
 
   const amount = parameters.amount.value;
 
-  if (budgetExceeded(chain, amount, visibleStore)) {
+  if (budgetExceeded(chain, amount, visibleStore, context)) {
     return { outcome: "DENIED", reasonCode: "C9_TOTAL_BUDGET_EXCEEDED" };
   }
 
@@ -409,7 +411,8 @@ export function evaluateConstraints(
     return { outcome: "DENIED", reasonCode: "C8_AMOUNT_EXCEEDS_APPROVAL_CEILING" };
   }
 
-  const { anyValidGrant, unconsumedApprovalId } = findGrantOutcome(terminal, agentId, capability, parameters, visibleStore, queriedActionId);
+  const { anyValidGrant, unconsumedApprovalId } =
+    context !== undefined ? context.grantOutcome(terminal, agentId, capability, parameters, queriedActionId) : findGrantOutcome(terminal, agentId, capability, parameters, visibleStore, queriedActionId);
   if (unconsumedApprovalId !== undefined) {
     return { outcome: "AUTHORIZED", chain: chainIds, approvalId: unconsumedApprovalId };
   }

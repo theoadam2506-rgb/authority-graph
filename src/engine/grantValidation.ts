@@ -170,7 +170,7 @@ function chainLinksEqual(a: ChainLink, b: ChainLink): boolean {
   return false;
 }
 
-function chainsEqual(a: readonly ChainLink[], b: readonly ChainLink[]): boolean {
+export function chainsEqual(a: readonly ChainLink[], b: readonly ChainLink[]): boolean {
   if (a.length !== b.length) {
     return false;
   }
