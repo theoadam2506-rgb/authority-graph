@@ -134,7 +134,7 @@ export function randomJournal(seed: number, length: number): any[] {
  * threshold, grants carry the proper chain (root first) right after a decision, and the flaws that matter (late activation, wrong chain,
  * wrong fingerprint, wrong decision sequence, revocations, expiries, approvals, duplicated ids, budget pressure) are injected with small probabilities.
  */
-export function coherentJournal(seed: number, length: number): any[] {
+export function coherentJournal(seed: number, length: number, options: { readonly lateActivation?: boolean } = {}): any[] {
   const r = rng(seed);
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(r() * xs.length)]!;
   const int = (a: number, b: number) => a + Math.floor(r() * (b - a + 1));
@@ -175,5 +175,6 @@ export function coherentJournal(seed: number, length: number): any[] {
       drafts.push(grant({ action: a, requestParameters: params(flaw(0.05) ? q.amount + 1 : q.amount, q.currency), chain, decisionOffset: flaw(0.06) ? -1 : 0, badFingerprint: flaw(0.04), id: `${a}-${i}` }));
     }
   }
+  if (options.lateActivation) { drafts.unshift(execution("a-late", "alice", ["d1"])); drafts.push(request("a-late", "alice", "d1", 1)); }
   return drafts.map((d, i) => d(i + 1));
 }
