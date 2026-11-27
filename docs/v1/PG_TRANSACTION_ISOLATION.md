@@ -13,7 +13,7 @@ Measured on a pool whose sessions default to REPEATABLE READ (a writer waits for
 | a revocation (call needing a decision that writes) | `DENIED` (C12) | `UNAVAILABLE` — the stale decision cannot be written: the insert collides on the primary key of `sequence` |
 | an approval request (the waiting writer grants the approval) | `RECORDED` | `UNAVAILABLE` (same collision) |
 | a revocation, redemption waiting | `REFUSED AUTHORITY_NO_LONGER_VALID` | `REFUSED CONCURRENT_WRITE_DETECTED` |
-| a mixed batch of 17 concurrent calls | all answered | 12 of 17 `UNAVAILABLE` |
+| a mixed batch of 17 concurrent calls (10 `authorize`, 4 `record`, 3 `redeem`) | 10 authorized, 4 recorded, 1 redeemed, 2 refused | **10 of 17 `UNAVAILABLE`** (3 runs: 10, 10, 10; 1 `authorize` out of 10 succeeds) |
 | (a **refusal** that writes nothing, answered after the wait; shown on the D1 prototype) | fresh answer | **stale answer, no error** |
 
 So the primary key on `sequence` already prevented any stale decision from being *committed*; what was lost under a non-default isolation was availability, and — for decisions that write nothing — freshness, silently.
