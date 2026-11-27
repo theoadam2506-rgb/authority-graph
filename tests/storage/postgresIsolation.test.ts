@@ -5,7 +5,7 @@
  * takes its snapshot at the lock statement, BEFORE the wait for the lock ends. They cover the three writers (append, issue, redemption), a revocation and an approval committed
  * while a call waits for the lock, concurrent callers, and interrupted transactions. Skipped (with a warning) without a reachable database; mandatory in the PostgreSQL CI job.
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { createAuthority, createEventBuilders, postgresBackend, type Authority, type ToolCall } from "../../src/sdk/index.js";
 import { BEGIN_READ_COMMITTED } from "../../src/storage/postgresEventStore.js";
@@ -19,6 +19,10 @@ const open: IsolatedSchema[] = [];
 const extra: Pool[] = [];
 afterAll(async () => { for (const p of extra) await p.end().catch(() => undefined); for (const i of open) await i.drop().catch(() => undefined); });
 
+// This file pins the SEQUENTIAL protocol of authorize(); the single-snapshot prototype has the same checks in d1SingleSnapshot.test.ts.
+const savedSnapshotMode = process.env.AUTHORITY_AUTHORIZE_SNAPSHOT;
+beforeAll(() => { delete process.env.AUTHORITY_AUTHORIZE_SNAPSHOT; });
+afterAll(() => { if (savedSnapshotMode !== undefined) process.env.AUTHORITY_AUTHORIZE_SNAPSHOT = savedSnapshotMode; });
 const clock = { now: () => "2026-06-01T09:00:00.000Z" };
 const CAP = { resource: "r", action: "x" };
 const call = (id: string, v = 3): ToolCall => ({ actionId: id, agentId: "agent", delegationId: "d", capability: CAP, amount: { value: v, currency: "EUR" } });

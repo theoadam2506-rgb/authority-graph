@@ -213,29 +213,8 @@ export class PostgresEventStore implements EventSource {
       await beginReadCommitted(client);
       await lockAuthorityEventsTable(client);
 
-      let state = await readFreshIngestionState(client);
-
-      const outcomes: IngestOutcome[] = [];
-      for (const [index, draft] of drafts.entries()) {
-        const advanced = advanceTrustedTime(this.lastTrustedTimeMs, this.clock.authorityTime(draft, index));
-        this.lastTrustedTimeMs = advanced.ms;
-        const recordedAtIso = this.readInfrastructureClock();
-
-        const result = processDraft(state, draft, advanced.iso, recordedAtIso);
-        outcomes.push(result.outcome);
-
-        const grewByOne = result.nextState.canonicalStore.length === state.canonicalStore.length + 1;
-        if (result.outcome.accepted && grewByOne) {
-          const newEvent = result.nextState.canonicalStore[result.nextState.canonicalStore.length - 1];
-          if (newEvent !== undefined) {
-            await insertEvent(client, newEvent);
-          }
-        } else if (!result.outcome.accepted && result.securityLogEntry !== undefined) {
-          await insertSecurityLogEntry(client, result.securityLogEntry);
-        }
-
-        state = result.nextState;
-      }
+      const state = await readFreshIngestionState(client);
+      const { outcomes } = await this.appendWithin(client, state, drafts);
 
       await client.query("COMMIT");
       return { outcomes };
@@ -246,6 +225,37 @@ export class PostgresEventStore implements EventSource {
       watch.stop();
       client.release(destroy || watch.broken() ? true : undefined);
     }
+  }
+
+  /**
+   * The body of `append()` between the lock + snapshot read and the COMMIT, factored out (D1) so that a caller which ALREADY holds the lock
+   * and has read the snapshot (`PostgresSingleSnapshotAuthorization`) runs exactly the same ingestion, time-clamping and insert logic.
+   * `state` must be the fresh state read under the lock of THIS transaction; the advanced state is returned.
+   */
+  async appendWithin(client: PoolClient, initial: IngestionState, drafts: readonly DraftAuthorityEvent[]): Promise<{ readonly outcomes: IngestOutcome[]; readonly state: IngestionState }> {
+    let state = initial;
+    const outcomes: IngestOutcome[] = [];
+    for (const [index, draft] of drafts.entries()) {
+      const advanced = advanceTrustedTime(this.lastTrustedTimeMs, this.clock.authorityTime(draft, index));
+      this.lastTrustedTimeMs = advanced.ms;
+      const recordedAtIso = this.readInfrastructureClock();
+
+      const result = processDraft(state, draft, advanced.iso, recordedAtIso);
+      outcomes.push(result.outcome);
+
+      const grewByOne = result.nextState.canonicalStore.length === state.canonicalStore.length + 1;
+      if (result.outcome.accepted && grewByOne) {
+        const newEvent = result.nextState.canonicalStore[result.nextState.canonicalStore.length - 1];
+        if (newEvent !== undefined) {
+          await insertEvent(client, newEvent);
+        }
+      } else if (!result.outcome.accepted && result.securityLogEntry !== undefined) {
+        await insertSecurityLogEntry(client, result.securityLogEntry);
+      }
+
+      state = result.nextState;
+    }
+    return { outcomes, state };
   }
 
   async getEvents(filter?: EventFilter): Promise<CanonicalStore> {

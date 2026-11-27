@@ -312,9 +312,82 @@ export function createAuthority(config: AuthorityConfig): Authority {
     return { refusal: { status: "DENIED", reason: `ACTION_REQUEST_REJECTED:${outcome !== undefined && !outcome.accepted ? outcome.reasonCode : "NO_OUTCOME"}` } };
   }
 
+  /** Maps the outcome of an issuance to the public result (shared by the sequential path and the D1 single-snapshot path). */
+  function toAuthorizeResult(outcome: Awaited<ReturnType<typeof issuance.issue>>, normalized: NormalizedCall): AuthorizeResult {
+    if (outcome.outcome === "IDEMPOTENCY_CONFLICT") return { status: "DENIED", reason: "IDEMPOTENCY_CONFLICT" };
+    const result = outcome.result;
+    if (!result.ok) return refusal(result.reason, "decision" in result ? result.decision : undefined);
+    const issued = result.capability;
+    return {
+      status: "AUTHORIZED",
+      ticket: {
+        capabilityId: issued.capability_id,
+        actionId: issued.action_id,
+        agentId: normalized.agent,
+        enforcementPointId: issued.enforcement_point_id,
+        expiresAt: issued.expires_at,
+        fingerprint: issued.action_fingerprint,
+        decisionSequence: Number(issued.decision_sequence),
+        grantedChain: issued.granted_chain_ref,
+      },
+    };
+  }
+
+  /** The ACTION_REQUESTED a call would append, and whether an existing request is the same call. */
+  const requestDraft = (call: NormalizedCall, at: Iso8601): DraftAuthorityEvent => ({
+    event_id: eventId(`sdk-request.${call.actionId}`),
+    schema_version: CURRENT_SCHEMA_VERSION,
+    occurred_at: at,
+    principal_id: call.agent,
+    event_type: "ACTION_REQUESTED",
+    payload: {
+      action_id: call.actionId,
+      requesting_principal_id: call.agent,
+      delegation_id: call.delegation,
+      capability_requested: call.capability,
+      parameters: call.parameters,
+    },
+  });
+  const sameCall = (call: NormalizedCall, existing: NonNullable<ReturnType<typeof findRequest>>): boolean =>
+    existing.payload.requesting_principal_id === call.agent &&
+    existing.payload.delegation_id === call.delegation &&
+    computeActionFingerprint(existing.payload.capability_requested, existing.payload.parameters) === computeActionFingerprint(call.capability, call.parameters);
+
+  /**
+   * D1 PROTOTYPE (AUTHORITY_AUTHORIZE_SNAPSHOT=single, PostgreSQL only, off by default): the same three steps as `authorize` — ensure the request,
+   * read-only pre-check, issuance — inside ONE transaction, under ONE advisory lock, on ONE journal read. See docs/v1/D1_SINGLE_SNAPSHOT.md.
+   */
+  async function authorizeSingleSnapshot(normalized: NormalizedCall, singleSnapshot: NonNullable<BackendParts["singleSnapshot"]>): Promise<AuthorizeResult> {
+    const atRequest = readClock(clock);
+    return singleSnapshot.run(async (locked) => {
+      const existing = findRequest(locked.journal(), normalized.actionId);
+      if (existing !== undefined) {
+        if (!sameCall(normalized, existing)) return { status: "DENIED", reason: "ACTION_ID_REUSED_WITH_DIFFERENT_CALL" } as AuthorizeResult;
+      } else {
+        const outcome = await locked.append(requestDraft(normalized, atRequest));
+        if (!outcome.accepted) return { status: "DENIED", reason: `ACTION_REQUEST_REJECTED:${outcome.reasonCode}` } as AuthorizeResult;
+      }
+      const at = readClock(clock);
+      const snapshot = locked.journal();
+      const grant = selectInvokedGrant(snapshot, normalized.actionId, sequenceNumber(maxSequence(snapshot)), at);
+      if (!grant.ok) return refusal(grant.reason, grant.decision);
+      const outcome = await locked.issue(
+        { principalId: normalized.agent },
+        clientIdempotencyKey(`sdk-authorize.${normalized.actionId}`),
+        { action_id: normalized.actionId, enforcement_point_id: enforcementPoint },
+        dependencies,
+        at,
+      );
+      return toAuthorizeResult(outcome, normalized);
+    });
+  }
+
   async function authorize(call: ToolCall): Promise<AuthorizeResult> {
     const normalized = normalize(call);
     try {
+      if (process.env["AUTHORITY_AUTHORIZE_SNAPSHOT"] === "single" && parts.singleSnapshot !== undefined) {
+        return await authorizeSingleSnapshot(normalized, parts.singleSnapshot);
+      }
       const requested = await ensureRequested(normalized, readClock(clock));
       if ("refusal" in requested) return requested.refusal;
 
@@ -334,23 +407,7 @@ export function createAuthority(config: AuthorityConfig): Authority {
         dependencies,
         at,
       );
-      if (outcome.outcome === "IDEMPOTENCY_CONFLICT") return { status: "DENIED", reason: "IDEMPOTENCY_CONFLICT" };
-      const result = outcome.result;
-      if (!result.ok) return refusal(result.reason, "decision" in result ? result.decision : undefined);
-      const issued = result.capability;
-      return {
-        status: "AUTHORIZED",
-        ticket: {
-          capabilityId: issued.capability_id,
-          actionId: issued.action_id,
-          agentId: normalized.agent,
-          enforcementPointId: issued.enforcement_point_id,
-          expiresAt: issued.expires_at,
-          fingerprint: issued.action_fingerprint,
-          decisionSequence: Number(issued.decision_sequence),
-          grantedChain: issued.granted_chain_ref,
-        },
-      };
+      return toAuthorizeResult(outcome, normalized);
     } catch (cause) {
       return unavailable("authorize", cause, normalized.actionId);
     }
